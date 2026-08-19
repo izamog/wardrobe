@@ -26,6 +26,24 @@ npm run lint      # eslint
 npm run typecheck # tsc --noEmit
 ```
 
+## Layout
+
+`navigation/` (navigators + param lists), `screens/`, `components/`, `hooks/`,
+`services/`, `utils/`.
+
+Only `services/database.ts` imports `expo-sqlite`. Query and mapping code lives
+in `services/items.ts` against the structural `ItemsDatabase` interface, and
+pure rules live in `utils/` — both are then testable under Jest with
+`node:sqlite` and no native runtime. Don't import `expo-sqlite` elsewhere; it
+makes the importing module untestable off-device.
+
+Screens read through `hooks/useDbQuery`, which re-runs on focus so a screen
+returned to after another screen wrote to the database is not stale.
+
+Adding a directory that contains `className` means adding it to the `content`
+globs in `tailwind.config.js`. Miss it and the styles are silently absent — no
+error, just an unstyled screen.
+
 ## Schema changes
 
 The SQLite schema is versioned through `PRAGMA user_version`. Append a new

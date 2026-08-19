@@ -7,10 +7,15 @@ The app lives in `wardrobe-app/`. Everything is on-device; there is no server.
 
 ## Status
 
-**Phase 1 — foundations.** Data model, SQLite schema and migration system are in
-place. There is no user interface yet: `App.tsx` runs the migrations on launch
-and renders a status card. Adding items, recording compatibility and generating
-outfits all arrive in Phase 2.
+**Phase 1.5 — UI shell.** Four-tab navigation over the Phase 1 schema. Working
+end to end: add an item through a manual form, browse and filter the closet,
+edit or delete an item, and rate pairs as match/dismatch either from an item or
+through the Speed Matcher.
+
+Deliberately still stubs, because they depend on later phases: **Today**
+(weather forecast and outfit generation, Phase 5) and **Calendar** (outfit logs,
+collages and stats, Phase 6). Items carry no photo yet — the camera and
+background remover are Phase 2, so tiles show a placeholder.
 
 ## Running it
 
@@ -38,6 +43,25 @@ From the repo root, `codacy-cli analyze --tool opengrep` runs static analysis;
 `--tool trivy` scans dependencies. Note that Codacy's bundled ESLint has no
 TypeScript parser and reports parse errors on every `.ts` file — the project's
 own `npm run lint` is what actually lints this codebase.
+
+## Layout
+
+```
+wardrobe-app/
+  navigation/   the tab + stack navigators and their param types
+  screens/      one file per screen
+  components/   shared presentational pieces (tiles, chips, form fields)
+  hooks/        useDbQuery — re-reads on screen focus
+  services/     database connection, migrations, queries
+  utils/        pure logic: category rules, pair selection, formatting
+```
+
+Only `services/database.ts` imports `expo-sqlite`. Everything else takes the
+`ItemsDatabase` interface, which is what lets the query and mapping code run
+under Jest against `node:sqlite` with no native runtime.
+
+Every directory containing a `className` must appear in `tailwind.config.js`'s
+`content` globs. A file outside them renders unstyled rather than erroring.
 
 ## Data model
 

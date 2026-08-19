@@ -1,5 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import { runMigrations } from './migrations';
+import type { ItemsDatabase } from './items';
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -32,6 +33,19 @@ export function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     });
   }
   return dbPromise;
+}
+
+/**
+ * Runs `fn` against the shared connection.
+ *
+ * Screens call this rather than getDatabase() so they never hold a connection
+ * handle of their own. The callback takes the ItemsDatabase seam, which keeps
+ * services/items.ts free of any import of expo-sqlite — that module is
+ * therefore testable off-device, and this one stays the single place native
+ * SQLite is touched.
+ */
+export async function withDb<T>(fn: (db: ItemsDatabase) => Promise<T>): Promise<T> {
+  return fn(await getDatabase());
 }
 
 /** Opens the database if needed and brings its schema up to date. */
