@@ -35,9 +35,18 @@ const REQUEST_TIMEOUT_MS = 30_000;
  * running on one phone and is NOT acceptable for TestFlight or the App Store —
  * distribution needs this call moved behind a server that holds the key.
  */
+export function readApiKey(env: Record<string, string | undefined>): string | null {
+  const key = env.EXPO_PUBLIC_OPENAI_API_KEY?.trim();
+  if (!key) return null;
+  // The placeholder from .env.example. Someone who copied the file and did not
+  // fill it in has no key, and should get the "voice is not set up" path
+  // rather than a 401 telling them their key was rejected.
+  if (key.startsWith('[') && key.endsWith(']')) return null;
+  return key;
+}
+
 function apiKey(): string | null {
-  const key = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
-  return key && key.trim() !== '' ? key.trim() : null;
+  return readApiKey(process.env);
 }
 
 export function isVoiceConfigured(): boolean {
