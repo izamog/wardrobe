@@ -1,20 +1,40 @@
 import * as SQLite from 'expo-sqlite';
 
-let dbInstance: SQLite.SQLiteDatabase | null = null;
+let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
-  if (!dbInstance) {
-    dbInstance = await SQLite.openDatabaseAsync('wardrobe.db');
+/**
+ * Returns the shared database connection, opening it on the first call.
+ *
+ * Caches the *promise* rather than the resolved handle so that callers which
+ * arrive while the first open is still in flight all await the same connection.
+ * Caching the resolved handle instead lets every caller that runs before the
+ * first `await` settles open a connection of its own and leak it.
+ *
+ * Foreign keys are enabled here rather than in initDatabase() because the
+ * pragma is per-connection: a caller that reached the database without going
+ * through initDatabase() would otherwise hold a connection on which
+ * ON DELETE CASCADE silently does nothing.
+ */
+export function getDatabase(): Promise<SQLite.SQLiteDatabase> {
+  if (!dbPromise) {
+    dbPromise = (async () => {
+      const db = await SQLite.openDatabaseAsync('wardrobe.db');
+      await db.execAsync('PRAGMA foreign_keys = ON;');
+      return db;
+    })().catch((e: unknown) => {
+      // Clear the cache so a failed open can be retried rather than every
+      // later call replaying the same rejected promise.
+      dbPromise = null;
+      throw e;
+    });
   }
-  return dbInstance;
+  return dbPromise;
 }
 
 export async function initDatabase(): Promise<void> {
   const db = await getDatabase();
 
   await db.execAsync(`
-    PRAGMA foreign_keys = ON;
-
     -- Clothing Items Table
     CREATE TABLE IF NOT EXISTS ClothingItems (
       id TEXT PRIMARY KEY NOT NULL,
@@ -35,6 +55,7 @@ export async function initDatabase(): Promise<void> {
     -- Compatibility Matrix Table
     -- item_a_id < item_b_id is enforced so a pair can only ever be stored in one
     -- canonical order, preventing (A,B)=MATCH and (B,A)=DISMATCH from coexisting.
+    -- It also rejects self-pairs, since an id is never less than itself.
     -- Normalize ordering in application code before every insert/query.
     CREATE TABLE IF NOT EXISTS Item_Compatibility (
       id TEXT PRIMARY KEY NOT NULL,
@@ -59,8 +80,19 @@ export async function initDatabase(): Promise<void> {
 
     -- Performance Indexes
     CREATE INDEX IF NOT EXISTS idx_items_category ON ClothingItems(category);
-    CREATE INDEX IF NOT EXISTS idx_compat_pair ON Item_Compatibility(item_a_id, item_b_id);
     CREATE INDEX IF NOT EXISTS idx_logs_date ON Outfit_Logs(date);
+
+    -- UNIQUE(item_a_id, item_b_id) already creates an index on exactly those
+    -- columns in that order, which also serves lookups keyed on item_a_id
+    -- alone. An explicit index on the same pair was therefore pure write
+    -- overhead; dropped here so existing installs shed it too.
+    DROP INDEX IF EXISTS idx_compat_pair;
+
+    -- Because pairs are stored in canonical order, "every rule involving item X"
+    -- must match either column. item_b_id has no covering index otherwise, which
+    -- turned that lookup into a full table scan -- and the table grows O(n^2)
+    -- with wardrobe size.
+    CREATE INDEX IF NOT EXISTS idx_compat_item_b ON Item_Compatibility(item_b_id);
   `);
 }
 
