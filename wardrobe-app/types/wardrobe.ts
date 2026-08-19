@@ -7,7 +7,16 @@ export type Category =
   | 'Bag'
   | 'Scarf';
 
-export type HardwareColor = 'Gold' | 'Silver' | 'Brass' | 'Black' | 'None';
+/**
+ * Metal finish of an item's hardware (buckles, zips, clasps).
+ *
+ * 'None' covers items with no visible hardware and is the column default, so
+ * it must stay in this union even as finishes are added.
+ *
+ * Each member here has a matching entry in the hardwareColor CHECK constraint
+ * in services/migrations.ts. Adding one means adding a migration.
+ */
+export type HardwareColor = 'Gold' | 'Silver' | 'None';
 
 export type CompatibilityStatus = 'MATCH' | 'DISMATCH';
 
@@ -16,13 +25,21 @@ export interface ClothingItem {
   imageUri: string;
   category: Category;
   brand: string;
-  cost: number;
+  /**
+   * Price in minor currency units (pence, cents) as a whole number — 1250 is
+   * £12.50. Integers because REAL cannot represent most decimal amounts
+   * exactly, so totals and comparisons drift. Format for display only.
+   */
+  costMinorUnits: number;
   isSecondHand: boolean;
-  materials: string[]; // Stored as JSON string in SQLite
+  /** Stored as a JSON array string in SQLite; parse on read, stringify on write. */
+  materials: string[];
   hardwareColor: HardwareColor;
   hasBeltLoops: boolean;
-  inferredWarmth: number; // Scale 0-10
-  inferredWind: number;   // Scale 0-10
+  /** 0-10, enforced by a CHECK constraint. */
+  inferredWarmth: number;
+  /** 0-10, enforced by a CHECK constraint. */
+  inferredWind: number;
   wearCount: number;
   createdAt: string;
 }
@@ -37,8 +54,16 @@ export interface ItemCompatibility {
 
 export interface OutfitLog {
   id: string;
-  date: string; // ISO Format: YYYY-MM-DD
-  itemIds: string[]; // Stored as JSON string in SQLite
+  /** ISO calendar date, YYYY-MM-DD, enforced by a CHECK constraint. */
+  date: string;
+  /** Stored as a JSON array string in SQLite; parse on read, stringify on write. */
+  itemIds: string[];
   collageImageUri: string;
   createdAt: string;
 }
+
+// NOTE (Phase 2): these interfaces describe items as the app uses them, not as
+// SQLite stores them — booleans are INTEGER 0/1 and the string[] fields are
+// JSON text on disk. The data access layer owes both directions of that
+// mapping; casting a raw row to ClothingItem would produce a value whose type
+// is wrong about three of its fields.

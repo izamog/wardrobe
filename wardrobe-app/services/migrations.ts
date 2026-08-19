@@ -1,0 +1,132 @@
+/**
+ * The slice of expo-sqlite's SQLiteDatabase that migrating needs.
+ *
+ * Declared structurally rather than importing the concrete type so this module
+ * pulls in no native code, which lets the migrations run against any SQLite
+ * driver — the app passes the real connection, tests pass node:sqlite.
+ */
+export interface MigratableDatabase {
+  execAsync(sql: string): Promise<void>;
+  getFirstAsync<T>(sql: string): Promise<T | null>;
+  withTransactionAsync(task: () => Promise<void>): Promise<void>;
+}
+
+/**
+ * Ordered, append-only schema migrations.
+ *
+ * The database records how many of these have run in `PRAGMA user_version`.
+ * The entry at index i moves the schema from version i to version i+1, so
+ * user_version always equals the number of entries applied.
+ *
+ * Rules for adding to this list:
+ *  - Append only. Never edit or reorder an entry that has already run on a
+ *    device, because that device will never run it again.
+ *  - Each entry must be safe to apply exactly once, in order, to a database
+ *    left by the entry before it.
+ *  - Entries run inside a transaction (see runMigrations), so a failure part
+ *    way through one entry rolls that entry back rather than leaving the
+ *    schema half-built.
+ */
+export const MIGRATIONS: readonly string[] = [
+  // v0 -> v1: baseline schema.
+  //
+  // The DROP statements exist for one narrow case: databases created by the
+  // very first Phase 1 build, which set up tables before versioning existed
+  // and so also report user_version = 0. Dropping them is lossless because
+  // that build shipped no INSERT path at all -- there was no way to add an
+  // item, so no row can exist. Later migrations must preserve data instead.
+  `
+  DROP TABLE IF EXISTS Item_Compatibility;
+  DROP TABLE IF EXISTS Outfit_Logs;
+  DROP TABLE IF EXISTS ClothingItems;
+
+  -- Column CHECKs mirror the unions in types/wardrobe.ts. They are duplicated
+  -- deliberately: TypeScript cannot police what SQLite accepts, and a row read
+  -- back and cast to ClothingItem would otherwise carry a type that lies.
+  -- services/__tests__/migrations.test.ts asserts the two stay in agreement.
+  CREATE TABLE ClothingItems (
+    id TEXT PRIMARY KEY NOT NULL,
+    imageUri TEXT NOT NULL,
+    category TEXT NOT NULL
+      CHECK (category IN ('Top','Bottom','Outerwear','Shoes','Belt','Bag','Scarf')),
+    brand TEXT NOT NULL DEFAULT 'Unknown',
+    -- Money in minor units (pence/cents) as an integer. REAL cannot represent
+    -- most decimal amounts exactly, so sums and comparisons drift.
+    costMinorUnits INTEGER NOT NULL DEFAULT 0 CHECK (costMinorUnits >= 0),
+    isSecondHand INTEGER NOT NULL DEFAULT 0 CHECK (isSecondHand IN (0,1)),
+    materials TEXT NOT NULL DEFAULT '[]',
+    hardwareColor TEXT NOT NULL DEFAULT 'None'
+      CHECK (hardwareColor IN ('Gold','Silver','None')),
+    hasBeltLoops INTEGER NOT NULL DEFAULT 0 CHECK (hasBeltLoops IN (0,1)),
+    inferredWarmth INTEGER NOT NULL DEFAULT 0 CHECK (inferredWarmth BETWEEN 0 AND 10),
+    inferredWind INTEGER NOT NULL DEFAULT 0 CHECK (inferredWind BETWEEN 0 AND 10),
+    wearCount INTEGER NOT NULL DEFAULT 0 CHECK (wearCount >= 0),
+    createdAt TEXT NOT NULL
+  );
+
+  -- item_a_id < item_b_id keeps each pair in one canonical order, so
+  -- (A,B)=MATCH and (B,A)=DISMATCH can never coexist. It also rejects
+  -- self-pairs, since an id is never less than itself. Application code must
+  -- sort the two ids before every insert and query.
+  CREATE TABLE Item_Compatibility (
+    id TEXT PRIMARY KEY NOT NULL,
+    item_a_id TEXT NOT NULL,
+    item_b_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('MATCH','DISMATCH')),
+    createdAt TEXT NOT NULL,
+    FOREIGN KEY (item_a_id) REFERENCES ClothingItems(id) ON DELETE CASCADE,
+    FOREIGN KEY (item_b_id) REFERENCES ClothingItems(id) ON DELETE CASCADE,
+    CHECK (item_a_id < item_b_id),
+    UNIQUE(item_a_id, item_b_id)
+  );
+
+  CREATE TABLE Outfit_Logs (
+    id TEXT PRIMARY KEY NOT NULL,
+    date TEXT NOT NULL
+      CHECK (date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    itemIds TEXT NOT NULL DEFAULT '[]',
+    collageImageUri TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  );
+
+  CREATE INDEX idx_items_category ON ClothingItems(category);
+  CREATE INDEX idx_logs_date ON Outfit_Logs(date);
+
+  -- No index on (item_a_id, item_b_id): the UNIQUE constraint above already
+  -- creates one, and it serves item_a_id-only lookups too. item_b_id needs its
+  -- own, because canonical ordering means "every rule involving item X" has to
+  -- match either column, and this table grows O(n^2) with wardrobe size.
+  CREATE INDEX idx_compat_item_b ON Item_Compatibility(item_b_id);
+  `,
+];
+
+/**
+ * Applies every migration the database has not yet seen, in order.
+ *
+ * Each migration and the version bump recording it share one transaction, so
+ * an interrupted run leaves the schema at a whole version rather than partway
+ * through one. An already-current database does no work.
+ *
+ * @throws if the database reports a version this build does not know about,
+ *   which means it was written by a newer build of the app.
+ */
+export async function runMigrations(db: MigratableDatabase): Promise<void> {
+  const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+  const appliedCount = row?.user_version ?? 0;
+
+  if (appliedCount > MIGRATIONS.length) {
+    throw new Error(
+      `Database schema version ${appliedCount} is newer than this build supports ` +
+        `(${MIGRATIONS.length}). Update the app.`,
+    );
+  }
+
+  for (let version = appliedCount; version < MIGRATIONS.length; version++) {
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(MIGRATIONS[version]);
+      // PRAGMA arguments cannot be bound as parameters. `version` is a loop
+      // index over a module-local array and never derives from input.
+      await db.execAsync(`PRAGMA user_version = ${version + 1};`);
+    });
+  }
+}
