@@ -8,7 +8,7 @@ import {
   resolveImagePath,
 } from '../utils/imagePaths';
 import { resizeTargetFor } from '../utils/imageSizing';
-import { cropRectFor } from '../utils/cropGeometry';
+import { cropRectFor, type CropRect } from '../utils/cropGeometry';
 import { detectGarment } from './vision';
 
 /**
@@ -45,9 +45,17 @@ export interface PickedImage {
 
 export type PickResult = { ok: true; image: PickedImage } | { ok: false; reason: PickFailure };
 
-/** A photo ready to store, plus anything detection worked out along the way. */
+/** A photo ready to show and store, plus the original it came from. */
 export interface PreparedImage {
   uri: string;
+  /** Kept so refinement can re-crop from the full-resolution original later. */
+  source: PickedImage;
+}
+
+/** What a background refinement pass worked out, once it finishes. */
+export interface RefinedImage {
+  /** A better crop, or null when detection found nothing to improve on. */
+  uri: string | null;
   detectedCategory: Category | null;
 }
 
@@ -86,29 +94,14 @@ export async function pickImage(source: PickSource): Promise<PickResult> {
   return { ok: true, image: { uri: asset.uri, width: asset.width, height: asset.height } };
 }
 
-/**
- * Crops a picked photo to the garment and re-encodes it.
- *
- * Detection runs first and is allowed to fail: a photo with no usable outline
- * is cropped to a centred frame instead, which is what the app did before any
- * of this existed. Nothing here blocks on the network succeeding.
- *
- * The output stays in the cache directory. Nothing is written to permanent
- * storage until the item is actually saved, so abandoning the add flow leaves
- * only a cache file, which the system reclaims on its own.
- *
- * @returns the prepared image and whatever the detector guessed the item was
- */
-export async function prepareImage(picked: PickedImage): Promise<PreparedImage> {
-  const detection = await detectGarment(picked.uri);
-  const crop = cropRectFor(detection.box, picked.width, picked.height);
-
+/** Crops to `rect` when it is usable, resizes to the cap, and writes a JPEG to the cache. */
+async function renderCrop(picked: PickedImage, rect: CropRect): Promise<string> {
   const context = ImageManipulator.ImageManipulator.manipulate(picked.uri);
-  if (crop.width > 0 && crop.height > 0) context.crop(crop);
+  if (rect.width > 0 && rect.height > 0) context.crop(rect);
 
   // Sizing is measured against the cropped result, not the original: a crop
   // that already brought the garment under the cap must not then be enlarged.
-  const target = resizeTargetFor(crop.width, crop.height);
+  const target = resizeTargetFor(rect.width, rect.height);
   if (target) context.resize(target);
 
   const image = await context.renderAsync();
@@ -116,8 +109,51 @@ export async function prepareImage(picked: PickedImage): Promise<PreparedImage> 
     compress: IMAGE_QUALITY,
     format: ImageManipulator.SaveFormat.JPEG,
   });
+  return saved.uri;
+}
 
-  return { uri: saved.uri, detectedCategory: detection.category };
+/**
+ * Prepares a picked photo for immediate display, with no network call.
+ *
+ * Purely local, so it returns in the time a crop and a re-encode take rather
+ * than the time a round trip to a vision model takes. The crop is the centred
+ * fallback: a sensible 3:4 frame that refineCapturedImage then improves on
+ * once it knows where the garment actually is.
+ *
+ * The output stays in the cache directory. Nothing is written to permanent
+ * storage until the item is saved, so abandoning the flow leaves only a cache
+ * file, which the system reclaims on its own.
+ */
+export async function prepareCapturedImage(picked: PickedImage): Promise<PreparedImage> {
+  const uri = await renderCrop(picked, cropRectFor(null, picked.width, picked.height));
+  return { uri, source: picked };
+}
+
+/**
+ * Re-crops a photo around the garment, and reports what the garment looks like.
+ *
+ * Meant to run in the background while the user is describing the item, so the
+ * wait for a vision model never sits between picking a photo and being able to
+ * do anything. Crops from the original rather than from the fast version, so
+ * nothing is lost to cropping twice.
+ *
+ * Never throws: refinement is an improvement on a usable image, not a step
+ * that can fail the flow. A null uri means the fast crop should stand.
+ */
+export async function refineCapturedImage(picked: PickedImage): Promise<RefinedImage> {
+  try {
+    const detection = await detectGarment(picked.uri);
+    if (detection.box === null) return { uri: null, detectedCategory: detection.category };
+
+    const rect = cropRectFor(detection.box, picked.width, picked.height);
+    return {
+      uri: await renderCrop(picked, rect),
+      detectedCategory: detection.category,
+    };
+  } catch (e) {
+    console.warn('Could not refine the crop; keeping the centred one', e);
+    return { uri: null, detectedCategory: null };
+  }
 }
 
 function itemImageDirectory(): Directory {

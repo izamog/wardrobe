@@ -16,9 +16,17 @@ import { callOpenAI, isAIConfigured, parseChatJson } from './openai';
 
 export const isVoiceConfigured = isAIConfigured;
 
-/** Recommended file-transcription model. `whisper-1` remains available. */
-const TRANSCRIPTION_MODEL = 'gpt-transcribe';
-const EXTRACTION_MODEL = 'gpt-4o-mini';
+/**
+ * Transcription model.
+ *
+ * whisper-1 by default because it is the one every account can reach: the
+ * newer transcription models are not enabled on every project, and a project
+ * without access gets a 403 that reads like a key problem. Override with
+ * EXPO_PUBLIC_OPENAI_TRANSCRIBE_MODEL (gpt-transcribe, gpt-4o-transcribe,
+ * gpt-4o-mini-transcribe) to trade breadth for cost or accuracy.
+ */
+const TRANSCRIPTION_MODEL = process.env.EXPO_PUBLIC_OPENAI_TRANSCRIBE_MODEL ?? 'whisper-1';
+const EXTRACTION_MODEL = process.env.EXPO_PUBLIC_OPENAI_TEXT_MODEL ?? 'gpt-4o-mini';
 
 /**
  * Sends a recording for transcription.

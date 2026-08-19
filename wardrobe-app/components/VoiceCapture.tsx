@@ -110,7 +110,7 @@ export function VoiceBar({
       Alert.alert(
         'Voice input',
         e instanceof VoiceError
-          ? describeVoiceFailure(e.reason)
+          ? [describeVoiceFailure(e.reason), e.detail].filter(Boolean).join('\n\n')
           : 'Something went wrong. You can type the details instead.',
       );
     } finally {

@@ -52,6 +52,25 @@ export function isAIConfigured(): boolean {
   return apiKey() !== null;
 }
 
+/**
+ * Pulls the human-readable reason out of an error response.
+ *
+ * OpenAI redacts the key in its own messages, so this is safe to show. Returns
+ * undefined rather than throwing if the body is missing or unparseable — a
+ * failure to read the explanation must not replace the failure it explains.
+ */
+async function describeErrorBody(response: Response): Promise<string | undefined> {
+  try {
+    const body = (await response.json()) as { error?: { message?: unknown; code?: unknown } };
+    const message = typeof body.error?.message === 'string' ? body.error.message : undefined;
+    const code = typeof body.error?.code === 'string' ? body.error.code : undefined;
+    if (message && code) return `${message} (${code})`;
+    return message ?? code;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Runs a request with a timeout, mapping every failure onto a VoiceFailure. */
 export async function callOpenAI(path: string, init: RequestInit): Promise<unknown> {
   const key = apiKey();
@@ -77,7 +96,15 @@ export async function callOpenAI(path: string, init: RequestInit): Promise<unkno
   }
 
   if (!response.ok) {
-    throw new VoiceError(failureFromStatus(response.status), `OpenAI responded ${response.status}`);
+    // The body carries the only thing that identifies the problem — an unknown
+    // model, a revoked key, an exhausted quota all arrive as bare statuses
+    // otherwise. Read before throwing, and never let a malformed body mask the
+    // real failure.
+    throw new VoiceError(
+      failureFromStatus(response.status),
+      `OpenAI responded ${response.status} for ${path}`,
+      await describeErrorBody(response),
+    );
   }
 
   try {

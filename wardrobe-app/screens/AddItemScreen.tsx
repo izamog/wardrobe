@@ -12,6 +12,7 @@ import {
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { PhotoSourceChooser } from '../components/PhotoPicker';
+import { refineCapturedImage, type PickedImage } from '../services/images';
 import {
   ATTRIBUTE_FIELDS,
   AttributeList,
@@ -19,6 +20,7 @@ import {
   type AttributeValues,
 } from '../components/AttributeList';
 import { VoiceBar } from '../components/VoiceCapture';
+import { BouncingDots } from '../components/BouncingDots';
 import { createItem } from '../services/itemActions';
 import { withDb } from '../services/database';
 import { isVoiceConfigured, openAIVoicePipeline } from '../services/voice';
@@ -32,6 +34,15 @@ import type { RootStackParamList } from '../navigation/types';
  * page of its own, which meant describing a garment you could no longer see.
  */
 type Stage = { step: 'capture' } | { step: 'compose'; imageUri: string };
+
+/**
+ * A refinement running in the background, if one is.
+ *
+ * Held as a promise rather than a boolean so saving can wait on the same work
+ * the screen is already doing, instead of racing it and storing the rougher
+ * crop.
+ */
+type Refinement = Promise<void> | null;
 
 /**
  * Delay between one heard attribute landing in the list and the next.
@@ -63,6 +74,18 @@ export function AddItemScreen() {
   const [transcript, setTranscript] = useState<string | null>(null);
   const [pending, setPending] = useState<ReadonlySet<AttributeField>>(new Set());
   const [saving, setSaving] = useState(false);
+  const [refining, setRefining] = useState(false);
+  const refinement = useRef<Refinement>(null);
+  // Detection must not overwrite a category the user picked or the recording
+  // heard; it only fills a blank. It usually arrives first, but never reliably.
+  const categoryTouched = useRef(false);
+  const alive = useRef(true);
+  useEffect(
+    () => () => {
+      alive.current = false;
+    },
+    [],
+  );
 
   const [values, setValues] = useState<AttributeValues>({
     brand: 'Unknown',
@@ -106,6 +129,7 @@ export function AddItemScreen() {
     let index = 0;
     timer.current = setInterval(() => {
       const field = heard[index];
+      if (field === 'category') categoryTouched.current = true;
       setValues((current) => ({ ...current, ...FIELD_SOURCES[field](next) }));
       setPending((current) => new Set(current).add(field));
 
@@ -114,42 +138,65 @@ export function AddItemScreen() {
     }, APPLY_INTERVAL_MS);
   }, []);
 
-  const save = useCallback(
-    async (imageUri: string) => {
-      setSaving(true);
-      try {
-        await createItem(
-          { runQuery: withDb },
-          {
-            ...values,
-            brand: values.brand.trim() || 'Unknown',
-            hardwareColor: silent.hardwareColor ?? 'None',
-            hasBeltLoops: silent.hasBeltLoops ?? false,
-            inferredWarmth: silent.inferredWarmth ?? 0,
-            inferredWind: silent.inferredWind ?? 0,
-          },
-          imageUri,
-        );
-        navigation.goBack();
-      } catch (e) {
-        console.error('Failed to save item:', e);
-        Alert.alert('Could not save', 'The item was not added. Please try again.');
-        setSaving(false);
+  const startRefinement = useCallback((source: PickedImage) => {
+    setRefining(true);
+    refinement.current = (async () => {
+      const refined = await refineCapturedImage(source);
+      if (!alive.current) return;
+
+      if (refined.uri) setStage({ step: 'compose', imageUri: refined.uri });
+      if (refined.detectedCategory && !categoryTouched.current) {
+        setValues((current) => ({ ...current, category: refined.detectedCategory! }));
       }
-    },
-    [navigation, silent, values],
-  );
+      setRefining(false);
+    })();
+  }, []);
+
+  const save = useCallback(async () => {
+    setSaving(true);
+    try {
+      // Wait on the background crop rather than racing it: saving a second too
+      // early would store the rough centred version permanently. The ref is
+      // read after the await, so it holds whichever image won.
+      await refinement.current;
+      const imageUri = imageUriRef.current;
+      if (!imageUri) return;
+
+      await createItem(
+        { runQuery: withDb },
+        {
+          ...values,
+          brand: values.brand.trim() || 'Unknown',
+          hardwareColor: silent.hardwareColor ?? 'None',
+          hasBeltLoops: silent.hasBeltLoops ?? false,
+          inferredWarmth: silent.inferredWarmth ?? 0,
+          inferredWind: silent.inferredWind ?? 0,
+        },
+        imageUri,
+      );
+      navigation.goBack();
+    } catch (e) {
+      console.error('Failed to save item:', e);
+      Alert.alert('Could not save', 'The item was not added. Please try again.');
+      setSaving(false);
+    }
+  }, [navigation, silent, values]);
 
   // Save lives in the header rather than the bottom bar, which belongs to the
   // microphone. Two large targets side by side at the bottom edge left neither
   // of them comfortably reachable.
   const imageUri = stage.step === 'compose' ? stage.imageUri : null;
+  // Mirrored into a ref because save() reads it *after* awaiting refinement,
+  // by which time the state it closed over may be a crop that no longer exists.
+  const imageUriRef = useRef<string | null>(imageUri);
+  imageUriRef.current = imageUri;
+
   React.useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: imageUri
         ? () => (
             <Pressable
-              onPress={() => void save(imageUri)}
+              onPress={() => void save()}
               disabled={saving}
               accessibilityRole="button"
               className="px-2 py-1"
@@ -174,13 +221,12 @@ export function AddItemScreen() {
         </Text>
         <PhotoSourceChooser
           onPicked={(image) => {
-            // The detector's guess seeds the category so a description that
-            // never mentions one still lands somewhere sensible. Anything the
-            // user says overrides it.
-            if (image.detectedCategory) {
-              setValues((current) => ({ ...current, category: image.detectedCategory! }));
-            }
+            // Straight to the details with a centred crop. Finding the garment
+            // takes a round trip to a vision model, and making that the first
+            // thing after picking a photo put a multi-second wait in front of
+            // every item added. It runs behind this screen instead.
             setStage({ step: 'compose', imageUri: image.uri });
+            startRefinement(image.source);
           }}
         />
       </ScrollView>
@@ -199,6 +245,13 @@ export function AddItemScreen() {
               pushing the attributes they came to check below the fold. */}
           <View className="w-1/3 aspect-[3/4] rounded-xl overflow-hidden bg-white border border-slate-200">
             <Image source={{ uri: stage.imageUri }} className="w-full h-full" resizeMode="contain" />
+            {/* Quiet, and in the corner: the picture is already usable, so this
+                says "still improving", not "still loading". */}
+            {refining ? (
+              <View className="absolute bottom-1 right-1 bg-white/90 rounded-full px-2 py-1">
+                <BouncingDots color="#64748b" />
+              </View>
+            ) : null}
           </View>
 
           <View className="flex-1 ml-4 justify-center">
@@ -220,7 +273,10 @@ export function AddItemScreen() {
         <AttributeList
           values={values}
           pending={pending}
-          onChange={(patch) => setValues((current) => ({ ...current, ...patch }))}
+          onChange={(patch) => {
+            if (patch.category !== undefined) categoryTouched.current = true;
+            setValues((current) => ({ ...current, ...patch }));
+          }}
           onResolve={(field) =>
             setPending((current) => {
               const next = new Set(current);

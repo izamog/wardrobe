@@ -1,6 +1,11 @@
 import React from 'react';
 import { ActivityIndicator, Alert, Image, Linking, Pressable, Text, View } from 'react-native';
-import { pickImage, prepareImage, type PickSource, type PreparedImage } from '../services/images';
+import {
+  pickImage,
+  prepareCapturedImage,
+  type PickSource,
+  type PreparedImage,
+} from '../services/images';
 
 /**
  * Explains a refused permission and offers the only thing that can fix it.
@@ -39,7 +44,7 @@ export function usePhotoCapture(onPicked: (image: PreparedImage) => void) {
           if (picked.reason === 'permission-denied') explainPermissionDenied(source);
           return;
         }
-        onPicked(await prepareImage(picked.image));
+        onPicked(await prepareCapturedImage(picked.image));
       } catch (e) {
         console.error('Photo capture failed:', e);
         Alert.alert('Could not use that photo', 'Please try another one.');
@@ -80,7 +85,7 @@ export function PhotoSourceChooser({ onPicked }: { onPicked: (image: PreparedIma
     return (
       <View className="items-center py-10">
         <ActivityIndicator />
-        <Text className="text-slate-500 mt-3">Finding the garment…</Text>
+        <Text className="text-slate-500 mt-3">Preparing…</Text>
       </View>
     );
   }

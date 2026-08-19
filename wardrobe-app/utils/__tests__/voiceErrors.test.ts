@@ -9,6 +9,7 @@ import {
 const ALL_FAILURES: VoiceFailure[] = [
   'no-key',
   'unauthorized',
+  'forbidden',
   'rate-limited',
   'too-large',
   'timeout',
@@ -21,8 +22,16 @@ const ALL_FAILURES: VoiceFailure[] = [
 describe('failureFromStatus', () => {
   it('separates a rejected key from a rate limit, which need different actions', () => {
     expect(failureFromStatus(401)).toBe('unauthorized');
-    expect(failureFromStatus(403)).toBe('unauthorized');
     expect(failureFromStatus(429)).toBe('rate-limited');
+  });
+
+  it('separates a rejected key from a forbidden one', () => {
+    // 401 means the key is wrong; 403 means the key is fine but the account
+    // may not use what was asked for. Treating them alike sent the user off
+    // to check a key that was never the problem.
+    expect(failureFromStatus(401)).toBe('unauthorized');
+    expect(failureFromStatus(403)).toBe('forbidden');
+    expect(describeVoiceFailure('unauthorized')).not.toBe(describeVoiceFailure('forbidden'));
   });
 
   it('recognises an oversized upload', () => {
@@ -57,7 +66,9 @@ describe('describeVoiceFailure', () => {
   it('leaks no internals to the user', () => {
     for (const reason of ALL_FAILURES) {
       const message = describeVoiceFailure(reason);
-      expect(message).not.toMatch(/http|json|token|endpoint|api\.openai|model|status/i);
+      // 'model' is allowed in the forbidden case: which model an account may
+      // use is the actionable fact there, not an implementation detail.
+      expect(message).not.toMatch(/http|json|token|endpoint|api\.openai|status/i);
     }
   });
 
@@ -72,5 +83,14 @@ describe('VoiceError', () => {
     const error = new VoiceError('timeout', 'aborted after 30s');
     expect(error.reason).toBe('timeout');
     expect(error).toBeInstanceOf(Error);
+  });
+
+  it("carries the service's own explanation when there is one", () => {
+    const error = new VoiceError('forbidden', 'OpenAI responded 403', 'Model not found (404)');
+    expect(error.detail).toBe('Model not found (404)');
+  });
+
+  it('has no detail when the service said nothing', () => {
+    expect(new VoiceError('offline', 'no connection').detail).toBeUndefined();
   });
 });
