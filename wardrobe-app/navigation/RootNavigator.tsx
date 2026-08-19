@@ -68,8 +68,14 @@ export function RootNavigator() {
     <NavigationContainer>
       <Stack.Navigator screenOptions={HEADER_STYLE}>
         {/* The tab navigator draws its own headers, so the stack must not add a
-            second one above them. */}
-        <Stack.Screen name="Tabs" component={Tabs} options={{ headerShown: false }} />
+            second one above them. The title is still set, because iOS labels a
+            pushed screen's back button with the title of the screen it came
+            from — without it the label falls back to the route name, "Tabs". */}
+        <Stack.Screen
+          name="Tabs"
+          component={Tabs}
+          options={{ headerShown: false, title: 'Pieces' }}
+        />
         {/* Add Item is a modal off the Closet FAB rather than a fifth tab: it
             is a flow that ends in a save or a cancel, not a place to sit. */}
         <Stack.Screen

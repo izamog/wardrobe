@@ -4,14 +4,12 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Chip } from '../components/Chip';
 import { EmptyState } from '../components/EmptyState';
-import { ItemTile } from '../components/ItemTile';
+import { GRID_COLUMNS, ItemTile } from '../components/ItemTile';
 import { useDbQuery } from '../hooks/useDbQuery';
 import { listItems } from '../services/items';
 import { ALL_CATEGORIES } from '../utils/categories';
 import type { RootStackParamList } from '../navigation/types';
 import type { Category } from '../types/wardrobe';
-
-const COLUMNS = 3;
 
 export function ClosetScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -51,7 +49,7 @@ export function ClosetScreen() {
         <FlatList
           data={items ?? []}
           keyExtractor={(item) => item.id}
-          numColumns={COLUMNS}
+          numColumns={GRID_COLUMNS}
           contentContainerClassName="p-2 pb-28 grow"
           ListEmptyComponent={
             <EmptyState

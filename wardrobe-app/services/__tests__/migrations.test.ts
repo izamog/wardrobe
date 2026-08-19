@@ -9,6 +9,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { MIGRATIONS, runMigrations, type MigratableDatabase } from '../migrations';
 import { ALL_CATEGORIES } from '../../utils/categories';
+import { SCALE_MAX } from '../../utils/format';
 
 /** Presents a node:sqlite database as the interface runMigrations expects. */
 function adapt(db: DatabaseSync): MigratableDatabase {
@@ -392,6 +393,73 @@ describe('v3 -> v4: settling the garment vocabulary', () => {
   });
 });
 
+describe('v4 -> v5: warmth and windproof rescaled to 0-5', () => {
+  /** Builds a database at exactly v4, while the columns still allowed 0-10. */
+  function v4Db(): DatabaseSync {
+    const db = freshDb();
+    for (const migration of MIGRATIONS.slice(0, 4)) db.exec(migration);
+    db.exec('PRAGMA user_version = 4;');
+    return db;
+  }
+
+  const addV4Item = (db: DatabaseSync, id: string, warmth: number, wind: number) =>
+    db
+      .prepare(
+        `INSERT INTO ClothingItems (id, imagePath, category, inferredWarmth, inferredWind, createdAt)
+         VALUES (?,?,?,?,?,?)`,
+      )
+      .run(id, '', 'Top', warmth, wind, 'then');
+
+  const scalesOf = (db: DatabaseSync, id: string) =>
+    db.prepare('SELECT inferredWarmth AS warmth, inferredWind AS wind FROM ClothingItems WHERE id=?')
+      .get(id);
+
+  it('clamps values that were legal on the old wider scale', async () => {
+    const db = v4Db();
+    addV4Item(db, 'hot', 9, 10);
+
+    await runMigrations(adapt(db));
+
+    expect(scalesOf(db, 'hot')).toEqual({ warmth: SCALE_MAX, wind: SCALE_MAX });
+  });
+
+  it('leaves values already on the new scale untouched', async () => {
+    const db = v4Db();
+    addV4Item(db, 'mild', 3, 0);
+
+    await runMigrations(adapt(db));
+
+    expect(scalesOf(db, 'mild')).toEqual({ warmth: 3, wind: 0 });
+  });
+
+  it('rejects the old top of the scale afterwards', async () => {
+    const db = v4Db();
+    await runMigrations(adapt(db));
+
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO ClothingItems (id, imagePath, category, inferredWarmth, createdAt)
+           VALUES (?,?,?,?,?)`,
+        )
+        .run('too-warm', '', 'Top', 10, 'then'),
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('keeps every verdict across this rebuild too', async () => {
+    const db = v4Db();
+    addV4Item(db, 'aaa', 0, 0);
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('bbb', '', 'Bottom', 'then');
+    db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
+      .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM Item_Compatibility').get()).toEqual({ n: 1 });
+  });
+});
+
 describe('schema constraints', () => {
   let db: DatabaseSync;
   beforeEach(async () => {
@@ -420,17 +488,23 @@ describe('schema constraints', () => {
     expect(() => insert('hw-brass', 'Brass')).toThrow(/CHECK constraint failed/);
   });
 
-  it('keeps warmth and wind within 0-10', () => {
-    const insert = (id: string, warmth: number) =>
+  it('keeps warmth and windproof within 0 and the top of the scale', () => {
+    const insert = (id: string, column: string, value: number) =>
       db
         .prepare(
-          'INSERT INTO ClothingItems (id, imagePath, category, inferredWarmth, createdAt) VALUES (?,?,?,?,?)',
+          `INSERT INTO ClothingItems (id, imagePath, category, ${column}, createdAt) VALUES (?,?,?,?,?)`,
         )
-        .run(id, '', 'Top', warmth, 't');
-    expect(() => insert('w0', 0)).not.toThrow();
-    expect(() => insert('w10', 10)).not.toThrow();
-    expect(() => insert('w11', 11)).toThrow(/CHECK constraint failed/);
-    expect(() => insert('wneg', -1)).toThrow(/CHECK constraint failed/);
+        .run(id, '', 'Top', value, 't');
+
+    for (const column of ['inferredWarmth', 'inferredWind']) {
+      // 0 is "not assessed", which is where every row starts.
+      expect(() => insert(`${column}-0`, column, 0)).not.toThrow();
+      expect(() => insert(`${column}-max`, column, SCALE_MAX)).not.toThrow();
+      expect(() => insert(`${column}-over`, column, SCALE_MAX + 1)).toThrow(
+        /CHECK constraint failed/,
+      );
+      expect(() => insert(`${column}-neg`, column, -1)).toThrow(/CHECK constraint failed/);
+    }
   });
 
   it('stores cost as whole minor units and rejects negatives', () => {

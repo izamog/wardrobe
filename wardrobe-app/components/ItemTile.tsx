@@ -5,6 +5,15 @@ import type { ClothingItem } from '../types/wardrobe';
 
 export type Badge = 'match' | 'dismatch' | 'unrated' | null;
 
+/**
+ * Columns in every item grid.
+ *
+ * Exported because ItemTile's width is a fraction of the row and the grid's
+ * numColumns is set separately — they have to agree, and one constant is the
+ * only way to be sure they do.
+ */
+export const GRID_COLUMNS = 3;
+
 const BADGE_STYLE: Record<Exclude<Badge, null>, { label: string; className: string }> = {
   match: { label: '✓', className: 'bg-emerald-600' },
   dismatch: { label: '✕', className: 'bg-rose-600' },
@@ -29,7 +38,11 @@ export function ItemTile({
   const badgeStyle = badge ? BADGE_STYLE[badge] : null;
 
   return (
-    <Pressable onPress={onPress} className="flex-1 p-1.5" accessibilityRole="button">
+    // w-1/3 rather than flex-1: with flex-1 a final row holding one item
+    // stretches it to the full width, so a wardrobe of four showed three tiles
+    // and one banner. A fixed third keeps every tile the same size whatever
+    // the count. The fraction must match GRID_COLUMNS above.
+    <Pressable onPress={onPress} className="w-1/3 p-1.5" accessibilityRole="button">
       <View className="aspect-square rounded-xl overflow-hidden bg-slate-200 items-center justify-center">
         <StoredImage
           path={item.imagePath}

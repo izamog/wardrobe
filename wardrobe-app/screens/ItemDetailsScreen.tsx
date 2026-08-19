@@ -18,7 +18,7 @@ import { removeItem, replaceItemImage } from '../services/itemActions';
 import { withDb } from '../services/database';
 import { ALL_CATEGORIES } from '../utils/categories';
 import { ALL_MATERIALS } from '../utils/materials';
-import { costPerWear, formatCost, parseCost } from '../utils/format';
+import { costPerWear, formatCost, parseCost, parseScale, SCALE_MAX } from '../utils/format';
 import type { RootStackParamList } from '../navigation/types';
 import type { Category, ClothingItem, HardwareColor } from '../types/wardrobe';
 
@@ -37,12 +37,12 @@ const hardwareColorApplies = (category: Category) => category === 'Belt' || cate
 const beltLoopsApply = (category: Category) => category === 'Bottom';
 
 /**
- * The edit form's own state.
+ * The edit form's own state, strings wherever the user types.
  *
- * inferredWarmth and inferredWind are absent deliberately: they are model
- * inputs the app derives (Phase 3 fills them from the voice description), not
- * numbers a person should be asked to guess. They stay on the row and are left
- * untouched by an edit here.
+ * Warmth and windproof are here as plain numbers rather than pickers: they are
+ * values the app will generate from Phase 3 onwards, and the fields exist so
+ * a wrong one can be seen and corrected while that is being built. They are
+ * not a question the user is expected to answer when adding a garment.
  */
 interface Draft {
   category: Category;
@@ -52,6 +52,8 @@ interface Draft {
   materials: string[];
   hardwareColor: HardwareColor;
   hasBeltLoops: boolean;
+  inferredWarmth: string;
+  inferredWind: string;
 }
 
 function toDraft(item: ClothingItem): Draft {
@@ -63,6 +65,8 @@ function toDraft(item: ClothingItem): Draft {
     materials: item.materials,
     hardwareColor: item.hardwareColor,
     hasBeltLoops: item.hasBeltLoops,
+    inferredWarmth: String(item.inferredWarmth),
+    inferredWind: String(item.inferredWind),
   };
 }
 
@@ -128,6 +132,16 @@ export function ItemDetailsScreen() {
       return;
     }
 
+    const inferredWarmth = parseScale(draft.inferredWarmth);
+    const inferredWind = parseScale(draft.inferredWind);
+    if (inferredWarmth === null || inferredWind === null) {
+      Alert.alert(
+        'Check warmth and windproof',
+        `Whole numbers from 0 to ${SCALE_MAX}, or leave blank for not set.`,
+      );
+      return;
+    }
+
     const update: ItemUpdate = {
       category: draft.category,
       brand: draft.brand.trim() || 'Unknown',
@@ -140,6 +154,8 @@ export function ItemDetailsScreen() {
       // otherwise act on a flag set while the item was still a Bottom.
       hardwareColor: hardwareColorApplies(draft.category) ? draft.hardwareColor : 'None',
       hasBeltLoops: beltLoopsApply(draft.category) ? draft.hasBeltLoops : false,
+      inferredWarmth,
+      inferredWind,
     };
 
     try {
@@ -264,6 +280,33 @@ export function ItemDetailsScreen() {
             onValueChange={(v) => set('hasBeltLoops', v)}
           />
         )}
+
+        <View className="mt-2 mb-4 p-3 rounded-xl bg-slate-100 border border-slate-200">
+          <Text className="text-xs text-slate-500 mb-3">
+            Generated from Phase 3 onwards. Editable now so a wrong value can be
+            corrected while that is built.
+          </Text>
+          <View className="flex-row">
+            <View className="flex-1 mr-2">
+              <TextField
+                label={`Warmth (1-${SCALE_MAX})`}
+                value={draft.inferredWarmth}
+                onChangeText={(v) => set('inferredWarmth', v)}
+                keyboardType="number-pad"
+                placeholder="0"
+              />
+            </View>
+            <View className="flex-1 ml-2">
+              <TextField
+                label={`Windproof (1-${SCALE_MAX})`}
+                value={draft.inferredWind}
+                onChangeText={(v) => set('inferredWind', v)}
+                keyboardType="number-pad"
+                placeholder="0"
+              />
+            </View>
+          </View>
+        </View>
 
         <View className="mt-2">
           <PrimaryButton label="Save changes" onPress={save} />

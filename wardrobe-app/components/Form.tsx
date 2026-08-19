@@ -23,7 +23,7 @@ export function TextField({
   value: string;
   onChangeText: (v: string) => void;
   placeholder?: string;
-  keyboardType?: 'default' | 'decimal-pad';
+  keyboardType?: 'default' | 'decimal-pad' | 'number-pad';
 }) {
   return (
     <Field label={label}>
@@ -204,10 +204,19 @@ export function MultiSelectField({
 
       <Modal visible={open} animationType="slide" presentationStyle="pageSheet">
         <View className="flex-1 bg-slate-50">
-          <View className="flex-row items-center justify-between px-4 py-3 bg-white border-b border-slate-200">
-            <Text className="text-base font-semibold text-slate-900">{label}</Text>
-            <Pressable onPress={() => setOpen(false)} accessibilityRole="button">
-              <Text className="text-base font-semibold text-slate-900">Done</Text>
+          {/* pt-6 clears the sheet's rounded top corners — at pt-3 the title and
+              the Done button sat in the curve. */}
+          <View className="flex-row items-center justify-between pl-5 pr-3 pt-6 pb-3 bg-white border-b border-slate-200">
+            <Text className="text-lg font-semibold text-slate-900">{label}</Text>
+            <Pressable
+              onPress={() => setOpen(false)}
+              accessibilityRole="button"
+              // Padding inside the Pressable, so the tap target is the whole
+              // pill rather than the glyphs. A bare text label here was a
+              // ~40x20pt target and easy to miss.
+              className="px-5 py-2.5 rounded-full bg-slate-900"
+            >
+              <Text className="text-base font-semibold text-white">Done</Text>
             </Pressable>
           </View>
           <ScrollView contentContainerClassName="pb-10">

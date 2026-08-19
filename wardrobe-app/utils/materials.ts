@@ -7,39 +7,36 @@
  * older build is kept rather than discarded — see MultiSelectField, which adds
  * any unrecognised stored value to its own options.
  *
- * Grouped loosely by fibre type, which is also the order they are shown in.
+ * Alphabetical, and a test holds it that way: this is the order the picker
+ * shows and the order a selection is stored in, so it has to be findable
+ * rather than reflect how someone once grouped fibres.
  */
 export const ALL_MATERIALS: readonly string[] = [
-  // Natural plant
-  'Cotton',
-  'Linen',
-  'Hemp',
-  'Bamboo',
-  // Natural animal
-  'Wool',
-  'Merino',
-  'Cashmere',
-  'Mohair',
-  'Alpaca',
-  'Silk',
-  'Down',
-  // Leathers
-  'Leather',
-  'Suede',
-  'Sheepskin',
-  // Manufactured
-  'Viscose',
-  'Modal',
-  'Lyocell',
-  'Polyester',
-  'Nylon',
   'Acrylic',
-  'Elastane',
-  // Constructions worth recording in their own right
-  'Denim',
+  'Alpaca',
+  'Bamboo',
+  'Cashmere',
   'Corduroy',
+  'Cotton',
+  'Denim',
+  'Down',
+  'Elastane',
   'Fleece',
-  'Velvet',
-  'Tweed',
+  'Hemp',
+  'Leather',
+  'Linen',
+  'Lyocell',
+  'Merino',
+  'Modal',
+  'Mohair',
+  'Nylon',
+  'Polyester',
   'Satin',
+  'Sheepskin',
+  'Silk',
+  'Suede',
+  'Tweed',
+  'Velvet',
+  'Viscose',
+  'Wool',
 ];

@@ -2,11 +2,10 @@ import React, { useState } from 'react';
 import { Alert, Image, ScrollView, Text, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { OptionRow, PrimaryButton, SwitchField, TextField } from '../components/Form';
+import { OptionRow, PrimaryButton } from '../components/Form';
 import { PhotoPreview, PhotoSourceChooser } from '../components/PhotoPicker';
 import { createItem } from '../services/itemActions';
 import { ALL_CATEGORIES } from '../utils/categories';
-import { parseCost } from '../utils/format';
 import type { RootStackParamList } from '../navigation/types';
 import type { Category } from '../types/wardrobe';
 
@@ -24,11 +23,13 @@ type Stage =
   | { step: 'form'; imageUri: string };
 
 /**
- * The manual add form, now with a photo step in front of it.
+ * Adding an item: a photo and a category, and nothing else.
  *
- * Still smaller than the full attribute set: the rest keep their column
- * defaults and are editable on Item Details. Phase 3's voice ingestion is what
- * fills them in without typing.
+ * Kept this short on purpose. Photographing a wardrobe is dozens of repetitions
+ * of the same two actions, and every extra field is paid once per garment;
+ * brand, cost and the rest are asked for on Item Details, when the user is
+ * looking at one thing rather than working through a pile. Everything omitted
+ * here keeps its column default.
  */
 export function AddItemScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -36,29 +37,22 @@ export function AddItemScreen() {
 
   const [stage, setStage] = useState<Stage>({ step: 'capture' });
   const [category, setCategory] = useState<Category>(route.params?.category ?? 'T-Shirt');
-  const [brand, setBrand] = useState('');
-  const [cost, setCost] = useState('');
-  const [isSecondHand, setIsSecondHand] = useState(false);
   const [saving, setSaving] = useState(false);
 
   async function save(imageUri: string) {
-    const costMinorUnits = parseCost(cost);
-    if (costMinorUnits === null) {
-      Alert.alert('Check the cost', 'Enter a number like 24.99, or leave it blank.');
-      return;
-    }
-
     setSaving(true);
     try {
       await createItem(
         {
           category,
-          brand: brand.trim() || 'Unknown',
-          costMinorUnits,
-          isSecondHand,
+          brand: 'Unknown',
+          costMinorUnits: 0,
+          isSecondHand: false,
           materials: [],
           hardwareColor: 'None',
           hasBeltLoops: false,
+          // Left at zero, meaning "not assessed". Phase 3 derives both from the
+          // spoken description.
           inferredWarmth: 0,
           inferredWind: 0,
         },
@@ -119,22 +113,8 @@ export function AddItemScreen() {
         value={category}
         onChange={setCategory}
       />
-      <TextField
-        label="Brand or name"
-        value={brand}
-        onChangeText={setBrand}
-        placeholder="Unknown"
-      />
-      <TextField
-        label="Cost (£)"
-        value={cost}
-        onChangeText={setCost}
-        placeholder="0.00"
-        keyboardType="decimal-pad"
-      />
-      <SwitchField label="Bought second-hand" value={isSecondHand} onValueChange={setIsSecondHand} />
 
-      <View className="mt-4">
+      <View className="mt-2">
         <PrimaryButton
           label={saving ? 'Saving…' : 'Save item'}
           onPress={() => void save(imageUri)}

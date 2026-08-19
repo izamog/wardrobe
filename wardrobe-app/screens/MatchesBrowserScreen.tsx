@@ -3,7 +3,7 @@ import { ActivityIndicator, FlatList, Text, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { EmptyState } from '../components/EmptyState';
-import { ItemTile, type Badge } from '../components/ItemTile';
+import { GRID_COLUMNS, ItemTile, type Badge } from '../components/ItemTile';
 import { useDbQuery } from '../hooks/useDbQuery';
 import {
   clearCompatibility,
@@ -91,7 +91,7 @@ export function MatchesBrowserScreen() {
       <FlatList
         data={data.candidates}
         keyExtractor={(candidate) => candidate.id}
-        numColumns={3}
+        numColumns={GRID_COLUMNS}
         contentContainerClassName="p-2 grow"
         ListEmptyComponent={
           <EmptyState
