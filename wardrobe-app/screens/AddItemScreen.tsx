@@ -1,11 +1,19 @@
 import React, { useState } from 'react';
-import { Alert, Image, Pressable, ScrollView, Text, View } from 'react-native';
+import {
+  Alert,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  Text,
+  View,
+} from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { OptionRow, PrimaryButton } from '../components/Form';
-import { PhotoPreview, PhotoSourceChooser } from '../components/PhotoPicker';
+import { PhotoSourceChooser } from '../components/PhotoPicker';
 import { ProposalReview, type ReviewedValues } from '../components/ProposalReview';
-import { VoiceCapture } from '../components/VoiceCapture';
+import { VoiceBar } from '../components/VoiceCapture';
 import { createItem } from '../services/itemActions';
 import { withDb } from '../services/database';
 import { isVoiceConfigured, openAIVoicePipeline } from '../services/voice';
@@ -16,15 +24,12 @@ import type { RootStackParamList } from '../navigation/types';
 /**
  * Where the add flow has got to.
  *
- * A union rather than a set of booleans because the flow keeps growing: 'voice'
- * is this phase's addition and slotted in without touching the others, and
- * background removal will add a processing step after 'preview' the same way.
+ * Only two steps now: the photo, then everything else on one screen. Voice used
+ * to be a page of its own, which meant describing a garment you could no longer
+ * see — the point of holding the button is to look at the piece while you talk
+ * about it.
  */
-type Stage =
-  | { step: 'capture' }
-  | { step: 'preview'; imageUri: string }
-  | { step: 'voice'; imageUri: string }
-  | { step: 'confirm'; imageUri: string };
+type Stage = { step: 'capture' } | { step: 'compose'; imageUri: string };
 
 /**
  * Attributes applied straight from the model without a confirmation card.
@@ -44,6 +49,7 @@ export function AddItemScreen() {
 
   const [stage, setStage] = useState<Stage>({ step: 'capture' });
   const [proposal, setProposal] = useState<ItemProposal>({});
+  const [transcript, setTranscript] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const [values, setValues] = useState<ReviewedValues>({
@@ -106,52 +112,17 @@ export function AddItemScreen() {
         <Text className="text-sm text-slate-500 mb-5">
           Every item needs a picture. Photos are stored on this phone only.
         </Text>
-        <PhotoSourceChooser onPicked={(imageUri) => setStage({ step: 'preview', imageUri })} />
-      </ScrollView>
-    );
-  }
-
-  if (stage.step === 'preview') {
-    const { imageUri } = stage;
-    return (
-      <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4">
-        <PhotoPreview
-          uri={imageUri}
-          onAccept={() =>
-            setStage(isVoiceConfigured() ? { step: 'voice', imageUri } : { step: 'confirm', imageUri })
-          }
-          onRetake={() => setStage({ step: 'capture' })}
-        />
-      </ScrollView>
-    );
-  }
-
-  if (stage.step === 'voice') {
-    const { imageUri } = stage;
-    return (
-      <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4 pt-10">
-        <Text className="text-base font-semibold text-slate-900 text-center mb-1">
-          Describe it
-        </Text>
-        <Text className="text-sm text-slate-500 text-center mb-8">
-          Brand, price, colour — whatever you know.
-        </Text>
-
-        <VoiceCapture
-          pipeline={openAIVoicePipeline}
-          onProposal={(next) => {
-            applyProposal(next);
-            setStage({ step: 'confirm', imageUri });
+        <PhotoSourceChooser
+          onPicked={(image) => {
+            // The detector's guess seeds the category so a description that
+            // never mentions one still lands somewhere sensible. Anything the
+            // user says overrides it.
+            if (image.detectedCategory) {
+              setValues((current) => ({ ...current, category: image.detectedCategory! }));
+            }
+            setStage({ step: 'compose', imageUri: image.uri });
           }}
         />
-
-        <Pressable
-          onPress={() => setStage({ step: 'confirm', imageUri })}
-          accessibilityRole="button"
-          className="py-4 mt-8 items-center"
-        >
-          <Text className="text-slate-500 font-medium">Skip and type it later</Text>
-        </Pressable>
       </ScrollView>
     );
   }
@@ -159,38 +130,63 @@ export function AddItemScreen() {
   const { imageUri } = stage;
 
   return (
-    <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4 pb-10">
-      <View className="aspect-square rounded-2xl overflow-hidden bg-slate-200 mb-3">
-        <Image source={{ uri: imageUri }} className="w-full h-full" resizeMode="cover" />
-      </View>
-      <View className="mb-5">
-        <PrimaryButton
-          label="Replace image"
-          tone="secondary"
-          onPress={() => setStage({ step: 'capture' })}
+    <KeyboardAvoidingView
+      className="flex-1 bg-slate-50"
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView contentContainerClassName="p-4 pb-6" keyboardShouldPersistTaps="handled">
+        {/* Not pressable — replacing goes through the button, so a stray tap on
+            a large image cannot throw away the form. */}
+        <View className="aspect-[3/4] rounded-2xl overflow-hidden bg-slate-200 mb-3">
+          <Image source={{ uri: imageUri }} className="w-full h-full" resizeMode="contain" />
+        </View>
+        <View className="mb-5">
+          <PrimaryButton
+            label="Replace image"
+            tone="secondary"
+            onPress={() => setStage({ step: 'capture' })}
+          />
+        </View>
+
+        {transcript ? (
+          <Text className="text-sm text-slate-500 italic mb-4">“{transcript}”</Text>
+        ) : null}
+
+        <ProposalReview
+          proposal={proposal}
+          values={values}
+          onChange={(patch) => setValues((current) => ({ ...current, ...patch }))}
         />
+
+        {/* Only when nothing proposed a category, so there is always exactly
+            one place to set it and never two. Detection usually fills this in
+            from the photo before a word is spoken. */}
+        {proposal.category === undefined ? (
+          <OptionRow
+            label="Category"
+            options={ALL_CATEGORIES}
+            value={values.category}
+            onChange={(category) => setValues((current) => ({ ...current, category }))}
+          />
+        ) : null}
+      </ScrollView>
+
+      <View className="flex-row items-center px-4 py-3 bg-white border-t border-slate-200">
+        <View className="flex-1 mr-3">
+          <PrimaryButton
+            label={saving ? 'Saving…' : 'Save item'}
+            onPress={() => void save(imageUri)}
+            disabled={saving}
+          />
+        </View>
+        {isVoiceConfigured() ? (
+          <VoiceBar
+            pipeline={openAIVoicePipeline}
+            onProposal={applyProposal}
+            onTranscript={setTranscript}
+          />
+        ) : null}
       </View>
-
-      <ProposalReview
-        proposal={proposal}
-        values={values}
-        onChange={(patch) => setValues((current) => ({ ...current, ...patch }))}
-      />
-
-      <OptionRow
-        label="Category"
-        options={ALL_CATEGORIES}
-        value={values.category}
-        onChange={(category) => setValues((current) => ({ ...current, category }))}
-      />
-
-      <View className="mt-2">
-        <PrimaryButton
-          label={saving ? 'Saving…' : 'Save item'}
-          onPress={() => void save(imageUri)}
-          disabled={saving}
-        />
-      </View>
-    </ScrollView>
+    </KeyboardAvoidingView>
   );
 }

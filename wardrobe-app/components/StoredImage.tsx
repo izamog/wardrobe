@@ -12,10 +12,13 @@ export function StoredImage({
   path,
   placeholder,
   placeholderClassName = 'text-slate-500 text-xs',
+  resizeMode = 'contain',
 }: {
   path: string;
   placeholder: string;
   placeholderClassName?: string;
+  /** 'contain' by default: a garment shown whole matters more than a filled tile. */
+  resizeMode?: 'contain' | 'cover';
 }) {
   const uri = imageUriFor(path);
   // A stored path whose file has gone missing used to render as an empty grey
@@ -33,7 +36,7 @@ export function StoredImage({
     <Image
       source={{ uri }}
       className="w-full h-full"
-      resizeMode="cover"
+      resizeMode={resizeMode}
       onError={() => setFailed(true)}
     />
   );

@@ -33,14 +33,14 @@ function discardRecording(uri: string | null): void {
 }
 
 /**
- * Hold-to-talk capture, ending in a set of proposed attributes.
+ * Hold-to-talk capture as a single button, sized to sit in a bottom bar.
  *
  * The recording is deleted on every path — success, failure, and permission
  * refusal — and is never copied anywhere permanent. Audio does leave the
  * device to be transcribed, which is the trade this phase accepts; keeping the
  * file for no longer than the request is what limits it.
  */
-export function VoiceCapture({
+export function VoiceBar({
   pipeline,
   onProposal,
   onTranscript,
@@ -128,28 +128,22 @@ export function VoiceCapture({
         disabled={busy}
         accessibilityRole="button"
         accessibilityLabel="Hold to describe this item"
-        className={`w-40 h-40 rounded-full items-center justify-center ${
-          stage === 'recording' ? 'bg-rose-600' : busy ? 'bg-slate-300' : 'bg-slate-900'
+        className={`w-14 h-14 rounded-full items-center justify-center ${
+          stage === 'recording' ? 'bg-rose-600' : busy ? 'bg-slate-200' : 'bg-slate-900'
         }`}
       >
         {busy ? (
           <ActivityIndicator color="#0f172a" />
         ) : (
-          <Text className="text-white text-base font-semibold text-center px-6">
-            {stage === 'recording' ? `Listening… ${seconds}s` : 'Hold to\nspeak'}
-          </Text>
+          <Text className="text-2xl">{stage === 'recording' ? '⏺' : '🎤'}</Text>
         )}
       </Pressable>
 
-      <Text className="text-sm text-slate-500 mt-4 text-center">
-        {stage === 'recording'
-          ? 'Release when you are done'
-          : stage === 'transcribing'
-            ? 'Hearing what you said…'
-            : stage === 'extracting'
-              ? 'Picking out the details…'
-              : 'Try: "navy Arket wool jumper, forty pounds, second hand"'}
-      </Text>
+      {stage !== 'idle' ? (
+        <Text className="text-[11px] text-slate-500 mt-1 absolute -top-5">
+          {stage === 'recording' ? `${seconds}s` : stage === 'transcribing' ? 'Hearing…' : 'Reading…'}
+        </Text>
+      ) : null}
     </View>
   );
 }

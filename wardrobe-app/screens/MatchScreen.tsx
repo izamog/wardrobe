@@ -11,7 +11,7 @@ import type { ClothingItem, CompatibilityStatus } from '../types/wardrobe';
 function PairFace({ item }: { item: ClothingItem }) {
   return (
     <View className="flex-1 mx-1.5">
-      <View className="aspect-square rounded-2xl bg-slate-200 overflow-hidden items-center justify-center">
+      <View className="aspect-[3/4] rounded-2xl bg-slate-100 overflow-hidden items-center justify-center">
         <StoredImage path={item.imagePath} placeholder="No photo" />
       </View>
       <Text className="text-sm font-semibold text-slate-900 mt-2 text-center" numberOfLines={1}>

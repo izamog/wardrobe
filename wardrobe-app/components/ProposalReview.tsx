@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, Switch, Text, TextInput, View } from 'react-native';
 import { MultiSelectField, OptionRow } from './Form';
 import { ALL_CATEGORIES } from '../utils/categories';
@@ -7,6 +7,14 @@ import { ALL_MATERIALS } from '../utils/materials';
 import { formatCost, parseCost } from '../utils/format';
 import type { ItemProposal } from '../utils/proposals';
 import type { Category, ItemColor } from '../types/wardrobe';
+
+/**
+ * Delay between one card appearing and the next.
+ *
+ * Long enough to read as a sequence, short enough that six of them are all on
+ * screen inside a second.
+ */
+const REVEAL_INTERVAL_MS = 180;
 
 /** The fields a person confirms. The rest of a proposal is applied without asking. */
 export type ReviewableField =
@@ -117,6 +125,7 @@ export function ProposalReview({
   const [resolved, setResolved] = useState<ReadonlySet<ReviewableField>>(new Set());
   const [editing, setEditing] = useState<ReviewableField | null>(null);
   const [costText, setCostText] = useState('');
+  const [revealed, setRevealed] = useState(0);
 
   const proposedFields = useMemo(() => {
     const fields: ReviewableField[] = [];
@@ -128,6 +137,31 @@ export function ProposalReview({
     if (proposal.materials !== undefined) fields.push('materials');
     return fields;
   }, [proposal]);
+
+  // Cards arrive one at a time rather than all at once. A block of six
+  // appearing together reads as a form to fill in; one after another reads as
+  // the app working through what it heard, which is what it is doing.
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    setRevealed(0);
+    // A second recording proposes fresh values, so confirmations of the old
+    // ones no longer mean anything.
+    setResolved(new Set());
+    setEditing(null);
+    if (proposedFields.length === 0) return;
+
+    timer.current = setInterval(() => {
+      setRevealed((count) => {
+        const next = count + 1;
+        if (next >= proposedFields.length && timer.current) clearInterval(timer.current);
+        return next;
+      });
+    }, REVEAL_INTERVAL_MS);
+
+    return () => {
+      if (timer.current) clearInterval(timer.current);
+    };
+  }, [proposedFields]);
 
   if (proposedFields.length === 0) {
     return (
@@ -159,7 +193,7 @@ export function ProposalReview({
     accept: Partial<ReviewedValues>,
     editor: React.ReactNode,
   ) =>
-    proposedFields.includes(field) ? (
+    proposedFields.indexOf(field) >= 0 && proposedFields.indexOf(field) < revealed ? (
       <ProposalCard
         key={field}
         label={label}

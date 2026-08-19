@@ -1,12 +1,15 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
+import type { Category } from '../types/wardrobe';
 import {
   ITEM_IMAGE_DIRECTORY,
   itemImageRelativePath,
   resolveImagePath,
 } from '../utils/imagePaths';
 import { resizeTargetFor } from '../utils/imageSizing';
+import { cropRectFor } from '../utils/cropGeometry';
+import { detectGarment } from './vision';
 
 /**
  * The one module that touches the camera, the photo library and the disk.
@@ -42,6 +45,12 @@ export interface PickedImage {
 
 export type PickResult = { ok: true; image: PickedImage } | { ok: false; reason: PickFailure };
 
+/** A photo ready to store, plus anything detection worked out along the way. */
+export interface PreparedImage {
+  uri: string;
+  detectedCategory: Category | null;
+}
+
 /**
  * Asks for a photo from the camera or the library.
  *
@@ -59,10 +68,10 @@ export async function pickImage(source: PickSource): Promise<PickResult> {
 
   const options: ImagePicker.ImagePickerOptions = {
     mediaTypes: ['images'],
-    // Squares match the tile and detail layouts, and cropping at capture time
-    // means the stored file is the shape that is actually displayed.
-    allowsEditing: true,
-    aspect: [1, 1],
+    // No manual crop step: the garment is found and cropped to automatically
+    // after picking, and making the user drag a box first would be asking them
+    // to do the work twice.
+    allowsEditing: false,
     quality: 1,
   };
 
@@ -78,19 +87,28 @@ export async function pickImage(source: PickSource): Promise<PickResult> {
 }
 
 /**
- * Downscales and re-encodes a picked photo, returning a new temporary file.
+ * Crops a picked photo to the garment and re-encodes it.
+ *
+ * Detection runs first and is allowed to fail: a photo with no usable outline
+ * is cropped to a centred frame instead, which is what the app did before any
+ * of this existed. Nothing here blocks on the network succeeding.
  *
  * The output stays in the cache directory. Nothing is written to permanent
  * storage until the item is actually saved, so abandoning the add flow leaves
  * only a cache file, which the system reclaims on its own.
+ *
+ * @returns the prepared image and whatever the detector guessed the item was
  */
-export async function prepareImage(picked: PickedImage): Promise<string> {
-  const context = ImageManipulator.ImageManipulator.manipulate(picked.uri);
+export async function prepareImage(picked: PickedImage): Promise<PreparedImage> {
+  const detection = await detectGarment(picked.uri);
+  const crop = cropRectFor(detection.box, picked.width, picked.height);
 
-  // Skipped entirely for a photo already within the cap. resize() has no
-  // "only if larger" mode, so calling it unconditionally scaled small images
-  // up — more bytes, no more detail.
-  const target = resizeTargetFor(picked.width, picked.height);
+  const context = ImageManipulator.ImageManipulator.manipulate(picked.uri);
+  if (crop.width > 0 && crop.height > 0) context.crop(crop);
+
+  // Sizing is measured against the cropped result, not the original: a crop
+  // that already brought the garment under the cap must not then be enlarged.
+  const target = resizeTargetFor(crop.width, crop.height);
   if (target) context.resize(target);
 
   const image = await context.renderAsync();
@@ -98,7 +116,8 @@ export async function prepareImage(picked: PickedImage): Promise<string> {
     compress: IMAGE_QUALITY,
     format: ImageManipulator.SaveFormat.JPEG,
   });
-  return saved.uri;
+
+  return { uri: saved.uri, detectedCategory: detection.category };
 }
 
 function itemImageDirectory(): Directory {

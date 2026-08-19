@@ -2,7 +2,8 @@ import { parseExtraction, type ItemProposal } from '../utils/proposals';
 import { ALL_CATEGORIES } from '../utils/categories';
 import { ALL_COLORS } from '../utils/colors';
 import { ALL_MATERIALS } from '../utils/materials';
-import { failureFromStatus, VoiceError } from '../utils/voiceErrors';
+import { VoiceError } from '../utils/voiceErrors';
+import { callOpenAI, isAIConfigured, parseChatJson } from './openai';
 
 /**
  * Turning a spoken description into proposed item attributes.
@@ -13,83 +14,11 @@ import { failureFromStatus, VoiceError } from '../utils/voiceErrors';
  * gets something wrong, seeing what was actually heard explains why.
  */
 
+export const isVoiceConfigured = isAIConfigured;
+
 /** Recommended file-transcription model. `whisper-1` remains available. */
 const TRANSCRIPTION_MODEL = 'gpt-transcribe';
 const EXTRACTION_MODEL = 'gpt-4o-mini';
-
-const OPENAI_BASE_URL = 'https://api.openai.com/v1';
-
-/**
- * How long to wait before giving up on either call.
- *
- * Without this a stalled connection leaves the user holding a screen that
- * never resolves — fetch has no timeout of its own.
- */
-const REQUEST_TIMEOUT_MS = 30_000;
-
-/**
- * The key is read from the environment at build time.
- *
- * EXPO_PUBLIC_ values are inlined into the JS bundle in plain text and can be
- * extracted from any build of the app. That is acceptable for a personal build
- * running on one phone and is NOT acceptable for TestFlight or the App Store —
- * distribution needs this call moved behind a server that holds the key.
- */
-export function readApiKey(env: Record<string, string | undefined>): string | null {
-  const key = env.EXPO_PUBLIC_OPENAI_API_KEY?.trim();
-  if (!key) return null;
-  // The placeholder from .env.example. Someone who copied the file and did not
-  // fill it in has no key, and should get the "voice is not set up" path
-  // rather than a 401 telling them their key was rejected.
-  if (key.startsWith('[') && key.endsWith(']')) return null;
-  return key;
-}
-
-function apiKey(): string | null {
-  return readApiKey(process.env);
-}
-
-export function isVoiceConfigured(): boolean {
-  return apiKey() !== null;
-}
-
-/** Runs a request with a timeout, mapping every failure onto a VoiceFailure. */
-async function callOpenAI(path: string, init: RequestInit): Promise<unknown> {
-  const key = apiKey();
-  if (key === null) throw new VoiceError('no-key', 'EXPO_PUBLIC_OPENAI_API_KEY is not set');
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  let response: Response;
-  try {
-    response = await fetch(`${OPENAI_BASE_URL}${path}`, {
-      ...init,
-      signal: controller.signal,
-      headers: { ...init.headers, Authorization: `Bearer ${key}` },
-    });
-  } catch (e) {
-    // fetch rejects for both an abort and a dead connection, and the two need
-    // different wording, so they are told apart here rather than merged.
-    if (controller.signal.aborted) throw new VoiceError('timeout', 'request timed out');
-    throw new VoiceError('offline', `network request failed: ${String(e)}`);
-  } finally {
-    clearTimeout(timer);
-  }
-
-  if (!response.ok) {
-    throw new VoiceError(
-      failureFromStatus(response.status),
-      `OpenAI responded ${response.status}`,
-    );
-  }
-
-  try {
-    return (await response.json()) as unknown;
-  } catch {
-    throw new VoiceError('unusable-reply', 'response was not JSON');
-  }
-}
 
 /**
  * Sends a recording for transcription.
@@ -152,7 +81,9 @@ function extractionSchema() {
       brand: { type: ['string', 'null'] },
       costInPounds: { type: ['number', 'null'] },
       colors: { type: 'array', items: { type: 'string', enum: [...ALL_COLORS] }, maxItems: 2 },
-      category: nullableEnum(ALL_CATEGORIES),
+      // Not nullable: a category is always wanted, and the model can infer one
+      // from any description of a garment even when none is stated.
+      category: { type: 'string', enum: [...ALL_CATEGORIES] },
       isSecondHand: { type: ['boolean', 'null'] },
       materials: { type: 'array', items: { type: 'string', enum: [...ALL_MATERIALS] } },
       hardwareColor: nullableEnum(['Gold', 'Silver', 'None']),
@@ -167,6 +98,8 @@ const EXTRACTION_INSTRUCTIONS = [
   'You extract clothing attributes from a spoken description of a single garment.',
   'Return null for anything the description does not state or clearly imply.',
   'Do not guess a brand or a price: those are facts, and a wrong one is worse than none.',
+  'category is the exception — always choose the closest one, inferring it from the',
+  'garment described even when the speaker never names a category.',
   'costInPounds is the amount paid, in pounds, as a decimal number.',
   'inferredWarmth and inferredWind are your own estimates from 0 to 10 of how warm',
   'and how wind-resistant the garment is; estimate them even when unstated.',
@@ -198,20 +131,7 @@ export async function extractItemAttributes(transcript: string): Promise<ItemPro
     }),
   });
 
-  const content = (body as { choices?: { message?: { content?: unknown } }[] })?.choices?.[0]
-    ?.message?.content;
-  if (typeof content !== 'string') {
-    throw new VoiceError('unusable-reply', 'no message content in response');
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    throw new VoiceError('unusable-reply', 'message content was not JSON');
-  }
-
-  return parseExtraction(parsed);
+  return parseExtraction(parseChatJson(body));
 }
 
 /** The two steps, injectable so screens can be driven with fakes. */

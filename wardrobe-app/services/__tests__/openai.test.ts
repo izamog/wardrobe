@@ -1,12 +1,12 @@
 /**
  * @jest-environment node
  *
- * Only the key check is covered here. The network calls in this module cannot
- * be exercised without a real key and a device, and mocking fetch would prove
- * nothing about OpenAI — the error mapping they rely on is tested in
+ * Only the key check is covered here. The network calls cannot be exercised
+ * without a real key and a device, and mocking fetch would prove nothing about
+ * OpenAI — the error mapping they rely on is tested in
  * utils/__tests__/voiceErrors.test.ts instead.
  */
-import { readApiKey } from '../voice';
+import { readApiKey } from '../openai';
 
 describe('readApiKey', () => {
   it('reads a key that is set', () => {

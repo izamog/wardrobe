@@ -1,6 +1,6 @@
 import React from 'react';
 import { ActivityIndicator, Alert, Image, Linking, Pressable, Text, View } from 'react-native';
-import { pickImage, prepareImage, type PickSource } from '../services/images';
+import { pickImage, prepareImage, type PickSource, type PreparedImage } from '../services/images';
 
 /**
  * Explains a refused permission and offers the only thing that can fix it.
@@ -27,7 +27,7 @@ function explainPermissionDenied(source: PickSource) {
  * The caller owns what happens to it — nothing here writes to permanent
  * storage, so backing out of the flow leaves only a cache file.
  */
-export function usePhotoCapture(onPicked: (uri: string) => void) {
+export function usePhotoCapture(onPicked: (image: PreparedImage) => void) {
   const [busy, setBusy] = React.useState(false);
 
   const capture = React.useCallback(
@@ -73,14 +73,14 @@ function ChoiceButton({ label, onPress }: { label: string; onPress: () => void }
  * are all pictures — so a photo is required rather than encouraged. Backing
  * out of the whole flow is still available through the modal's own dismiss.
  */
-export function PhotoSourceChooser({ onPicked }: { onPicked: (uri: string) => void }) {
+export function PhotoSourceChooser({ onPicked }: { onPicked: (image: PreparedImage) => void }) {
   const { capture, busy } = usePhotoCapture(onPicked);
 
   if (busy) {
     return (
       <View className="items-center py-10">
         <ActivityIndicator />
-        <Text className="text-slate-500 mt-3">Preparing photo…</Text>
+        <Text className="text-slate-500 mt-3">Finding the garment…</Text>
       </View>
     );
   }

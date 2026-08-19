@@ -7,10 +7,14 @@ The app lives in `wardrobe-app/`. Everything is on-device; there is no server.
 
 ## Status
 
-**Phase 3 — voice ingestion.** Adding an item is: take a photo, hold a button
-and describe it, then confirm what was heard. Each attribute the model picked
-out appears as its own card with accept/reject; rejecting opens an editor for
-that field. Attributes it did not hear get no card and keep their defaults.
+**Phase 3 — voice ingestion.** Adding an item is: take a photo, then hold the
+mic button at the bottom of the same screen and describe the piece while
+looking at it. Attributes appear one at a time as cards with accept/reject;
+rejecting opens an editor for that field. Attributes the model did not hear get
+no card and keep their defaults.
+
+Photos are auto-cropped to the garment. Item Details is read-only until you tap
+the edit icon in the header.
 
 Colour is now recorded — up to two per garment, enforced by the schema rather
 than by app code.
@@ -107,6 +111,19 @@ URI, so the old picture would keep rendering.
 Writes that span both stores live in `services/itemActions.ts`, because the
 ordering is the interesting part: the file is written before the row and
 removed again if the row fails, so a row never points at a missing image.
+
+### Photos and cropping
+
+A picked photo is sent to a vision model, which returns the garment's bounding
+box and a guess at its category. `utils/cropGeometry.ts` turns that box into a
+crop rectangle — padded for leeway, centred on the piece, and grown towards 3:4
+**only as far as the image allows**. A wide garment keeps its own shape rather
+than losing its ends: cropping is the one step that destroys pixels, and the
+closet tile letterboxes with `contain` instead, so nothing is ever cut off in
+the grid.
+
+Detection is an optimisation, never a requirement. No key, no network or a
+nonsense answer all fall back to a centred crop, and the photo is still saved.
 
 ### Colour
 
