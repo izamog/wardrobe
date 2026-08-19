@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, Text, View } from 'react-native';
 import { EmptyState } from '../components/EmptyState';
+import { StoredImage } from '../components/StoredImage';
 import { useDbQuery } from '../hooks/useDbQuery';
 import { listItems, listRatedPairKeys, setCompatibility } from '../services/items';
 import { withDb } from '../services/database';
@@ -11,11 +12,7 @@ function PairFace({ item }: { item: ClothingItem }) {
   return (
     <View className="flex-1 mx-1.5">
       <View className="aspect-square rounded-2xl bg-slate-200 overflow-hidden items-center justify-center">
-        {item.imageUri ? (
-          <Image source={{ uri: item.imageUri }} className="w-full h-full" resizeMode="cover" />
-        ) : (
-          <Text className="text-slate-500 text-xs">No photo</Text>
-        )}
+        <StoredImage path={item.imagePath} placeholder="No photo" />
       </View>
       <Text className="text-sm font-semibold text-slate-900 mt-2 text-center" numberOfLines={1}>
         {item.brand}

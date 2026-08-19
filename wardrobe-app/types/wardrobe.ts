@@ -54,7 +54,24 @@ export type CompatibilityStatus = 'MATCH' | 'DISMATCH';
 
 export interface ClothingItem {
   id: string;
-  imageUri: string;
+  /**
+   * The photo to display, as a path relative to the app's document directory
+   * (e.g. `items/<id>.jpg`), or '' when the item has no photo.
+   *
+   * Relative, never absolute: iOS changes the app container's UUID on
+   * reinstall and on some updates, so a stored absolute file:// URI becomes a
+   * dead link and the photo silently disappears. Resolve it through
+   * utils/imagePaths.ts at render time.
+   */
+  imagePath: string;
+  /**
+   * The unprocessed photo, same relative-path rules.
+   *
+   * Equal to imagePath until background removal exists; kept separately so
+   * removal can later be applied to an already-populated wardrobe without
+   * re-photographing every item.
+   */
+  originalImagePath: string;
   category: Category;
   brand: string;
   /**

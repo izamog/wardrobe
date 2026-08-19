@@ -1,35 +1,47 @@
 import React, { useState } from 'react';
-import { Alert, ScrollView, View } from 'react-native';
+import { Alert, Image, Pressable, ScrollView, Text, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { OptionRow, PrimaryButton, SwitchField, TextField } from '../components/Form';
-import { insertItem } from '../services/items';
-import { withDb } from '../services/database';
+import { PhotoPreview, PhotoSourceChooser } from '../components/PhotoPicker';
+import { createItem } from '../services/itemActions';
 import { ALL_CATEGORIES } from '../utils/categories';
 import { parseCost } from '../utils/format';
 import type { RootStackParamList } from '../navigation/types';
 import type { Category } from '../types/wardrobe';
 
 /**
- * The Phase 1.5 manual add form.
+ * Where the add flow currently is.
  *
- * Deliberately smaller than the full attribute set: this exists so the rest of
- * the app has items to work with before the camera (Phase 2) and voice
- * ingestion (Phase 3) land. The remaining attributes keep their column
- * defaults and are editable on Item Details. The photo steps get inserted
- * ahead of this form later; the save below is what they will feed.
+ * Modelled as a union rather than a handful of booleans because the flow grows:
+ * Phase 3 inserts a hold-to-talk step between 'preview' and 'form', and
+ * background removal adds a processing step after capture. Each of those is a
+ * new member here, not another flag to keep consistent with the others.
+ */
+type Stage =
+  | { step: 'capture' }
+  | { step: 'preview'; imageUri: string }
+  | { step: 'form'; imageUri: string | null };
+
+/**
+ * The manual add form, now with a photo step in front of it.
+ *
+ * Still smaller than the full attribute set: the rest keep their column
+ * defaults and are editable on Item Details. Phase 3's voice ingestion is what
+ * fills them in without typing.
  */
 export function AddItemScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'AddItem'>>();
 
+  const [stage, setStage] = useState<Stage>({ step: 'capture' });
   const [category, setCategory] = useState<Category>(route.params?.category ?? 'T-Shirt');
   const [brand, setBrand] = useState('');
   const [cost, setCost] = useState('');
   const [isSecondHand, setIsSecondHand] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  async function save() {
+  async function save(imageUri: string | null) {
     const costMinorUnits = parseCost(cost);
     if (costMinorUnits === null) {
       Alert.alert('Check the cost', 'Enter a number like 24.99, or leave it blank.');
@@ -38,11 +50,8 @@ export function AddItemScreen() {
 
     setSaving(true);
     try {
-      await withDb((db) =>
-        insertItem(db, {
-          // No camera yet, so there is no image to point at. The tile renders a
-          // placeholder for an empty uri; Phase 2 fills this in.
-          imageUri: '',
+      await createItem(
+        {
           category,
           brand: brand.trim() || 'Unknown',
           costMinorUnits,
@@ -52,7 +61,8 @@ export function AddItemScreen() {
           hasBeltLoops: false,
           inferredWarmth: 0,
           inferredWind: 0,
-        }),
+        },
+        imageUri,
       );
       navigation.goBack();
     } catch (e) {
@@ -62,8 +72,56 @@ export function AddItemScreen() {
     }
   }
 
+  if (stage.step === 'capture') {
+    return (
+      <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4">
+        <Text className="text-base font-semibold text-slate-900 mb-1">Add a photo</Text>
+        <Text className="text-sm text-slate-500 mb-5">
+          Photos are stored on this phone only.
+        </Text>
+        <PhotoSourceChooser
+          onPicked={(imageUri) => setStage({ step: 'preview', imageUri })}
+          onSkip={() => setStage({ step: 'form', imageUri: null })}
+          skipLabel="Add without a photo"
+        />
+      </ScrollView>
+    );
+  }
+
+  if (stage.step === 'preview') {
+    return (
+      <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4">
+        <PhotoPreview
+          uri={stage.imageUri}
+          onAccept={() => setStage({ step: 'form', imageUri: stage.imageUri })}
+          onRetake={() => setStage({ step: 'capture' })}
+        />
+      </ScrollView>
+    );
+  }
+
+  const { imageUri } = stage;
+
   return (
     <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4 pb-10">
+      <Pressable
+        onPress={() => setStage({ step: 'capture' })}
+        accessibilityRole="button"
+        accessibilityLabel={imageUri ? 'Change photo' : 'Add a photo'}
+        className="mb-5"
+      >
+        <View className="aspect-square rounded-2xl overflow-hidden bg-slate-200 items-center justify-center">
+          {imageUri ? (
+            <Image source={{ uri: imageUri }} className="w-full h-full" resizeMode="cover" />
+          ) : (
+            <Text className="text-slate-500">Tap to add a photo</Text>
+          )}
+        </View>
+        {imageUri ? (
+          <Text className="text-center text-sm text-slate-500 mt-2">Tap to change</Text>
+        ) : null}
+      </Pressable>
+
       <OptionRow
         label="Category"
         options={ALL_CATEGORIES}
@@ -86,7 +144,11 @@ export function AddItemScreen() {
       <SwitchField label="Bought second-hand" value={isSecondHand} onValueChange={setIsSecondHand} />
 
       <View className="mt-4">
-        <PrimaryButton label={saving ? 'Saving…' : 'Save item'} onPress={save} disabled={saving} />
+        <PrimaryButton
+          label={saving ? 'Saving…' : 'Save item'}
+          onPress={() => void save(imageUri)}
+          disabled={saving}
+        />
       </View>
     </ScrollView>
   );

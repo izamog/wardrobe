@@ -66,7 +66,8 @@ async function freshDb(): Promise<ItemsDatabase> {
 }
 
 const draft = (overrides: Partial<NewClothingItem> = {}): NewClothingItem => ({
-  imageUri: '',
+  imagePath: '',
+  originalImagePath: '',
   category: 'Top',
   brand: 'Unbranded',
   costMinorUnits: 0,
@@ -85,7 +86,8 @@ describe('insertItem / getItem', () => {
     const written = await insertItem(
       db,
       draft({
-        imageUri: 'file://shirt.png',
+        imagePath: 'items/shirt.jpg',
+        originalImagePath: 'items/shirt-original.jpg',
         category: 'Bottom',
         brand: 'Levis',
         costMinorUnits: 4599,
@@ -128,7 +130,8 @@ describe('rowToItem', () => {
   it('decodes INTEGER booleans and JSON materials', () => {
     const item = rowToItem({
       id: 'a',
-      imageUri: '',
+      imagePath: '',
+      originalImagePath: '',
       category: 'Top',
       brand: 'b',
       costMinorUnits: 0,
@@ -150,7 +153,8 @@ describe('rowToItem', () => {
   it('falls back to an empty list rather than throwing on unreadable materials', () => {
     const base = {
       id: 'a',
-      imageUri: '',
+      imagePath: '',
+      originalImagePath: '',
       category: 'Top',
       brand: 'b',
       costMinorUnits: 0,
@@ -234,6 +238,20 @@ describe('updateItem', () => {
 
     await expect(updateItem(db, 'id-1', {})).resolves.toBeUndefined();
     expect((await getItem(db, 'id-1'))?.brand).toBe('Original');
+  });
+
+  it('repoints both image columns, which replacing a photo depends on', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ imagePath: 'items/a.jpg', originalImagePath: 'items/a.jpg' }), 'id-1', 'now');
+
+    await updateItem(db, 'id-1', {
+      imagePath: 'items/a-2.jpg',
+      originalImagePath: 'items/a-2.jpg',
+    });
+
+    const item = await getItem(db, 'id-1');
+    expect(item?.imagePath).toBe('items/a-2.jpg');
+    expect(item?.originalImagePath).toBe('items/a-2.jpg');
   });
 
   it('does not let an update bypass the CHECK constraints', async () => {

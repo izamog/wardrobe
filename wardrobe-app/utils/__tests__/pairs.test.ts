@@ -4,7 +4,8 @@ import type { Category, ClothingItem } from '../../types/wardrobe';
 
 const item = (id: string, category: Category): ClothingItem => ({
   id,
-  imageUri: '',
+  imagePath: '',
+  originalImagePath: '',
   category,
   brand: id,
   costMinorUnits: 0,

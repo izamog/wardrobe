@@ -184,6 +184,32 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX idx_items_category ON ClothingItems(category);
   CREATE INDEX idx_compat_item_b ON Item_Compatibility(item_b_id);
   `,
+
+  // v2 -> v3: photos on disk.
+  //
+  // imageUri becomes imagePath because the column now holds a path relative to
+  // the app's document directory, not a URI. That distinction is the whole
+  // point: iOS changes the app container's UUID on reinstall and on some
+  // updates, so an absolute file:// URI stored today is a dead link tomorrow
+  // and every photo in the closet silently breaks. The absolute location is
+  // rebuilt at render time.
+  //
+  // originalImagePath keeps the unprocessed photo. Background removal is
+  // deferred, and when it lands it needs a source to work from -- without the
+  // original, applying it to an existing wardrobe would mean re-photographing
+  // everything.
+  //
+  // No table rebuild here: RENAME COLUMN and ADD COLUMN are both in-place, and
+  // ADD COLUMN accepts NOT NULL because the default is a constant.
+  `
+  ALTER TABLE ClothingItems RENAME COLUMN imageUri TO imagePath;
+  ALTER TABLE ClothingItems ADD COLUMN originalImagePath TEXT NOT NULL DEFAULT '';
+
+  -- Existing rows predate the camera and hold '', so this changes nothing
+  -- today. It is here so the invariant "a row with a photo has an original"
+  -- holds for every row, not just the ones written from now on.
+  UPDATE ClothingItems SET originalImagePath = imagePath WHERE imagePath <> '';
+  `,
 ];
 
 /**

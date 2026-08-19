@@ -41,10 +41,20 @@ function freshDb() {
 const userVersion = (db: DatabaseSync) =>
   (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
 
+/** Inserts against the current schema, where the photo column is imagePath. */
 const addItem = (db: DatabaseSync, id: string, category = 'Top') =>
   db
+    .prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?, ?, ?, ?)')
+    .run(id, '', category, '2026-01-01T00:00:00Z');
+
+/**
+ * Inserts against a schema older than v3, where the column is still imageUri.
+ * Needed to seed the databases the upgrade tests then migrate.
+ */
+const addLegacyItem = (db: DatabaseSync, id: string, category = 'Top') =>
+  db
     .prepare('INSERT INTO ClothingItems (id, imageUri, category, createdAt) VALUES (?, ?, ?, ?)')
-    .run(id, 'file://x', category, '2026-01-01T00:00:00Z');
+    .run(id, '', category, '2026-01-01T00:00:00Z');
 
 describe('runMigrations', () => {
   it('brings a fresh database to the current version', async () => {
@@ -110,9 +120,9 @@ describe('v1 -> v2: widening the category constraint', () => {
     // rebuilding ClothingItems in the obvious order deletes the entire
     // compatibility matrix without erroring.
     const db = v1Db();
-    addItem(db, 'aaa', 'Top');
-    addItem(db, 'bbb', 'Bottom');
-    addItem(db, 'ccc', 'Shoes');
+    addLegacyItem(db, 'aaa', 'Top');
+    addLegacyItem(db, 'bbb', 'Bottom');
+    addLegacyItem(db, 'ccc', 'Shoes');
     db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
       .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
     db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
@@ -133,13 +143,14 @@ describe('v1 -> v2: widening the category constraint', () => {
       `INSERT INTO ClothingItems (id, imageUri, category, brand, costMinorUnits, isSecondHand,
         materials, hardwareColor, hasBeltLoops, inferredWarmth, inferredWind, wearCount, createdAt)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    ).run('x', 'file://a.png', 'Bottom', 'Levis', 4599, 1, '["cotton"]', 'Silver', 1, 3, 2, 7, 'then');
+    ).run('x', 'items/a.png', 'Bottom', 'Levis', 4599, 1, '["cotton"]', 'Silver', 1, 3, 2, 7, 'then');
 
     await runMigrations(adapt(db));
 
     expect(db.prepare('SELECT * FROM ClothingItems').get()).toEqual({
       id: 'x',
-      imageUri: 'file://a.png',
+      imagePath: 'items/a.png',
+      originalImagePath: 'items/a.png',
       category: 'Bottom',
       brand: 'Levis',
       costMinorUnits: 4599,
@@ -168,8 +179,8 @@ describe('v1 -> v2: widening the category constraint', () => {
     // An old 'Top' might have been a T-Shirt or a Sweater. The migration does
     // not guess; the row stays as it is and the user can retype it.
     const db = v1Db();
-    addItem(db, 'legacy-top', 'Top');
-    addItem(db, 'legacy-outer', 'Outerwear');
+    addLegacyItem(db, 'legacy-top', 'Top');
+    addLegacyItem(db, 'legacy-outer', 'Outerwear');
 
     await runMigrations(adapt(db));
 
@@ -180,7 +191,7 @@ describe('v1 -> v2: widening the category constraint', () => {
 
   it('accepts the new garment categories only after the migration runs', async () => {
     const db = v1Db();
-    expect(() => addItem(db, 'early', 'Sweater')).toThrow(/CHECK constraint failed/);
+    expect(() => addLegacyItem(db, 'early', 'Sweater')).toThrow(/CHECK constraint failed/);
 
     await runMigrations(adapt(db));
 
@@ -202,8 +213,8 @@ describe('v1 -> v2: widening the category constraint', () => {
     // The foreign keys are re-declared by hand in the migration, so this is
     // not covered by the fresh-install cascade test alone.
     const db = v1Db();
-    addItem(db, 'aaa', 'Top');
-    addItem(db, 'bbb', 'Bottom');
+    addLegacyItem(db, 'aaa', 'Top');
+    addLegacyItem(db, 'bbb', 'Bottom');
     db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
       .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
 
@@ -211,6 +222,70 @@ describe('v1 -> v2: widening the category constraint', () => {
     db.prepare('DELETE FROM ClothingItems WHERE id = ?').run('aaa');
 
     expect(countOf(db, 'Item_Compatibility')).toBe(0);
+  });
+});
+
+describe('v2 -> v3: photos on disk', () => {
+  /** Builds a database at exactly v2, the schema before photos. */
+  function v2Db(): DatabaseSync {
+    const db = freshDb();
+    db.exec(MIGRATIONS[0]);
+    db.exec(MIGRATIONS[1]);
+    db.exec('PRAGMA user_version = 2;');
+    return db;
+  }
+
+  const columnsOf = (db: DatabaseSync) =>
+    (db.prepare('PRAGMA table_info(ClothingItems)').all() as { name: string }[]).map((c) => c.name);
+
+  it('renames imageUri to imagePath, keeping the values', async () => {
+    const db = v2Db();
+    db.prepare(
+      'INSERT INTO ClothingItems (id, imageUri, category, createdAt) VALUES (?,?,?,?)',
+    ).run('a', 'items/a.jpg', 'Top', 'then');
+
+    await runMigrations(adapt(db));
+
+    expect(columnsOf(db)).toContain('imagePath');
+    expect(columnsOf(db)).not.toContain('imageUri');
+    expect(db.prepare('SELECT imagePath FROM ClothingItems WHERE id = ?').get('a')).toEqual({
+      imagePath: 'items/a.jpg',
+    });
+  });
+
+  it('adds originalImagePath, defaulting to empty for photoless rows', async () => {
+    const db = v2Db();
+    addLegacyItem(db, 'no-photo');
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT originalImagePath AS o FROM ClothingItems WHERE id=?').get('no-photo'))
+      .toEqual({ o: '' });
+  });
+
+  it('backfills the original from the existing photo, so every photo has a source', async () => {
+    const db = v2Db();
+    db.prepare(
+      'INSERT INTO ClothingItems (id, imageUri, category, createdAt) VALUES (?,?,?,?)',
+    ).run('a', 'items/a.jpg', 'Top', 'then');
+
+    await runMigrations(adapt(db));
+
+    expect(
+      db.prepare('SELECT originalImagePath AS o FROM ClothingItems WHERE id=?').get('a'),
+    ).toEqual({ o: 'items/a.jpg' });
+  });
+
+  it('leaves verdicts untouched — this migration alters in place, it does not rebuild', async () => {
+    const db = v2Db();
+    addLegacyItem(db, 'aaa');
+    addLegacyItem(db, 'bbb', 'Bottom');
+    db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
+      .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM Item_Compatibility').get()).toEqual({ n: 1 });
   });
 });
 
@@ -233,9 +308,9 @@ describe('schema constraints', () => {
     const insert = (id: string, hw: string) =>
       db
         .prepare(
-          'INSERT INTO ClothingItems (id, imageUri, category, hardwareColor, createdAt) VALUES (?,?,?,?,?)',
+          'INSERT INTO ClothingItems (id, imagePath, category, hardwareColor, createdAt) VALUES (?,?,?,?,?)',
         )
-        .run(id, 'file://x', 'Belt', hw, 't');
+        .run(id, '', 'Belt', hw, 't');
     for (const hw of ['Gold', 'Silver', 'None']) {
       expect(() => insert(`hw-${hw}`, hw)).not.toThrow();
     }
@@ -246,9 +321,9 @@ describe('schema constraints', () => {
     const insert = (id: string, warmth: number) =>
       db
         .prepare(
-          'INSERT INTO ClothingItems (id, imageUri, category, inferredWarmth, createdAt) VALUES (?,?,?,?,?)',
+          'INSERT INTO ClothingItems (id, imagePath, category, inferredWarmth, createdAt) VALUES (?,?,?,?,?)',
         )
-        .run(id, 'file://x', 'Top', warmth, 't');
+        .run(id, '', 'Top', warmth, 't');
     expect(() => insert('w0', 0)).not.toThrow();
     expect(() => insert('w10', 10)).not.toThrow();
     expect(() => insert('w11', 11)).toThrow(/CHECK constraint failed/);
@@ -259,9 +334,9 @@ describe('schema constraints', () => {
     const insert = (id: string, cost: number) =>
       db
         .prepare(
-          'INSERT INTO ClothingItems (id, imageUri, category, costMinorUnits, createdAt) VALUES (?,?,?,?,?)',
+          'INSERT INTO ClothingItems (id, imagePath, category, costMinorUnits, createdAt) VALUES (?,?,?,?,?)',
         )
-        .run(id, 'file://x', 'Top', cost, 't');
+        .run(id, '', 'Top', cost, 't');
     insert('c1', 1250);
     expect(db.prepare('SELECT costMinorUnits AS c FROM ClothingItems WHERE id=?').get('c1')).toEqual({
       c: 1250,

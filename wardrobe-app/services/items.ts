@@ -26,7 +26,8 @@ export interface ItemsDatabase {
  */
 interface ClothingItemRow {
   id: string;
-  imageUri: string;
+  imagePath: string;
+  originalImagePath: string;
   category: string;
   brand: string;
   costMinorUnits: number;
@@ -60,7 +61,8 @@ function parseMaterials(raw: string): string[] {
 export function rowToItem(row: ClothingItemRow): ClothingItem {
   return {
     id: row.id,
-    imageUri: row.imageUri,
+    imagePath: row.imagePath,
+    originalImagePath: row.originalImagePath,
     // The CHECK constraints in migrations.ts are what make these casts safe:
     // no other value can reach the column.
     category: row.category as Category,
@@ -83,7 +85,7 @@ export type NewClothingItem = Omit<ClothingItem, 'id' | 'wearCount' | 'createdAt
 /** The fields an edit form may change. Identity, wear history and creation time are not editable. */
 export type ItemUpdate = Partial<Omit<ClothingItem, 'id' | 'wearCount' | 'createdAt'>>;
 
-const ITEM_COLUMNS = `id, imageUri, category, brand, costMinorUnits, isSecondHand,
+const ITEM_COLUMNS = `id, imagePath, originalImagePath, category, brand, costMinorUnits, isSecondHand,
   materials, hardwareColor, hasBeltLoops, inferredWarmth, inferredWind, wearCount, createdAt`;
 
 /**
@@ -101,10 +103,11 @@ export async function insertItem(
 ): Promise<ClothingItem> {
   await db.runAsync(
     `INSERT INTO ClothingItems (${ITEM_COLUMNS})
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
-      item.imageUri,
+      item.imagePath,
+      item.originalImagePath,
       item.category,
       item.brand,
       item.costMinorUnits,
@@ -175,7 +178,8 @@ export async function getItem(db: ItemsDatabase, id: string): Promise<ClothingIt
 const UPDATE_ENCODERS: {
   [K in keyof ItemUpdate]-?: (value: NonNullable<ItemUpdate[K]>) => BindValue;
 } = {
-  imageUri: (v) => v,
+  imagePath: (v) => v,
+  originalImagePath: (v) => v,
   category: (v) => v,
   brand: (v) => v,
   costMinorUnits: (v) => v,

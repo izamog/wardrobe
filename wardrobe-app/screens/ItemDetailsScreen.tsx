@@ -1,8 +1,10 @@
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Image, ScrollView, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { EmptyState } from '../components/EmptyState';
+import { StoredImage } from '../components/StoredImage';
+import { usePhotoCapture } from '../components/PhotoPicker';
 import {
   OptionRow,
   PrimaryButton,
@@ -11,7 +13,8 @@ import {
   TextField,
 } from '../components/Form';
 import { useDbQuery } from '../hooks/useDbQuery';
-import { deleteItem, getItem, updateItem, type ItemUpdate } from '../services/items';
+import { getItem, updateItem, type ItemUpdate } from '../services/items';
+import { removeItem, replaceItemImage } from '../services/itemActions';
 import { withDb } from '../services/database';
 import { ALL_CATEGORIES } from '../utils/categories';
 import { getLayersOver, getLayersUnder } from '../utils/layering';
@@ -76,7 +79,7 @@ export function ItemDetailsScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { itemId } = useRoute<RouteProp<RootStackParamList, 'ItemDetails'>>().params;
 
-  const { data: item, error, loading } = useDbQuery((db) => getItem(db, itemId), [itemId]);
+  const { data: item, error, loading, reload } = useDbQuery((db) => getItem(db, itemId), [itemId]);
   const [draft, setDraft] = useState<Draft | null>(null);
 
   // Seeding on every load rather than only when draft is null keeps the form in
@@ -85,6 +88,33 @@ export function ItemDetailsScreen() {
   useEffect(() => {
     if (item) setDraft(toDraft(item));
   }, [item]);
+
+  // Declared before the early returns below, because hooks cannot be called
+  // conditionally. It no-ops until the item has loaded.
+  const onPhotoPicked = useCallback(
+    (uri: string) => {
+      void (async () => {
+        if (!item) return;
+        try {
+          await replaceItemImage(item, uri);
+          await reload();
+        } catch (e) {
+          console.error('Failed to replace photo:', e);
+          Alert.alert('Could not save the photo', 'The item still has its old picture.');
+        }
+      })();
+    },
+    [item, reload],
+  );
+  const { capture, busy: capturing } = usePhotoCapture(onPhotoPicked);
+
+  const choosePhoto = useCallback(() => {
+    Alert.alert('Item photo', undefined, [
+      { text: 'Take a photo', onPress: () => void capture('camera') },
+      { text: 'Choose from library', onPress: () => void capture('library') },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, [capture]);
 
   if (error) return <EmptyState title={error} />;
   if (loading && !item) {
@@ -139,8 +169,11 @@ export function ItemDetailsScreen() {
         style: 'destructive',
         onPress: () => {
           void (async () => {
+            if (!item) return;
             try {
-              await withDb((db) => deleteItem(db, itemId));
+              // Removes the row, its photos and, through the foreign key, its
+              // match and dismatch records.
+              await removeItem(item);
               navigation.goBack();
             } catch (e) {
               console.error('Failed to delete item:', e);
@@ -156,13 +189,22 @@ export function ItemDetailsScreen() {
 
   return (
     <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="pb-10">
-      <View className="aspect-square bg-slate-200 items-center justify-center">
-        {item.imageUri ? (
-          <Image source={{ uri: item.imageUri }} className="w-full h-full" resizeMode="cover" />
+      <Pressable
+        onPress={choosePhoto}
+        accessibilityRole="button"
+        accessibilityLabel={item.imagePath ? 'Change photo' : 'Add a photo'}
+        className="aspect-square bg-slate-200 items-center justify-center"
+      >
+        {capturing ? (
+          <ActivityIndicator />
         ) : (
-          <Text className="text-slate-500">No photo yet</Text>
+          <StoredImage
+            path={item.imagePath}
+            placeholder="Tap to add a photo"
+            placeholderClassName="text-slate-500"
+          />
         )}
-      </View>
+      </Pressable>
 
       <View className="flex-row justify-between px-4 py-3 bg-white border-b border-slate-200">
         <View>

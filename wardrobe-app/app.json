@@ -7,7 +7,11 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Wardrobe uses the camera to photograph your clothes. Photos stay on this device.",
+        "NSPhotoLibraryUsageDescription": "Wardrobe lets you choose existing photos of your clothes. Photos stay on this device."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -22,7 +26,8 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-image-picker"
     ]
   }
 }

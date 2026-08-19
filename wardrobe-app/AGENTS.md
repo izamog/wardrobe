@@ -44,6 +44,23 @@ Adding a directory that contains `className` means adding it to the `content`
 globs in `tailwind.config.js`. Miss it and the styles are silently absent — no
 error, just an unstyled screen.
 
+## Photos
+
+The database stores paths **relative** to the document directory. Never store
+an absolute `file://` URI: iOS reassigns the app container UUID and the link
+dies. Resolve through `utils/imagePaths.ts` (pure, tested) at render time.
+
+`services/images.ts` is the only module allowed to touch the camera, photo
+library or filesystem, and it is not unit-testable off-device — anything added
+there has to be verified by running the app.
+
+Give every saved photo a new filename; React Native caches by URI, so
+overwriting a path leaves the old image on screen.
+
+`services/itemActions.ts` owns anything spanning the database and the disk.
+File before row on create, row before file on delete — read the comments there
+before changing the order.
+
 ## Categories
 
 `Category` is the garment type; `CATEGORY_GROUP` in `utils/categories.ts` maps
