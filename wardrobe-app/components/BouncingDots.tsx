@@ -47,8 +47,16 @@ export function BouncingDots({ color = '#0f172a' }: { color?: string }) {
       ),
     );
 
-    animations.forEach((animation) => animation.start());
-    return () => animations.forEach((animation) => animation.stop());
+    animations.forEach((animation) => {
+      animation.start();
+    });
+    // Braced for the same reason as the effect body: what a cleanup function
+    // returns is not meant to be anything.
+    return () => {
+      animations.forEach((animation) => {
+        animation.stop();
+      });
+    };
   }, [values]);
 
   return (

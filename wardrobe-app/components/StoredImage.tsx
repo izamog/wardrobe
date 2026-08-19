@@ -28,7 +28,13 @@ export function StoredImage({
 
   // Tiles are recycled as the grid scrolls, so a failure recorded for one item
   // must not stick to the next one shown in the same slot.
-  useEffect(() => setFailed(false), [uri]);
+  //
+  // Braced so the effect returns nothing: React reads an effect's return value
+  // as a cleanup function, so an expression body here is one refactor away
+  // from silently registering a cleanup that was never meant to exist.
+  useEffect(() => {
+    setFailed(false);
+  }, [uri]);
 
   if (!uri || failed) return <Text className={placeholderClassName}>{placeholder}</Text>;
 

@@ -58,7 +58,23 @@ npm run typecheck # tsc --noEmit
 ```
 
 From the repo root, `codacy-cli analyze --tool opengrep` runs static analysis;
-`--tool trivy` scans dependencies. Note that Codacy's bundled ESLint has no
+`--tool trivy` scans dependencies.
+
+### Known dependency advisories
+
+`image-size@1.2.1` carries two HIGH denial-of-service advisories
+(CVE-2025-71329, CVE-2025-71330) with **no fixed 1.x release**. It arrives
+through `metro`, which declares `^1.0.2`, so the only upgrade is `image-size@2`
+— outside that range, and a different module shape. Forcing it would risk
+breaking the bundler to fix a build-time issue.
+
+It is build-time: the package is not in the app bundle (verified by exporting
+and searching the compiled output). The exposure is a machine that bundles a
+crafted image, not a phone running the app. Revisit when metro widens its
+range.
+
+`postcss` and `uuid` had five advisories between them and are pinned to fixed
+versions through `overrides` in `wardrobe-app/package.json`. Note that Codacy's bundled ESLint has no
 TypeScript parser and reports parse errors on every `.ts` file — the project's
 own `npm run lint` is what actually lints this codebase.
 
