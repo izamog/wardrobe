@@ -53,6 +53,10 @@ type Refinement = Promise<void> | null;
  */
 const APPLY_INTERVAL_MS = 180;
 
+/** Stable sets, so the list is not handed a new object on every render. */
+const CATEGORY_LOADING: ReadonlySet<AttributeField> = new Set(['category']);
+const EMPTY_FIELDS: ReadonlySet<AttributeField> = new Set();
+
 /** Which proposal field feeds which row. */
 const FIELD_SOURCES: Record<AttributeField, (p: ItemProposal) => Partial<AttributeValues> | null> = {
   category: (p) => (p.category === undefined ? null : { category: p.category }),
@@ -273,6 +277,9 @@ export function AddItemScreen() {
         <AttributeList
           values={values}
           pending={pending}
+          // Detection is still deciding what this is, so the row says so
+          // rather than showing a default the user might take for an answer.
+          loading={refining && !categoryTouched.current ? CATEGORY_LOADING : EMPTY_FIELDS}
           onChange={(patch) => {
             if (patch.category !== undefined) categoryTouched.current = true;
             setValues((current) => ({ ...current, ...patch }));

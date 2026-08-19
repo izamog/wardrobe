@@ -1,5 +1,5 @@
 import * as ImageManipulator from 'expo-image-manipulator';
-import { callOpenAI, parseChatJson } from './openai';
+import { callOpenAI, parseChatJson, withModelFallback } from './openai';
 import { parseDetectedBox, type NormalizedBox } from '../utils/cropGeometry';
 import { ALL_CATEGORIES } from '../utils/categories';
 import type { Category } from '../types/wardrobe';
@@ -14,7 +14,10 @@ import type { Category } from '../types/wardrobe';
  * pure and tested; this file is only the call.
  */
 
-const VISION_MODEL = 'gpt-4o-mini';
+/** Same pool as extraction: both need a model this project is allowed to use. */
+const VISION_MODELS = process.env.EXPO_PUBLIC_OPENAI_TEXT_MODEL
+  ? [process.env.EXPO_PUBLIC_OPENAI_TEXT_MODEL]
+  : ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o'];
 
 /**
  * Longest edge of the image sent for detection.
@@ -86,29 +89,31 @@ export async function detectGarment(imageUri: string): Promise<GarmentDetection>
 
     if (!small.base64) return { box: null, category: null };
 
-    const body = await callOpenAI('/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: VISION_MODEL,
-        messages: [
-          { role: 'system', content: DETECTION_INSTRUCTIONS },
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'image_url',
-                image_url: { url: `data:image/jpeg;base64,${small.base64}`, detail: 'low' },
-              },
-            ],
+    const body = await withModelFallback('vision', VISION_MODELS, (model) =>
+      callOpenAI('/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: DETECTION_INSTRUCTIONS },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'image_url',
+                  image_url: { url: `data:image/jpeg;base64,${small.base64}`, detail: 'low' },
+                },
+              ],
+            },
+          ],
+          response_format: {
+            type: 'json_schema',
+            json_schema: { name: 'garment_detection', strict: true, schema: detectionSchema() },
           },
-        ],
-        response_format: {
-          type: 'json_schema',
-          json_schema: { name: 'garment_detection', strict: true, schema: detectionSchema() },
-        },
+        }),
       }),
-    });
+    );
 
     const answer = parseChatJson(body) as { box?: unknown; category?: unknown };
     const category = ALL_CATEGORIES.find((entry) => entry === answer.category) ?? null;

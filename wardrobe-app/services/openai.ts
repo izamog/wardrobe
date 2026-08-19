@@ -127,3 +127,73 @@ export function parseChatJson(body: unknown): unknown {
     throw new VoiceError('unusable-reply', 'message content was not JSON');
   }
 }
+
+/**
+ * Whether a failure means "this account cannot use that model" specifically.
+ *
+ * Distinguished from every other failure because it is the one worth reacting
+ * to by trying something else: a project with a restricted model list rejects
+ * one model while happily serving another, and a 403 there says nothing about
+ * whether the next attempt will work.
+ */
+export function isModelUnavailable(error: unknown): boolean {
+  if (!(error instanceof VoiceError)) return false;
+  if (error.reason === 'forbidden') return true;
+  const detail = error.detail?.toLowerCase() ?? '';
+  return detail.includes('model_not_found') || detail.includes('does not have access to model');
+}
+
+/**
+ * The model that last worked for a given purpose, remembered for the session.
+ *
+ * Without this every call would re-try the models the project has disabled,
+ * paying a failed round trip each time before reaching the one that works.
+ */
+const workingModel = new Map<string, string>();
+
+/** Test seam: forget which models were working. */
+export function resetModelCache(): void {
+  workingModel.clear();
+}
+
+/**
+ * Runs `attempt` against the first model the account is actually allowed to use.
+ *
+ * Model availability is per-project and the user controls it in a dashboard
+ * this app cannot see, so hard-coding one model makes the whole feature depend
+ * on a setting nobody is looking at. Anything that is not a model-permission
+ * problem is thrown straight away — retrying a bad key against four models
+ * would just be four rejections.
+ *
+ * @throws the last failure when no candidate is permitted.
+ */
+export async function withModelFallback<T>(
+  purpose: string,
+  candidates: readonly string[],
+  attempt: (model: string) => Promise<T>,
+): Promise<T> {
+  const known = workingModel.get(purpose);
+  const ordered = known
+    ? [known, ...candidates.filter((model) => model !== known)]
+    : [...candidates];
+
+  if (ordered.length === 0) {
+    throw new VoiceError('unusable-reply', `no models configured for ${purpose}`);
+  }
+
+  let lastError: unknown;
+  for (const model of ordered) {
+    try {
+      const result = await attempt(model);
+      workingModel.set(purpose, model);
+      return result;
+    } catch (e) {
+      if (!isModelUnavailable(e)) throw e;
+      console.warn(`Model ${model} unavailable for ${purpose}; trying the next`, e);
+      workingModel.delete(purpose);
+      lastError = e;
+    }
+  }
+
+  throw lastError;
+}

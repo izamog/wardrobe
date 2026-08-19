@@ -3,7 +3,7 @@ import { ALL_CATEGORIES } from '../utils/categories';
 import { ALL_COLORS } from '../utils/colors';
 import { ALL_MATERIALS } from '../utils/materials';
 import { VoiceError } from '../utils/voiceErrors';
-import { callOpenAI, isAIConfigured, parseChatJson } from './openai';
+import { callOpenAI, isAIConfigured, parseChatJson, withModelFallback } from './openai';
 
 /**
  * Turning a spoken description into proposed item attributes.
@@ -17,16 +17,23 @@ import { callOpenAI, isAIConfigured, parseChatJson } from './openai';
 export const isVoiceConfigured = isAIConfigured;
 
 /**
- * Transcription model.
+ * Transcription models to try, cheapest and most widely available first.
  *
- * whisper-1 by default because it is the one every account can reach: the
- * newer transcription models are not enabled on every project, and a project
- * without access gets a 403 that reads like a key problem. Override with
- * EXPO_PUBLIC_OPENAI_TRANSCRIBE_MODEL (gpt-transcribe, gpt-4o-transcribe,
- * gpt-4o-mini-transcribe) to trade breadth for cost or accuracy.
+ * A list rather than one name because model access is per-project and set in a
+ * dashboard this app cannot read: a project with a restricted allow-list
+ * rejects one model and serves another, and picking a single name makes the
+ * whole feature depend on a setting nobody is looking at. The first permitted
+ * one wins and is remembered for the session.
+ *
+ * EXPO_PUBLIC_OPENAI_TRANSCRIBE_MODEL pins one explicitly if needed.
  */
-const TRANSCRIPTION_MODEL = process.env.EXPO_PUBLIC_OPENAI_TRANSCRIBE_MODEL ?? 'whisper-1';
-const EXTRACTION_MODEL = process.env.EXPO_PUBLIC_OPENAI_TEXT_MODEL ?? 'gpt-4o-mini';
+const TRANSCRIPTION_MODELS = process.env.EXPO_PUBLIC_OPENAI_TRANSCRIBE_MODEL
+  ? [process.env.EXPO_PUBLIC_OPENAI_TRANSCRIBE_MODEL]
+  : ['gpt-4o-mini-transcribe', 'whisper-1', 'gpt-4o-transcribe', 'gpt-transcribe'];
+
+const EXTRACTION_MODELS = process.env.EXPO_PUBLIC_OPENAI_TEXT_MODEL
+  ? [process.env.EXPO_PUBLIC_OPENAI_TEXT_MODEL]
+  : ['gpt-4o-mini', 'gpt-4.1-mini', 'gpt-4o'];
 
 /**
  * Sends a recording for transcription.
@@ -36,17 +43,20 @@ const EXTRACTION_MODEL = process.env.EXPO_PUBLIC_OPENAI_TEXT_MODEL ?? 'gpt-4o-mi
  * @throws VoiceError for every failure mode, including a silent recording
  */
 export async function transcribeAudio(audioUri: string): Promise<string> {
-  const form = new FormData();
-  // React Native's FormData takes this shape for a file part; it is not the
-  // web Blob API.
-  form.append('file', {
-    uri: audioUri,
-    name: 'description.m4a',
-    type: 'audio/m4a',
-  } as unknown as Blob);
-  form.append('model', TRANSCRIPTION_MODEL);
+  const body = await withModelFallback('transcribe', TRANSCRIPTION_MODELS, (model) => {
+    // Rebuilt per attempt: a FormData body cannot be replayed once consumed.
+    const form = new FormData();
+    // React Native's FormData takes this shape for a file part; it is not the
+    // web Blob API.
+    form.append('file', {
+      uri: audioUri,
+      name: 'description.m4a',
+      type: 'audio/m4a',
+    } as unknown as Blob);
+    form.append('model', model);
 
-  const body = await callOpenAI('/audio/transcriptions', { method: 'POST', body: form });
+    return callOpenAI('/audio/transcriptions', { method: 'POST', body: form });
+  });
 
   const text = (body as { text?: unknown })?.text;
   if (typeof text !== 'string') throw new VoiceError('unusable-reply', 'no text in response');
@@ -123,21 +133,23 @@ const EXTRACTION_INSTRUCTIONS = [
  * @throws VoiceError only for transport and configuration failures.
  */
 export async function extractItemAttributes(transcript: string): Promise<ItemProposal> {
-  const body = await callOpenAI('/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: EXTRACTION_MODEL,
-      messages: [
-        { role: 'system', content: EXTRACTION_INSTRUCTIONS },
-        { role: 'user', content: transcript },
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: { name: 'item_attributes', strict: true, schema: extractionSchema() },
-      },
+  const body = await withModelFallback('text', EXTRACTION_MODELS, (model) =>
+    callOpenAI('/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: EXTRACTION_INSTRUCTIONS },
+          { role: 'user', content: transcript },
+        ],
+        response_format: {
+          type: 'json_schema',
+          json_schema: { name: 'item_attributes', strict: true, schema: extractionSchema() },
+        },
+      }),
     }),
-  });
+  );
 
   return parseExtraction(parseChatJson(body));
 }

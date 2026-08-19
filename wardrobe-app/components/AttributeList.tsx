@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Pressable, Switch, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { MultiSelectField, OptionRow } from './Form';
+import { BouncingDots } from './BouncingDots';
 import { ALL_CATEGORIES } from '../utils/categories';
 import { ALL_COLORS, toColorPair } from '../utils/colors';
 import { ALL_MATERIALS } from '../utils/materials';
@@ -44,6 +45,7 @@ function AttributeRow({
   label,
   value,
   pending,
+  loading,
   expanded,
   onAccept,
   onEdit,
@@ -52,6 +54,8 @@ function AttributeRow({
   label: string;
   value: string;
   pending: boolean;
+  /** Something is still working this value out; the row shows dots instead. */
+  loading: boolean;
   expanded: boolean;
   onAccept: () => void;
   onEdit: () => void;
@@ -65,14 +69,20 @@ function AttributeRow({
         className="flex-row items-center px-4 py-3"
       >
         <Text className="text-sm text-slate-500 w-24">{label}</Text>
-        <Text
-          className={`flex-1 text-sm font-medium mr-3 ${
-            pending ? 'text-slate-900' : 'text-slate-700'
-          }`}
-          numberOfLines={1}
-        >
-          {value || '—'}
-        </Text>
+        {loading ? (
+          <View className="flex-1 mr-3 justify-center">
+            <BouncingDots color="#94a3b8" />
+          </View>
+        ) : (
+          <Text
+            className={`flex-1 text-sm font-medium mr-3 ${
+              pending ? 'text-slate-900' : 'text-slate-700'
+            }`}
+            numberOfLines={1}
+          >
+            {value || '—'}
+          </Text>
+        )}
 
         {pending ? (
           <View className="flex-row">
@@ -112,11 +122,14 @@ function AttributeRow({
 export function AttributeList({
   values,
   pending,
+  loading,
   onChange,
   onResolve,
 }: {
   values: AttributeValues;
   pending: ReadonlySet<AttributeField>;
+  /** Fields still being worked out in the background, shown as dots. */
+  loading?: ReadonlySet<AttributeField>;
   onChange: (patch: Partial<AttributeValues>) => void;
   onResolve: (field: AttributeField) => void;
 }) {
@@ -138,6 +151,7 @@ export function AttributeList({
       label={label}
       value={value}
       pending={pending.has(field)}
+      loading={loading?.has(field) ?? false}
       expanded={expanded === field}
       onAccept={() => {
         onResolve(field);
