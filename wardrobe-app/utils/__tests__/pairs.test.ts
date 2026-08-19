@@ -33,6 +33,26 @@ describe('buildUnratedPairs', () => {
     expect(buildUnratedPairs([item('a', 'Bag'), item('b', 'Scarf')], new Set())).toEqual([]);
   });
 
+  it('pairs two tops when one can be layered over the other', () => {
+    // Same group, so the plain same-category rule would exclude them; the
+    // layering rules are what put this pair back in the deck.
+    const pairs = buildUnratedPairs([item('a', 'T-Shirt'), item('b', 'Sweater')], new Set());
+    expect(pairs.map((p) => p.key)).toEqual(['a|b']);
+  });
+
+  it('does not pair two tops that cannot be layered together', () => {
+    expect(buildUnratedPairs([item('a', 'T-Shirt'), item('b', 'Tank')], new Set())).toEqual([]);
+  });
+
+  it('does not pair a jacket with a coat', () => {
+    expect(buildUnratedPairs([item('a', 'Jacket'), item('b', 'Coat')], new Set())).toEqual([]);
+  });
+
+  it('pairs a top with outerwear, which are different slots', () => {
+    const pairs = buildUnratedPairs([item('a', 'Sweater'), item('b', 'Jacket')], new Set());
+    expect(pairs.map((p) => p.key)).toEqual(['a|b']);
+  });
+
   it('offers each unordered pair once', () => {
     const pairs = buildUnratedPairs(
       [item('a', 'Top'), item('b', 'Bottom'), item('c', 'Shoes')],

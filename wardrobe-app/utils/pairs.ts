@@ -20,6 +20,11 @@ export const pairKey = (x: string, y: string): string => canonicalPair(x, y).joi
  *
  * Pure and synchronous so the selection rule can be tested without a database;
  * the caller supplies the items and the already-rated keys.
+ *
+ * O(n^2) in wardrobe size, which is the size of the answer — every unrated
+ * cross-category pair is one card in the deck. Sized for a personal wardrobe of
+ * hundreds of items; a closet large enough for that to hurt needs the deck
+ * sampled or paged rather than this made faster.
  */
 export function buildUnratedPairs(
   items: readonly ClothingItem[],

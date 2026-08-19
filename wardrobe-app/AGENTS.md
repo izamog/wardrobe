@@ -44,8 +44,23 @@ Adding a directory that contains `className` means adding it to the `content`
 globs in `tailwind.config.js`. Miss it and the styles are silently absent — no
 error, just an unstyled screen.
 
+## Categories
+
+`Category` is the garment type; `CATEGORY_GROUP` in `utils/categories.ts` maps
+each to the outfit slot it fills. Same-slot categories are excluded from
+pairing unless `utils/layering.ts` says one can be worn under the other.
+
+Adding a category means: the union in `types/wardrobe.ts`, `ALL_CATEGORIES`,
+`CATEGORY_GROUP` (a total Record, so this one is a compile error if missed),
+any layering rules, and a new migration widening the CHECK constraint.
+
 ## Schema changes
 
 The SQLite schema is versioned through `PRAGMA user_version`. Append a new
 entry to `MIGRATIONS` in `services/migrations.ts`; never edit one that has
 already shipped. See the repo root `README.md`.
+
+SQLite cannot alter a CHECK constraint, so widening one means rebuilding the
+table. Copy `Item_Compatibility` out and drop it *before* `ClothingItems`:
+with foreign keys on, dropping a parent fires the children's ON DELETE CASCADE
+and deletes every verdict without erroring. Migration v2 is the worked example.

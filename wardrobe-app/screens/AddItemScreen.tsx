@@ -23,7 +23,7 @@ export function AddItemScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'AddItem'>>();
 
-  const [category, setCategory] = useState<Category>(route.params?.category ?? 'Top');
+  const [category, setCategory] = useState<Category>(route.params?.category ?? 'T-Shirt');
   const [brand, setBrand] = useState('');
   const [cost, setCost] = useState('');
   const [isSecondHand, setIsSecondHand] = useState(false);

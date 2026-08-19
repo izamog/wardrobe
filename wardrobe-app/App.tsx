@@ -1,6 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Text } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import {
+  SafeAreaProvider,
+  SafeAreaView,
+  initialWindowMetrics,
+} from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { initDatabase } from './services/database';
 import { RootNavigator } from './navigation/RootNavigator';
@@ -28,7 +32,7 @@ export default function App() {
   // querying tables that do not exist yet.
   if (error) {
     return (
-      <SafeAreaProvider>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
         <SafeAreaView className="flex-1 bg-red-50 justify-center items-center p-4">
           <StatusBar style="dark" />
           <Text className="text-red-600 font-bold text-lg">{error}</Text>
@@ -39,7 +43,7 @@ export default function App() {
 
   if (!isReady) {
     return (
-      <SafeAreaProvider>
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
         <SafeAreaView className="flex-1 bg-slate-50 justify-center items-center">
           <StatusBar style="dark" />
           <ActivityIndicator size="large" color="#0f172a" />
@@ -50,7 +54,7 @@ export default function App() {
   }
 
   return (
-    <SafeAreaProvider>
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <StatusBar style="dark" />
       <RootNavigator />
     </SafeAreaProvider>

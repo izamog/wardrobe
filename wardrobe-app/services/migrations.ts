@@ -98,6 +98,92 @@ export const MIGRATIONS: readonly string[] = [
   -- match either column, and this table grows O(n^2) with wardrobe size.
   CREATE INDEX idx_compat_item_b ON Item_Compatibility(item_b_id);
   `,
+
+  // v1 -> v2: replace the category CHECK with the garment-level categories.
+  //
+  // SQLite cannot alter a CHECK constraint, so ClothingItems has to be rebuilt.
+  // The order below is the whole point of this migration's length: with foreign
+  // keys on, DROP TABLE on a parent fires the children's ON DELETE CASCADE, so
+  // dropping ClothingItems while Item_Compatibility still references it would
+  // silently delete every recorded verdict. Copying the verdicts out and
+  // dropping the child before the parent means nothing cascades. Turning the
+  // pragma off instead is not an option: it is a no-op inside a transaction,
+  // and every migration runs inside one.
+  //
+  // 'Top' and 'Outerwear' stay valid so items created before the specific
+  // types existed still load. Nothing is rewritten -- guessing whether an old
+  // 'Top' was a T-Shirt or a Sweater is not the migration's call to make.
+  `
+  CREATE TABLE ClothingItems_new (
+    id TEXT PRIMARY KEY NOT NULL,
+    imageUri TEXT NOT NULL,
+    category TEXT NOT NULL
+      CHECK (category IN (
+        'T-Shirt','Shirt','Tank','Sweater','Top',
+        'Jacket','Coat','Outerwear',
+        'Bottom','Shoes','Belt','Bag','Scarf'
+      )),
+    brand TEXT NOT NULL DEFAULT 'Unknown',
+    costMinorUnits INTEGER NOT NULL DEFAULT 0 CHECK (costMinorUnits >= 0),
+    isSecondHand INTEGER NOT NULL DEFAULT 0 CHECK (isSecondHand IN (0,1)),
+    materials TEXT NOT NULL DEFAULT '[]',
+    hardwareColor TEXT NOT NULL DEFAULT 'None'
+      CHECK (hardwareColor IN ('Gold','Silver','None')),
+    hasBeltLoops INTEGER NOT NULL DEFAULT 0 CHECK (hasBeltLoops IN (0,1)),
+    inferredWarmth INTEGER NOT NULL DEFAULT 0 CHECK (inferredWarmth BETWEEN 0 AND 10),
+    inferredWind INTEGER NOT NULL DEFAULT 0 CHECK (inferredWind BETWEEN 0 AND 10),
+    wearCount INTEGER NOT NULL DEFAULT 0 CHECK (wearCount >= 0),
+    createdAt TEXT NOT NULL
+  );
+
+  -- Columns listed explicitly rather than SELECT *: a positional copy would
+  -- silently misalign if the two definitions ever drift.
+  INSERT INTO ClothingItems_new (
+    id, imageUri, category, brand, costMinorUnits, isSecondHand, materials,
+    hardwareColor, hasBeltLoops, inferredWarmth, inferredWind, wearCount, createdAt
+  )
+  SELECT
+    id, imageUri, category, brand, costMinorUnits, isSecondHand, materials,
+    hardwareColor, hasBeltLoops, inferredWarmth, inferredWind, wearCount, createdAt
+  FROM ClothingItems;
+
+  -- Constraint-free holding table. It exists only between the DROP and the
+  -- re-INSERT below, and it must not carry the foreign keys, because for those
+  -- few statements the table they point at does not exist.
+  CREATE TABLE Item_Compatibility_backup (
+    id TEXT NOT NULL,
+    item_a_id TEXT NOT NULL,
+    item_b_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  );
+  INSERT INTO Item_Compatibility_backup (id, item_a_id, item_b_id, status, createdAt)
+    SELECT id, item_a_id, item_b_id, status, createdAt FROM Item_Compatibility;
+
+  DROP TABLE Item_Compatibility;
+  DROP TABLE ClothingItems;
+  ALTER TABLE ClothingItems_new RENAME TO ClothingItems;
+
+  CREATE TABLE Item_Compatibility (
+    id TEXT PRIMARY KEY NOT NULL,
+    item_a_id TEXT NOT NULL,
+    item_b_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('MATCH','DISMATCH')),
+    createdAt TEXT NOT NULL,
+    FOREIGN KEY (item_a_id) REFERENCES ClothingItems(id) ON DELETE CASCADE,
+    FOREIGN KEY (item_b_id) REFERENCES ClothingItems(id) ON DELETE CASCADE,
+    CHECK (item_a_id < item_b_id),
+    UNIQUE(item_a_id, item_b_id)
+  );
+  INSERT INTO Item_Compatibility (id, item_a_id, item_b_id, status, createdAt)
+    SELECT id, item_a_id, item_b_id, status, createdAt FROM Item_Compatibility_backup;
+  DROP TABLE Item_Compatibility_backup;
+
+  -- Both indexes went with their tables and have to be rebuilt. idx_logs_date
+  -- is untouched because Outfit_Logs was never dropped.
+  CREATE INDEX idx_items_category ON ClothingItems(category);
+  CREATE INDEX idx_compat_item_b ON Item_Compatibility(item_b_id);
+  `,
 ];
 
 /**

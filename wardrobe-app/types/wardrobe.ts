@@ -1,7 +1,39 @@
-export type Category =
+/**
+ * The coarse slot a category occupies in an outfit.
+ *
+ * Distinct from Category because several garment types share a slot: a T-Shirt
+ * and a Sweater are both Tops, which is why they are excluded from ordinary
+ * pairing and admitted only through the layering rules in utils/layering.ts.
+ */
+export type CategoryGroup =
   | 'Top'
   | 'Bottom'
   | 'Outerwear'
+  | 'Shoes'
+  | 'Belt'
+  | 'Bag'
+  | 'Scarf';
+
+/**
+ * The garment type stored on an item.
+ *
+ * 'Top' and 'Outerwear' are the generic members kept from the first schema.
+ * They remain valid so items created before the specific types existed still
+ * load, but they carry no layering permissions — see utils/layering.ts.
+ *
+ * Each member here has a matching entry in the category CHECK constraint in
+ * services/migrations.ts. Adding one means adding a migration.
+ */
+export type Category =
+  | 'T-Shirt'
+  | 'Shirt'
+  | 'Tank'
+  | 'Sweater'
+  | 'Top'
+  | 'Jacket'
+  | 'Coat'
+  | 'Outerwear'
+  | 'Bottom'
   | 'Shoes'
   | 'Belt'
   | 'Bag'

@@ -14,6 +14,7 @@ import { useDbQuery } from '../hooks/useDbQuery';
 import { deleteItem, getItem, updateItem, type ItemUpdate } from '../services/items';
 import { withDb } from '../services/database';
 import { ALL_CATEGORIES } from '../utils/categories';
+import { getLayersOver, getLayersUnder } from '../utils/layering';
 import { costPerWear, formatCost, parseCost } from '../utils/format';
 import type { RootStackParamList } from '../navigation/types';
 import type { Category, ClothingItem, HardwareColor } from '../types/wardrobe';
@@ -45,6 +46,30 @@ function toDraft(item: ClothingItem): Draft {
     inferredWarmth: item.inferredWarmth,
     inferredWind: item.inferredWind,
   };
+}
+
+/**
+ * What this garment can be worn with on the same half of the body.
+ *
+ * Renders nothing for garments with no layering rules — a Bottom, or one of
+ * the legacy generic categories — rather than showing two empty lists.
+ */
+function LayeringSummary({ category }: { category: Category }) {
+  const over = getLayersOver(category);
+  const under = getLayersUnder(category);
+  if (over.length === 0 && under.length === 0) return null;
+
+  return (
+    <View className="px-4 py-3 bg-white border-b border-slate-200">
+      <Text className="text-xs uppercase tracking-wide text-slate-500 mb-1">Layering</Text>
+      {over.length > 0 && (
+        <Text className="text-sm text-slate-700">Goes under: {over.join(', ')}</Text>
+      )}
+      {under.length > 0 && (
+        <Text className="text-sm text-slate-700">Goes over: {under.join(', ')}</Text>
+      )}
+    </View>
+  );
 }
 
 export function ItemDetailsScreen() {
@@ -153,6 +178,10 @@ export function ItemDetailsScreen() {
           </Text>
         </View>
       </View>
+
+      {/* Follows the picker, not the saved row, so changing the category
+          shows what that change would mean before it is saved. */}
+      <LayeringSummary category={draft.category} />
 
       <View className="p-4">
         <OptionRow

@@ -1,4 +1,6 @@
-import { ALL_CATEGORIES, getComplementaryCategories } from '../categories';
+/** @jest-environment node */
+import { ALL_CATEGORIES, CATEGORY_GROUP, getComplementaryCategories } from '../categories';
+import { canLayerEitherWay } from '../layering';
 import type { Category } from '../../types/wardrobe';
 
 describe('getComplementaryCategories', () => {
@@ -25,28 +27,46 @@ describe('getComplementaryCategories', () => {
   });
 
   it('offers every garment category to an accessory', () => {
-    const garments: Category[] = ['Top', 'Bottom', 'Outerwear', 'Shoes', 'Belt'];
+    const garments = ALL_CATEGORIES.filter(
+      (c) => CATEGORY_GROUP[c] !== 'Bag' && CATEGORY_GROUP[c] !== 'Scarf',
+    );
     expect(getComplementaryCategories('Bag')).toEqual(garments);
     expect(getComplementaryCategories('Scarf')).toEqual(garments);
   });
 
-  it('offers a garment every category but itself, accessories included', () => {
-    expect(getComplementaryCategories('Top')).toEqual([
-      'Bottom',
-      'Outerwear',
-      'Shoes',
-      'Belt',
-      'Bag',
-      'Scarf',
-    ]);
-    expect(getComplementaryCategories('Belt')).toEqual([
-      'Top',
-      'Bottom',
-      'Outerwear',
-      'Shoes',
-      'Bag',
-      'Scarf',
-    ]);
+  it('excludes same-group categories that cannot be layered together', () => {
+    // Two tops compete for one slot unless they can be worn at once.
+    expect(getComplementaryCategories('T-Shirt')).not.toContain('Tank');
+    expect(getComplementaryCategories('Jacket')).not.toContain('Coat');
+    expect(getComplementaryCategories('T-Shirt')).not.toContain('Top');
+  });
+
+  it('includes same-group categories that can be layered together', () => {
+    expect(getComplementaryCategories('T-Shirt')).toContain('Sweater');
+    expect(getComplementaryCategories('T-Shirt')).toContain('Shirt');
+    expect(getComplementaryCategories('Sweater')).toContain('Tank');
+  });
+
+  it('always crosses groups regardless of layering', () => {
+    // A sweater and a jacket are different slots, so they pair whether or not
+    // the layering table has anything to say.
+    expect(getComplementaryCategories('Sweater')).toContain('Jacket');
+    expect(getComplementaryCategories('Sweater')).toContain('Bottom');
+    expect(getComplementaryCategories('Coat')).toContain('Shoes');
+  });
+
+  it('agrees with the layering rules on every same-group pair', () => {
+    for (const a of ALL_CATEGORIES) {
+      for (const b of ALL_CATEGORIES) {
+        if (a === b || CATEGORY_GROUP[a] !== CATEGORY_GROUP[b]) continue;
+        expect(getComplementaryCategories(a).includes(b)).toBe(canLayerEitherWay(a, b));
+      }
+    }
+  });
+
+  it('gives a legacy generic top everything outside its own group', () => {
+    const expected = ALL_CATEGORIES.filter((c) => CATEGORY_GROUP[c] !== 'Top');
+    expect(getComplementaryCategories('Top')).toEqual(expected);
   });
 
   it('returns results in ALL_CATEGORIES order, so the UI ordering is stable', () => {
@@ -58,8 +78,22 @@ describe('getComplementaryCategories', () => {
   });
 
   it('returns a fresh array so callers cannot mutate shared state', () => {
-    const first = getComplementaryCategories('Top');
-    first.pop();
-    expect(getComplementaryCategories('Top')).toHaveLength(6);
+    const before = getComplementaryCategories('Bottom').length;
+    getComplementaryCategories('Bottom').pop();
+    expect(getComplementaryCategories('Bottom')).toHaveLength(before);
+  });
+});
+
+describe('CATEGORY_GROUP', () => {
+  it('classifies every category', () => {
+    for (const category of ALL_CATEGORIES) {
+      expect(CATEGORY_GROUP[category]).toBeDefined();
+    }
+  });
+
+  it('lists every category exactly once in ALL_CATEGORIES', () => {
+    const keys = Object.keys(CATEGORY_GROUP) as Category[];
+    expect([...ALL_CATEGORIES].sort()).toEqual(keys.sort());
+    expect(new Set(ALL_CATEGORIES).size).toBe(ALL_CATEGORIES.length);
   });
 });

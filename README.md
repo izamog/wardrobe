@@ -75,6 +75,24 @@ Three tables, defined in `wardrobe-app/services/migrations.ts`:
   two ids before every insert and query.
 - **Outfit_Logs** — what was worn on a given date.
 
+### Categories and layering
+
+`Category` is the garment type (T-Shirt, Shirt, Tank, Sweater, Jacket, Coat,
+Bottom, Shoes, Belt, Bag, Scarf). `CategoryGroup` is the outfit slot it fills,
+so the four shirt types all group as Top and Jacket and Coat both group as
+Outerwear.
+
+Two categories in the same group normally can't appear together — they compete
+for one slot. `utils/layering.ts` is the exception: it holds the directional
+[inner, outer] rules that let a T-Shirt be worn under a Sweater, and it's what
+`getComplementaryCategories` consults before excluding a same-group pair. One
+rule needs three garments to state (a Shirt over a T-Shirt can't then go under
+a Sweater), so it lives in `isValidLayerStack` rather than the pair table.
+
+`Top` and `Outerwear` remain valid categories so items created before the
+specific types existed still load. They carry no layering rules, and
+`isValidLayerStack` rejects rather than guesses on them.
+
 ### Changing the schema
 
 Append a new entry to `MIGRATIONS`; never edit one that has already shipped.

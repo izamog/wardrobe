@@ -92,6 +92,128 @@ describe('runMigrations', () => {
   });
 });
 
+describe('v1 -> v2: widening the category constraint', () => {
+  /** Builds a database at exactly v1, the schema before the new categories. */
+  function v1Db(): DatabaseSync {
+    const db = freshDb();
+    db.exec(MIGRATIONS[0]);
+    db.exec('PRAGMA user_version = 1;');
+    return db;
+  }
+
+  const countOf = (db: DatabaseSync, table: string) =>
+    (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+
+  it('keeps every verdict, which a naive table rebuild would cascade away', async () => {
+    // The danger this migration is written around: with foreign keys on,
+    // DROP TABLE on the parent fires ON DELETE CASCADE on the children, so
+    // rebuilding ClothingItems in the obvious order deletes the entire
+    // compatibility matrix without erroring.
+    const db = v1Db();
+    addItem(db, 'aaa', 'Top');
+    addItem(db, 'bbb', 'Bottom');
+    addItem(db, 'ccc', 'Shoes');
+    db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
+      .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
+    db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
+      .run('p2', 'bbb', 'ccc', 'DISMATCH', '2026-01-02');
+
+    await runMigrations(adapt(db));
+
+    expect(countOf(db, 'ClothingItems')).toBe(3);
+    expect(db.prepare('SELECT * FROM Item_Compatibility ORDER BY id').all()).toEqual([
+      { id: 'p1', item_a_id: 'aaa', item_b_id: 'bbb', status: 'MATCH', createdAt: '2026-01-01' },
+      { id: 'p2', item_a_id: 'bbb', item_b_id: 'ccc', status: 'DISMATCH', createdAt: '2026-01-02' },
+    ]);
+  });
+
+  it('carries every item column across the rebuild unchanged', async () => {
+    const db = v1Db();
+    db.prepare(
+      `INSERT INTO ClothingItems (id, imageUri, category, brand, costMinorUnits, isSecondHand,
+        materials, hardwareColor, hasBeltLoops, inferredWarmth, inferredWind, wearCount, createdAt)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run('x', 'file://a.png', 'Bottom', 'Levis', 4599, 1, '["cotton"]', 'Silver', 1, 3, 2, 7, 'then');
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT * FROM ClothingItems').get()).toEqual({
+      id: 'x',
+      imageUri: 'file://a.png',
+      category: 'Bottom',
+      brand: 'Levis',
+      costMinorUnits: 4599,
+      isSecondHand: 1,
+      materials: '["cotton"]',
+      hardwareColor: 'Silver',
+      hasBeltLoops: 1,
+      inferredWarmth: 3,
+      inferredWind: 2,
+      wearCount: 7,
+      createdAt: 'then',
+    });
+  });
+
+  it('leaves Outfit_Logs alone', async () => {
+    const db = v1Db();
+    db.prepare('INSERT INTO Outfit_Logs (id, date, collageImageUri, createdAt) VALUES (?,?,?,?)')
+      .run('log-1', '2026-08-19', 'file://c.png', 'then');
+
+    await runMigrations(adapt(db));
+
+    expect(countOf(db, 'Outfit_Logs')).toBe(1);
+  });
+
+  it('keeps legacy generic categories readable rather than rewriting them', async () => {
+    // An old 'Top' might have been a T-Shirt or a Sweater. The migration does
+    // not guess; the row stays as it is and the user can retype it.
+    const db = v1Db();
+    addItem(db, 'legacy-top', 'Top');
+    addItem(db, 'legacy-outer', 'Outerwear');
+
+    await runMigrations(adapt(db));
+
+    expect(
+      db.prepare('SELECT category FROM ClothingItems ORDER BY id').all(),
+    ).toEqual([{ category: 'Outerwear' }, { category: 'Top' }]);
+  });
+
+  it('accepts the new garment categories only after the migration runs', async () => {
+    const db = v1Db();
+    expect(() => addItem(db, 'early', 'Sweater')).toThrow(/CHECK constraint failed/);
+
+    await runMigrations(adapt(db));
+
+    expect(() => addItem(db, 'late', 'Sweater')).not.toThrow();
+  });
+
+  it('leaves no scaffolding tables behind', async () => {
+    const db = v1Db();
+    await runMigrations(adapt(db));
+
+    const tables = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]
+    ).map((r) => r.name);
+    expect(tables).not.toContain('ClothingItems_new');
+    expect(tables).not.toContain('Item_Compatibility_backup');
+  });
+
+  it('still cascades verdict deletion after the tables are rebuilt', async () => {
+    // The foreign keys are re-declared by hand in the migration, so this is
+    // not covered by the fresh-install cascade test alone.
+    const db = v1Db();
+    addItem(db, 'aaa', 'Top');
+    addItem(db, 'bbb', 'Bottom');
+    db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
+      .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
+
+    await runMigrations(adapt(db));
+    db.prepare('DELETE FROM ClothingItems WHERE id = ?').run('aaa');
+
+    expect(countOf(db, 'Item_Compatibility')).toBe(0);
+  });
+});
+
 describe('schema constraints', () => {
   let db: DatabaseSync;
   beforeEach(async () => {
