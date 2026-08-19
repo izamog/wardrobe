@@ -1,14 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, ScrollView, Text, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { EmptyState } from '../components/EmptyState';
 import { StoredImage } from '../components/StoredImage';
 import { usePhotoCapture } from '../components/PhotoPicker';
 import {
+  MultiSelectField,
   OptionRow,
   PrimaryButton,
-  ScaleField,
   SwitchField,
   TextField,
 } from '../components/Form';
@@ -17,24 +17,41 @@ import { getItem, updateItem, type ItemUpdate } from '../services/items';
 import { removeItem, replaceItemImage } from '../services/itemActions';
 import { withDb } from '../services/database';
 import { ALL_CATEGORIES } from '../utils/categories';
-import { getLayersOver, getLayersUnder } from '../utils/layering';
+import { ALL_MATERIALS } from '../utils/materials';
 import { costPerWear, formatCost, parseCost } from '../utils/format';
 import type { RootStackParamList } from '../navigation/types';
 import type { Category, ClothingItem, HardwareColor } from '../types/wardrobe';
 
 const HARDWARE_COLORS: readonly HardwareColor[] = ['None', 'Gold', 'Silver'];
 
-/** The edit form's own state — strings where the user types free text. */
+/**
+ * Hardware colour is only worth recording where it drives a decision.
+ *
+ * Phase 4 matches a belt's hardware against a bag's; nothing consults the
+ * finish on a t-shirt. Asking for it everywhere is a question with no
+ * consequence attached.
+ */
+const hardwareColorApplies = (category: Category) => category === 'Belt' || category === 'Bag';
+
+/** Only bottoms have belt loops, and only bottoms decide whether a belt is wearable. */
+const beltLoopsApply = (category: Category) => category === 'Bottom';
+
+/**
+ * The edit form's own state.
+ *
+ * inferredWarmth and inferredWind are absent deliberately: they are model
+ * inputs the app derives (Phase 3 fills them from the voice description), not
+ * numbers a person should be asked to guess. They stay on the row and are left
+ * untouched by an edit here.
+ */
 interface Draft {
   category: Category;
   brand: string;
   cost: string;
   isSecondHand: boolean;
-  materials: string;
+  materials: string[];
   hardwareColor: HardwareColor;
   hasBeltLoops: boolean;
-  inferredWarmth: number;
-  inferredWind: number;
 }
 
 function toDraft(item: ClothingItem): Draft {
@@ -43,36 +60,10 @@ function toDraft(item: ClothingItem): Draft {
     brand: item.brand,
     cost: (item.costMinorUnits / 100).toFixed(2),
     isSecondHand: item.isSecondHand,
-    materials: item.materials.join(', '),
+    materials: item.materials,
     hardwareColor: item.hardwareColor,
     hasBeltLoops: item.hasBeltLoops,
-    inferredWarmth: item.inferredWarmth,
-    inferredWind: item.inferredWind,
   };
-}
-
-/**
- * What this garment can be worn with on the same half of the body.
- *
- * Renders nothing for garments with no layering rules — a Bottom, or one of
- * the legacy generic categories — rather than showing two empty lists.
- */
-function LayeringSummary({ category }: { category: Category }) {
-  const over = getLayersOver(category);
-  const under = getLayersUnder(category);
-  if (over.length === 0 && under.length === 0) return null;
-
-  return (
-    <View className="px-4 py-3 bg-white border-b border-slate-200">
-      <Text className="text-xs uppercase tracking-wide text-slate-500 mb-1">Layering</Text>
-      {over.length > 0 && (
-        <Text className="text-sm text-slate-700">Goes under: {over.join(', ')}</Text>
-      )}
-      {under.length > 0 && (
-        <Text className="text-sm text-slate-700">Goes over: {under.join(', ')}</Text>
-      )}
-    </View>
-  );
 }
 
 export function ItemDetailsScreen() {
@@ -142,14 +133,13 @@ export function ItemDetailsScreen() {
       brand: draft.brand.trim() || 'Unknown',
       costMinorUnits,
       isSecondHand: draft.isSecondHand,
-      materials: draft.materials
-        .split(',')
-        .map((entry) => entry.trim())
-        .filter(Boolean),
-      hardwareColor: draft.hardwareColor,
-      hasBeltLoops: draft.hasBeltLoops,
-      inferredWarmth: draft.inferredWarmth,
-      inferredWind: draft.inferredWind,
+      materials: draft.materials,
+      // Both of these are only askable for some categories. Clearing them for
+      // the rest means recategorising a garment cannot leave an invisible
+      // value behind -- Phase 4's belt rules read hasBeltLoops, and would
+      // otherwise act on a flag set while the item was still a Bottom.
+      hardwareColor: hardwareColorApplies(draft.category) ? draft.hardwareColor : 'None',
+      hasBeltLoops: beltLoopsApply(draft.category) ? draft.hasBeltLoops : false,
     };
 
     try {
@@ -189,22 +179,30 @@ export function ItemDetailsScreen() {
 
   return (
     <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="pb-10">
-      <Pressable
-        onPress={choosePhoto}
-        accessibilityRole="button"
-        accessibilityLabel={item.imagePath ? 'Change photo' : 'Add a photo'}
-        className="aspect-square bg-slate-200 items-center justify-center"
-      >
+      {/* Deliberately not pressable: the photo fills most of the screen, so
+          tapping it by accident used to launch the picker and lose the user's
+          place. Replacing a photo goes through the button below and nothing
+          else. */}
+      <View className="aspect-square bg-slate-200 items-center justify-center">
         {capturing ? (
           <ActivityIndicator />
         ) : (
           <StoredImage
             path={item.imagePath}
-            placeholder="Tap to add a photo"
+            placeholder="No photo"
             placeholderClassName="text-slate-500"
           />
         )}
-      </Pressable>
+      </View>
+
+      <View className="px-4 pt-3 bg-white">
+        <PrimaryButton
+          label={capturing ? 'Working…' : 'Replace image'}
+          tone="secondary"
+          onPress={choosePhoto}
+          disabled={capturing}
+        />
+      </View>
 
       <View className="flex-row justify-between px-4 py-3 bg-white border-b border-slate-200">
         <View>
@@ -220,10 +218,6 @@ export function ItemDetailsScreen() {
           </Text>
         </View>
       </View>
-
-      {/* Follows the picker, not the saved row, so changing the category
-          shows what that change would mean before it is saved. */}
-      <LayeringSummary category={draft.category} />
 
       <View className="p-4">
         <OptionRow
@@ -243,38 +237,33 @@ export function ItemDetailsScreen() {
           onChangeText={(v) => set('cost', v)}
           keyboardType="decimal-pad"
         />
-        <TextField
-          label="Materials (comma separated)"
-          value={draft.materials}
-          onChangeText={(v) => set('materials', v)}
-          placeholder="cotton, wool"
+        <MultiSelectField
+          label="Materials"
+          options={ALL_MATERIALS}
+          selected={draft.materials}
+          onChange={(v) => set('materials', v)}
+          emptyLabel="Select materials"
         />
-        <OptionRow
-          label="Hardware colour"
-          options={HARDWARE_COLORS}
-          value={draft.hardwareColor}
-          onChange={(v) => set('hardwareColor', v)}
-        />
+        {hardwareColorApplies(draft.category) && (
+          <OptionRow
+            label="Hardware colour"
+            options={HARDWARE_COLORS}
+            value={draft.hardwareColor}
+            onChange={(v) => set('hardwareColor', v)}
+          />
+        )}
         <SwitchField
           label="Bought second-hand"
           value={draft.isSecondHand}
           onValueChange={(v) => set('isSecondHand', v)}
         />
-        <SwitchField
-          label="Has belt loops"
-          value={draft.hasBeltLoops}
-          onValueChange={(v) => set('hasBeltLoops', v)}
-        />
-        <ScaleField
-          label="Warmth (0-10)"
-          value={draft.inferredWarmth}
-          onChange={(v) => set('inferredWarmth', v)}
-        />
-        <ScaleField
-          label="Wind resistance (0-10)"
-          value={draft.inferredWind}
-          onChange={(v) => set('inferredWind', v)}
-        />
+        {beltLoopsApply(draft.category) && (
+          <SwitchField
+            label="Has belt loops"
+            value={draft.hasBeltLoops}
+            onValueChange={(v) => set('hasBeltLoops', v)}
+          />
+        )}
 
         <View className="mt-2">
           <PrimaryButton label="Save changes" onPress={save} />

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, Image, Pressable, ScrollView, Text, View } from 'react-native';
+import { Alert, Image, ScrollView, Text, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { OptionRow, PrimaryButton, SwitchField, TextField } from '../components/Form';
@@ -21,7 +21,7 @@ import type { Category } from '../types/wardrobe';
 type Stage =
   | { step: 'capture' }
   | { step: 'preview'; imageUri: string }
-  | { step: 'form'; imageUri: string | null };
+  | { step: 'form'; imageUri: string };
 
 /**
  * The manual add form, now with a photo step in front of it.
@@ -41,7 +41,7 @@ export function AddItemScreen() {
   const [isSecondHand, setIsSecondHand] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  async function save(imageUri: string | null) {
+  async function save(imageUri: string) {
     const costMinorUnits = parseCost(cost);
     if (costMinorUnits === null) {
       Alert.alert('Check the cost', 'Enter a number like 24.99, or leave it blank.');
@@ -77,13 +77,9 @@ export function AddItemScreen() {
       <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4">
         <Text className="text-base font-semibold text-slate-900 mb-1">Add a photo</Text>
         <Text className="text-sm text-slate-500 mb-5">
-          Photos are stored on this phone only.
+          Every item needs a picture. Photos are stored on this phone only.
         </Text>
-        <PhotoSourceChooser
-          onPicked={(imageUri) => setStage({ step: 'preview', imageUri })}
-          onSkip={() => setStage({ step: 'form', imageUri: null })}
-          skipLabel="Add without a photo"
-        />
+        <PhotoSourceChooser onPicked={(imageUri) => setStage({ step: 'preview', imageUri })} />
       </ScrollView>
     );
   }
@@ -104,23 +100,18 @@ export function AddItemScreen() {
 
   return (
     <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4 pb-10">
-      <Pressable
-        onPress={() => setStage({ step: 'capture' })}
-        accessibilityRole="button"
-        accessibilityLabel={imageUri ? 'Change photo' : 'Add a photo'}
-        className="mb-5"
-      >
-        <View className="aspect-square rounded-2xl overflow-hidden bg-slate-200 items-center justify-center">
-          {imageUri ? (
-            <Image source={{ uri: imageUri }} className="w-full h-full" resizeMode="cover" />
-          ) : (
-            <Text className="text-slate-500">Tap to add a photo</Text>
-          )}
-        </View>
-        {imageUri ? (
-          <Text className="text-center text-sm text-slate-500 mt-2">Tap to change</Text>
-        ) : null}
-      </Pressable>
+      {/* Not pressable — replacing the photo is the button's job alone, so a
+          stray tap on a large image cannot throw away the form. */}
+      <View className="aspect-square rounded-2xl overflow-hidden bg-slate-200 mb-3">
+        <Image source={{ uri: imageUri }} className="w-full h-full" resizeMode="cover" />
+      </View>
+      <View className="mb-5">
+        <PrimaryButton
+          label="Replace image"
+          tone="secondary"
+          onPress={() => setStage({ step: 'capture' })}
+        />
+      </View>
 
       <OptionRow
         label="Category"

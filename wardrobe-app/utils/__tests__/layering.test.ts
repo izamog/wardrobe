@@ -10,17 +10,17 @@ import {
 import { ALL_CATEGORIES } from '../categories';
 import type { Category } from '../../types/wardrobe';
 
-const BASE_TOPS: Category[] = ['T-Shirt', 'Shirt', 'Tank'];
+const BASE_TOPS: Category[] = ['T-Shirt', 'Top', 'Shirt'];
 
 describe('the stated layering rules', () => {
-  it('lets t-shirts, shirts and tanks go under sweaters', () => {
+  it('lets t-shirts, tops and shirts go under sweaters', () => {
     for (const base of BASE_TOPS) {
       expect(canLayerUnder(base, 'Sweater')).toBe(true);
     }
   });
 
-  it('lets those three and sweaters go under coats and jackets', () => {
-    for (const inner of [...BASE_TOPS, 'Sweater'] as Category[]) {
+  it('lets those three, sweaters and cardigans go under coats and jackets', () => {
+    for (const inner of [...BASE_TOPS, 'Sweater', 'Cardigan'] as Category[]) {
       expect(canLayerUnder(inner, 'Coat')).toBe(true);
       expect(canLayerUnder(inner, 'Jacket')).toBe(true);
     }
@@ -31,7 +31,7 @@ describe('the stated layering rules', () => {
     expect(canLayerUnder('Coat', 'Jacket')).toBe(false);
   });
 
-  it('does not let a sweater go under a t-shirt, shirt or tank', () => {
+  it('does not let a sweater go under a t-shirt, top or shirt', () => {
     for (const outer of BASE_TOPS) {
       expect(canLayerUnder('Sweater', outer)).toBe(false);
     }
@@ -42,19 +42,39 @@ describe('the stated layering rules', () => {
     expect(canLayerUnder('Coat', 'Sweater')).toBe(false);
   });
 
-  it('lets a shirt go over a t-shirt or tank', () => {
+  it('lets a shirt go over a t-shirt or top', () => {
     expect(canLayerUnder('T-Shirt', 'Shirt')).toBe(true);
-    expect(canLayerUnder('Tank', 'Shirt')).toBe(true);
+    expect(canLayerUnder('Top', 'Shirt')).toBe(true);
   });
 
-  it('does not let a t-shirt or tank go over a shirt', () => {
+  it('does not let a t-shirt or top go over a shirt', () => {
     expect(canLayerUnder('Shirt', 'T-Shirt')).toBe(false);
-    expect(canLayerUnder('Shirt', 'Tank')).toBe(false);
+    expect(canLayerUnder('Shirt', 'Top')).toBe(false);
   });
 
-  it('does not layer a t-shirt and a tank in either direction', () => {
+  it('does not layer a t-shirt and a top in either direction', () => {
     // Not among the stated rules, so it is not permitted.
-    expect(canLayerEitherWay('T-Shirt', 'Tank')).toBe(false);
+    expect(canLayerEitherWay('T-Shirt', 'Top')).toBe(false);
+  });
+
+  it('lets a cardigan go over a t-shirt or top', () => {
+    expect(canLayerUnder('T-Shirt', 'Cardigan')).toBe(true);
+    expect(canLayerUnder('Top', 'Cardigan')).toBe(true);
+  });
+
+  it('does not let a cardigan go over a shirt', () => {
+    expect(canLayerUnder('Shirt', 'Cardigan')).toBe(false);
+  });
+
+  it('lets a cardigan go under a jacket or coat, but never over one', () => {
+    expect(canLayerUnder('Cardigan', 'Jacket')).toBe(true);
+    expect(canLayerUnder('Cardigan', 'Coat')).toBe(true);
+    expect(canLayerUnder('Jacket', 'Cardigan')).toBe(false);
+    expect(canLayerUnder('Coat', 'Cardigan')).toBe(false);
+  });
+
+  it('never puts a cardigan and a sweater together, in either order', () => {
+    expect(canLayerEitherWay('Cardigan', 'Sweater')).toBe(false);
   });
 
   it('never layers a garment under another of its own kind', () => {
@@ -63,29 +83,34 @@ describe('the stated layering rules', () => {
     }
   });
 
-  it('gives the legacy generic categories no layering permissions', () => {
-    for (const generic of ['Top', 'Outerwear'] as Category[]) {
-      expect(isLayerableCategory(generic)).toBe(false);
-      expect(getLayersOver(generic)).toEqual([]);
-      expect(getLayersUnder(generic)).toEqual([]);
+  it('gives every upper-body garment layering rules', () => {
+    for (const garment of ['T-Shirt', 'Top', 'Shirt', 'Cardigan', 'Sweater', 'Jacket', 'Coat'] as Category[]) {
+      expect(isLayerableCategory(garment)).toBe(true);
     }
   });
 
   it('gives non-garment categories no layering permissions', () => {
     for (const other of ['Bottom', 'Shoes', 'Belt', 'Bag', 'Scarf'] as Category[]) {
       expect(isLayerableCategory(other)).toBe(false);
+      expect(getLayersOver(other)).toEqual([]);
+      expect(getLayersUnder(other)).toEqual([]);
     }
   });
 });
 
 describe('getLayersOver / getLayersUnder', () => {
   it('lists exactly what a t-shirt goes under, innermost first', () => {
-    // Order is the rule-declaration order and is what the UI renders.
-    expect(getLayersOver('T-Shirt')).toEqual(['Shirt', 'Sweater', 'Jacket', 'Coat']);
+    expect(getLayersOver('T-Shirt')).toEqual(['Shirt', 'Cardigan', 'Sweater', 'Jacket', 'Coat']);
   });
 
   it('lists exactly what goes under a coat', () => {
-    expect(getLayersUnder('Coat').sort()).toEqual(['Shirt', 'Sweater', 'T-Shirt', 'Tank']);
+    expect(getLayersUnder('Coat').sort()).toEqual([
+      'Cardigan',
+      'Shirt',
+      'Sweater',
+      'T-Shirt',
+      'Top',
+    ]);
   });
 
   it('agrees with canLayerUnder in both directions', () => {
@@ -99,7 +124,7 @@ describe('getLayersOver / getLayersUnder', () => {
 
   it('returns a fresh array so callers cannot mutate the rule table', () => {
     getLayersOver('T-Shirt').pop();
-    expect(getLayersOver('T-Shirt')).toHaveLength(4);
+    expect(getLayersOver('T-Shirt')).toHaveLength(5);
   });
 });
 
@@ -113,9 +138,20 @@ describe('isValidLayerStack', () => {
     expect(isValidLayerStack(['T-Shirt', 'Sweater', 'Coat'])).toBe(true);
   });
 
-  it('accepts a shirt over a tank when nothing goes over the shirt', () => {
-    expect(isValidLayerStack(['Tank', 'Shirt'])).toBe(true);
-    expect(isValidLayerStack(['Tank', 'Shirt', 'Jacket'])).toBe(true);
+  it('accepts a shirt over a top when nothing goes over the shirt', () => {
+    expect(isValidLayerStack(['Top', 'Shirt'])).toBe(true);
+    expect(isValidLayerStack(['Top', 'Shirt', 'Jacket'])).toBe(true);
+  });
+
+  it('accepts a cardigan over a base layer and under a coat', () => {
+    expect(isValidLayerStack(['T-Shirt', 'Cardigan', 'Coat'])).toBe(true);
+    expect(isValidLayerStack(['Top', 'Cardigan', 'Jacket'])).toBe(true);
+  });
+
+  it('rejects a cardigan with a shirt or a sweater', () => {
+    expect(isValidLayerStack(['Shirt', 'Cardigan'])).toBe(false);
+    expect(isValidLayerStack(['Cardigan', 'Sweater'])).toBe(false);
+    expect(isValidLayerStack(['Sweater', 'Cardigan'])).toBe(false);
   });
 
   it('accepts a shirt under a sweater when the shirt is the base layer', () => {
@@ -123,14 +159,14 @@ describe('isValidLayerStack', () => {
     expect(isValidLayerStack(['Shirt', 'Sweater', 'Coat'])).toBe(true);
   });
 
-  it('rejects a shirt worn over a t-shirt or tank and under a sweater', () => {
+  it('rejects a shirt worn over a t-shirt or top and under a sweater', () => {
     // Every adjacent pair here is legal on its own; only the three together
     // break the rule, which is why the check is not neighbours-only.
     expect(canLayerUnder('T-Shirt', 'Shirt')).toBe(true);
     expect(canLayerUnder('Shirt', 'Sweater')).toBe(true);
     expect(isValidLayerStack(['T-Shirt', 'Shirt', 'Sweater'])).toBe(false);
-    expect(isValidLayerStack(['Tank', 'Shirt', 'Sweater'])).toBe(false);
-    expect(isValidLayerStack(['Tank', 'Shirt', 'Sweater', 'Coat'])).toBe(false);
+    expect(isValidLayerStack(['Top', 'Shirt', 'Sweater'])).toBe(false);
+    expect(isValidLayerStack(['Top', 'Shirt', 'Sweater', 'Coat'])).toBe(false);
   });
 
   it('rejects a jacket and a coat in the same stack', () => {
@@ -151,7 +187,7 @@ describe('isValidLayerStack', () => {
 
   it('rejects anything with no layering rules rather than assuming it is fine', () => {
     expect(isValidLayerStack(['T-Shirt', 'Bottom'])).toBe(false);
-    expect(isValidLayerStack(['Top'])).toBe(false);
-    expect(isValidLayerStack(['Top', 'Coat'])).toBe(false);
+    expect(isValidLayerStack(['Shoes'])).toBe(false);
+    expect(isValidLayerStack(['Bottom', 'Coat'])).toBe(false);
   });
 });

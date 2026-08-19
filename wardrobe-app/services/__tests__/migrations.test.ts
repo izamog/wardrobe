@@ -175,9 +175,10 @@ describe('v1 -> v2: widening the category constraint', () => {
     expect(countOf(db, 'Outfit_Logs')).toBe(1);
   });
 
-  it('keeps legacy generic categories readable rather than rewriting them', async () => {
-    // An old 'Top' might have been a T-Shirt or a Sweater. The migration does
-    // not guess; the row stays as it is and the user can retype it.
+  it('does not guess at generic categories while they are still valid', async () => {
+    // v2 widens the constraint and rewrites nothing. 'Outerwear' is only
+    // remapped later, by v4, which is the migration that removes it — see the
+    // v3 -> v4 block below. Running the full chain here shows both steps.
     const db = v1Db();
     addLegacyItem(db, 'legacy-top', 'Top');
     addLegacyItem(db, 'legacy-outer', 'Outerwear');
@@ -185,8 +186,11 @@ describe('v1 -> v2: widening the category constraint', () => {
     await runMigrations(adapt(db));
 
     expect(
-      db.prepare('SELECT category FROM ClothingItems ORDER BY id').all(),
-    ).toEqual([{ category: 'Outerwear' }, { category: 'Top' }]);
+      db.prepare('SELECT id, category FROM ClothingItems ORDER BY id').all(),
+    ).toEqual([
+      { id: 'legacy-outer', category: 'Jacket' },
+      { id: 'legacy-top', category: 'Top' },
+    ]);
   });
 
   it('accepts the new garment categories only after the migration runs', async () => {
@@ -286,6 +290,105 @@ describe('v2 -> v3: photos on disk', () => {
     await runMigrations(adapt(db));
 
     expect(db.prepare('SELECT COUNT(*) AS n FROM Item_Compatibility').get()).toEqual({ n: 1 });
+  });
+});
+
+describe('v3 -> v4: settling the garment vocabulary', () => {
+  /** Builds a database at exactly v3, before the vocabulary changed. */
+  function v3Db(): DatabaseSync {
+    const db = freshDb();
+    for (const migration of MIGRATIONS.slice(0, 3)) db.exec(migration);
+    db.exec('PRAGMA user_version = 3;');
+    return db;
+  }
+
+  const addV3Item = (db: DatabaseSync, id: string, category: string) =>
+    db
+      .prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run(id, '', category, 'then');
+
+  const categoryOf = (db: DatabaseSync, id: string) =>
+    (db.prepare('SELECT category AS c FROM ClothingItems WHERE id=?').get(id) as { c: string }).c;
+
+  it('folds Tank into Top, which inherits its layering rules', async () => {
+    const db = v3Db();
+    addV3Item(db, 'was-tank', 'Tank');
+
+    await runMigrations(adapt(db));
+
+    expect(categoryOf(db, 'was-tank')).toBe('Top');
+  });
+
+  it('leaves rows that were already Top alone, so the merge is not lossy', async () => {
+    const db = v3Db();
+    addV3Item(db, 'was-top', 'Top');
+
+    await runMigrations(adapt(db));
+
+    expect(categoryOf(db, 'was-top')).toBe('Top');
+  });
+
+  it('remaps the removed generic Outerwear to Jacket rather than dropping the row', async () => {
+    const db = v3Db();
+    addV3Item(db, 'was-outer', 'Outerwear');
+
+    await runMigrations(adapt(db));
+
+    expect(categoryOf(db, 'was-outer')).toBe('Jacket');
+  });
+
+  it('rejects the retired categories afterwards', async () => {
+    const db = v3Db();
+    await runMigrations(adapt(db));
+
+    expect(() => addItem(db, 'tank', 'Tank')).toThrow(/CHECK constraint failed/);
+    expect(() => addItem(db, 'outer', 'Outerwear')).toThrow(/CHECK constraint failed/);
+  });
+
+  it('accepts Cardigan only after the migration runs', async () => {
+    const db = v3Db();
+    expect(() => addV3Item(db, 'early', 'Cardigan')).toThrow(/CHECK constraint failed/);
+
+    await runMigrations(adapt(db));
+
+    expect(() => addItem(db, 'late', 'Cardigan')).not.toThrow();
+  });
+
+  it('keeps every verdict across this rebuild too', async () => {
+    const db = v3Db();
+    addV3Item(db, 'aaa', 'Tank');
+    addV3Item(db, 'bbb', 'Bottom');
+    db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
+      .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM Item_Compatibility').get()).toEqual({ n: 1 });
+  });
+
+  it('carries the photo columns across the rebuild', async () => {
+    const db = v3Db();
+    db.prepare(
+      `INSERT INTO ClothingItems (id, imagePath, originalImagePath, category, createdAt)
+       VALUES (?,?,?,?,?)`,
+    ).run('x', 'items/x-1.jpg', 'items/x-0.jpg', 'Tank', 'then');
+
+    await runMigrations(adapt(db));
+
+    expect(
+      db.prepare('SELECT imagePath AS i, originalImagePath AS o FROM ClothingItems').get(),
+    ).toEqual({ i: 'items/x-1.jpg', o: 'items/x-0.jpg' });
+  });
+
+  it('leaves no scaffolding tables behind', async () => {
+    const db = v3Db();
+    await runMigrations(adapt(db));
+
+    const tables = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]
+    ).map((r) => r.name);
+    expect(tables).not.toContain('ClothingItems_new');
+    expect(tables).not.toContain('Item_Compatibility_backup');
   });
 });
 

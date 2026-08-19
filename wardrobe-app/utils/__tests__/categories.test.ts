@@ -36,15 +36,17 @@ describe('getComplementaryCategories', () => {
 
   it('excludes same-group categories that cannot be layered together', () => {
     // Two tops compete for one slot unless they can be worn at once.
-    expect(getComplementaryCategories('T-Shirt')).not.toContain('Tank');
-    expect(getComplementaryCategories('Jacket')).not.toContain('Coat');
     expect(getComplementaryCategories('T-Shirt')).not.toContain('Top');
+    expect(getComplementaryCategories('Jacket')).not.toContain('Coat');
+    expect(getComplementaryCategories('Cardigan')).not.toContain('Sweater');
+    expect(getComplementaryCategories('Cardigan')).not.toContain('Shirt');
   });
 
   it('includes same-group categories that can be layered together', () => {
     expect(getComplementaryCategories('T-Shirt')).toContain('Sweater');
     expect(getComplementaryCategories('T-Shirt')).toContain('Shirt');
-    expect(getComplementaryCategories('Sweater')).toContain('Tank');
+    expect(getComplementaryCategories('T-Shirt')).toContain('Cardigan');
+    expect(getComplementaryCategories('Sweater')).toContain('Top');
   });
 
   it('always crosses groups regardless of layering', () => {
@@ -64,9 +66,18 @@ describe('getComplementaryCategories', () => {
     }
   });
 
-  it('gives a legacy generic top everything outside its own group', () => {
-    const expected = ALL_CATEGORIES.filter((c) => CATEGORY_GROUP[c] !== 'Top');
-    expect(getComplementaryCategories('Top')).toEqual(expected);
+  it('gives a cardigan every category outside its group, plus the tops it layers with', () => {
+    expect(getComplementaryCategories('Cardigan')).toEqual([
+      'T-Shirt',
+      'Top',
+      'Jacket',
+      'Coat',
+      'Bottom',
+      'Shoes',
+      'Belt',
+      'Bag',
+      'Scarf',
+    ]);
   });
 
   it('returns results in ALL_CATEGORIES order, so the UI ordering is stable', () => {

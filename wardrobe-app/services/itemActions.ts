@@ -18,6 +18,11 @@ export type ItemDraft = Omit<NewClothingItem, 'imagePath' | 'originalImagePath'>
 /**
  * Saves a new item and its photo.
  *
+ * A photo is required: the add flow has no path past the capture step without
+ * one. Rows created before that rule, and rows whose file has gone missing,
+ * still render — StoredImage falls back to a placeholder — but nothing new
+ * arrives without a picture.
+ *
  * The file is written before the row, and removed again if the row fails. The
  * other order can leave a row pointing at a file that was never written, which
  * shows in the closet as a permanently broken tile; this order can at worst
@@ -25,10 +30,10 @@ export type ItemDraft = Omit<NewClothingItem, 'imagePath' | 'originalImagePath'>
  */
 export async function createItem(
   draft: ItemDraft,
-  temporaryImageUri: string | null,
+  temporaryImageUri: string,
 ): Promise<ClothingItem> {
   const id = Crypto.randomUUID();
-  const imagePath = temporaryImageUri ? persistItemImage(temporaryImageUri, id) : '';
+  const imagePath = persistItemImage(temporaryImageUri, id);
 
   try {
     return await withDb((db) =>

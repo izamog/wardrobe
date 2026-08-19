@@ -17,22 +17,21 @@ export type CategoryGroup =
 /**
  * The garment type stored on an item.
  *
- * 'Top' and 'Outerwear' are the generic members kept from the first schema.
- * They remain valid so items created before the specific types existed still
- * load, but they carry no layering permissions — see utils/layering.ts.
+ * 'Top' covers basic upper-body garments that are not one of the more specific
+ * types — vests, camisoles, tanks, plain jersey tops. It layers like a base
+ * layer, which is what distinguishes it from 'T-Shirt' only by cut.
  *
  * Each member here has a matching entry in the category CHECK constraint in
  * services/migrations.ts. Adding one means adding a migration.
  */
 export type Category =
   | 'T-Shirt'
-  | 'Shirt'
-  | 'Tank'
-  | 'Sweater'
   | 'Top'
+  | 'Shirt'
+  | 'Cardigan'
+  | 'Sweater'
   | 'Jacket'
   | 'Coat'
-  | 'Outerwear'
   | 'Bottom'
   | 'Shoes'
   | 'Belt'

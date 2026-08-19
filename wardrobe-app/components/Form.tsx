@@ -1,5 +1,5 @@
-import React from 'react';
-import { Pressable, Switch, Text, TextInput, View } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { Modal, Pressable, ScrollView, Switch, Text, TextInput, View } from 'react-native';
 
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -100,42 +100,6 @@ export function OptionRow<T extends string>({
   );
 }
 
-/**
- * A 0-10 integer picker.
- *
- * Rendered as discrete buttons rather than a text input because the column has
- * CHECK (x BETWEEN 0 AND 10) — an out-of-range value simply cannot be entered.
- */
-export function ScaleField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-}) {
-  return (
-    <Field label={label}>
-      <View className="flex-row flex-wrap">
-        {Array.from({ length: 11 }, (_, n) => (
-          <Pressable
-            key={n}
-            onPress={() => onChange(n)}
-            accessibilityRole="button"
-            accessibilityState={{ selected: n === value }}
-            className={`w-9 h-9 rounded-lg mr-1.5 mb-1.5 items-center justify-center border ${
-              n === value ? 'bg-slate-900 border-slate-900' : 'bg-white border-slate-300'
-            }`}
-          >
-            <Text className={`text-sm ${n === value ? 'text-white' : 'text-slate-700'}`}>{n}</Text>
-          </Pressable>
-        ))}
-      </View>
-    </Field>
-  );
-}
-
 export function PrimaryButton({
   label,
   onPress,
@@ -144,9 +108,26 @@ export function PrimaryButton({
 }: {
   label: string;
   onPress: () => void;
-  tone?: 'primary' | 'danger';
+  tone?: 'primary' | 'secondary' | 'danger';
   disabled?: boolean;
 }) {
+  if (tone === 'secondary') {
+    return (
+      <Pressable
+        onPress={onPress}
+        disabled={disabled}
+        accessibilityRole="button"
+        className={`rounded-xl py-3.5 items-center border ${
+          disabled ? 'border-slate-200' : 'border-slate-300 bg-white'
+        }`}
+      >
+        <Text className={`font-semibold text-base ${disabled ? 'text-slate-300' : 'text-slate-700'}`}>
+          {label}
+        </Text>
+      </Pressable>
+    );
+  }
+
   const background = disabled
     ? 'bg-slate-300'
     : tone === 'danger'
@@ -162,5 +143,92 @@ export function PrimaryButton({
     >
       <Text className="text-white font-semibold text-base">{label}</Text>
     </Pressable>
+  );
+}
+
+/**
+ * A field that opens a list and lets several entries be ticked.
+ *
+ * A modal rather than an inline expansion because the option list is long
+ * enough to push everything below it off screen, and because the closed state
+ * needs to read as a single value — the summary line — not as a wall of chips.
+ *
+ * `options` is extended with anything already selected but not offered, so a
+ * value written by an older build (or a future one) survives an edit here
+ * instead of being silently dropped on save.
+ */
+export function MultiSelectField({
+  label,
+  options,
+  selected,
+  onChange,
+  emptyLabel = 'None selected',
+}: {
+  label: string;
+  options: readonly string[];
+  selected: readonly string[];
+  onChange: (next: string[]) => void;
+  emptyLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const allOptions = useMemo(() => {
+    const unknown = selected.filter((value) => !options.includes(value));
+    return [...unknown, ...options];
+  }, [options, selected]);
+
+  const toggle = (value: string) => {
+    const next = selected.includes(value)
+      ? selected.filter((entry) => entry !== value)
+      : [...selected, value];
+    // Kept in the options' own order so the stored list does not depend on the
+    // order the user happened to tap.
+    onChange(allOptions.filter((entry) => next.includes(entry)));
+  };
+
+  return (
+    <Field label={label}>
+      <Pressable
+        onPress={() => setOpen(true)}
+        accessibilityRole="button"
+        className="bg-white border border-slate-300 rounded-lg px-3 py-2.5 flex-row justify-between items-center"
+      >
+        <Text
+          className={`text-base flex-1 ${selected.length ? 'text-slate-900' : 'text-slate-400'}`}
+          numberOfLines={1}
+        >
+          {selected.length ? selected.join(', ') : emptyLabel}
+        </Text>
+        <Text className="text-slate-400 ml-2">▾</Text>
+      </Pressable>
+
+      <Modal visible={open} animationType="slide" presentationStyle="pageSheet">
+        <View className="flex-1 bg-slate-50">
+          <View className="flex-row items-center justify-between px-4 py-3 bg-white border-b border-slate-200">
+            <Text className="text-base font-semibold text-slate-900">{label}</Text>
+            <Pressable onPress={() => setOpen(false)} accessibilityRole="button">
+              <Text className="text-base font-semibold text-slate-900">Done</Text>
+            </Pressable>
+          </View>
+          <ScrollView contentContainerClassName="pb-10">
+            {allOptions.map((option) => {
+              const isSelected = selected.includes(option);
+              return (
+                <Pressable
+                  key={option}
+                  onPress={() => toggle(option)}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: isSelected }}
+                  className="flex-row items-center justify-between px-4 py-3.5 bg-white border-b border-slate-100"
+                >
+                  <Text className="text-base text-slate-900">{option}</Text>
+                  {isSelected ? <Text className="text-lg text-slate-900">✓</Text> : null}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </Modal>
+    </Field>
   );
 }

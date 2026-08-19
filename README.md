@@ -99,10 +99,10 @@ removed again if the row fails, so a row never points at a missing image.
 
 ### Categories and layering
 
-`Category` is the garment type (T-Shirt, Shirt, Tank, Sweater, Jacket, Coat,
-Bottom, Shoes, Belt, Bag, Scarf). `CategoryGroup` is the outfit slot it fills,
-so the four shirt types all group as Top and Jacket and Coat both group as
-Outerwear.
+`Category` is the garment type (T-Shirt, Top, Shirt, Cardigan, Sweater, Jacket,
+Coat, Bottom, Shoes, Belt, Bag, Scarf). `CategoryGroup` is the outfit slot it
+fills, so the five upper-body types all group as Top, and Jacket and Coat both
+group as Outerwear. 'Outerwear' is a group but no longer a category.
 
 Two categories in the same group normally can't appear together — they compete
 for one slot. `utils/layering.ts` is the exception: it holds the directional
@@ -111,9 +111,11 @@ for one slot. `utils/layering.ts` is the exception: it holds the directional
 rule needs three garments to state (a Shirt over a T-Shirt can't then go under
 a Sweater), so it lives in `isValidLayerStack` rather than the pair table.
 
-`Top` and `Outerwear` remain valid categories so items created before the
-specific types existed still load. They carry no layering rules, and
-`isValidLayerStack` rejects rather than guesses on them.
+Attributes that only apply to some categories — hardware colour, belt loops —
+are asked for only there, and cleared when the category changes away, so a
+recategorised garment cannot carry an invisible flag into Phase 4's belt rules.
+`inferredWarmth` and `inferredWind` are model inputs, never shown or edited;
+Phase 3 fills them from the voice description.
 
 ### Changing the schema
 

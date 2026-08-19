@@ -210,6 +210,91 @@ export const MIGRATIONS: readonly string[] = [
   -- holds for every row, not just the ones written from now on.
   UPDATE ClothingItems SET originalImagePath = imagePath WHERE imagePath <> '';
   `,
+
+  // v3 -> v4: settle the garment vocabulary.
+  //
+  // 'Tank' is folded into 'Top', which takes over its layering rules, and the
+  // generic 'Outerwear' goes away now that Jacket and Coat cover it. 'Cardigan'
+  // is new. Widening or narrowing the CHECK means another rebuild, so this
+  // repeats the ordering from v2 -- verdicts copied out, child dropped before
+  // parent -- for the same reason: with foreign keys on, dropping the parent
+  // fires ON DELETE CASCADE and deletes the whole compatibility matrix without
+  // erroring.
+  //
+  // The remapping runs against the old table first, while both the old and new
+  // values still satisfy the old CHECK.
+  //
+  // Outerwear -> Jacket is a guess. It is the more common garment, the row
+  // survives, and the category is editable; the alternative was refusing to
+  // migrate a category the user asked to have removed.
+  `
+  UPDATE ClothingItems SET category = 'Top' WHERE category = 'Tank';
+  UPDATE ClothingItems SET category = 'Jacket' WHERE category = 'Outerwear';
+
+  CREATE TABLE ClothingItems_new (
+    id TEXT PRIMARY KEY NOT NULL,
+    imagePath TEXT NOT NULL,
+    originalImagePath TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL
+      CHECK (category IN (
+        'T-Shirt','Top','Shirt','Cardigan','Sweater',
+        'Jacket','Coat',
+        'Bottom','Shoes','Belt','Bag','Scarf'
+      )),
+    brand TEXT NOT NULL DEFAULT 'Unknown',
+    costMinorUnits INTEGER NOT NULL DEFAULT 0 CHECK (costMinorUnits >= 0),
+    isSecondHand INTEGER NOT NULL DEFAULT 0 CHECK (isSecondHand IN (0,1)),
+    materials TEXT NOT NULL DEFAULT '[]',
+    hardwareColor TEXT NOT NULL DEFAULT 'None'
+      CHECK (hardwareColor IN ('Gold','Silver','None')),
+    hasBeltLoops INTEGER NOT NULL DEFAULT 0 CHECK (hasBeltLoops IN (0,1)),
+    inferredWarmth INTEGER NOT NULL DEFAULT 0 CHECK (inferredWarmth BETWEEN 0 AND 10),
+    inferredWind INTEGER NOT NULL DEFAULT 0 CHECK (inferredWind BETWEEN 0 AND 10),
+    wearCount INTEGER NOT NULL DEFAULT 0 CHECK (wearCount >= 0),
+    createdAt TEXT NOT NULL
+  );
+
+  INSERT INTO ClothingItems_new (
+    id, imagePath, originalImagePath, category, brand, costMinorUnits, isSecondHand,
+    materials, hardwareColor, hasBeltLoops, inferredWarmth, inferredWind, wearCount, createdAt
+  )
+  SELECT
+    id, imagePath, originalImagePath, category, brand, costMinorUnits, isSecondHand,
+    materials, hardwareColor, hasBeltLoops, inferredWarmth, inferredWind, wearCount, createdAt
+  FROM ClothingItems;
+
+  CREATE TABLE Item_Compatibility_backup (
+    id TEXT NOT NULL,
+    item_a_id TEXT NOT NULL,
+    item_b_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  );
+  INSERT INTO Item_Compatibility_backup (id, item_a_id, item_b_id, status, createdAt)
+    SELECT id, item_a_id, item_b_id, status, createdAt FROM Item_Compatibility;
+
+  DROP TABLE Item_Compatibility;
+  DROP TABLE ClothingItems;
+  ALTER TABLE ClothingItems_new RENAME TO ClothingItems;
+
+  CREATE TABLE Item_Compatibility (
+    id TEXT PRIMARY KEY NOT NULL,
+    item_a_id TEXT NOT NULL,
+    item_b_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('MATCH','DISMATCH')),
+    createdAt TEXT NOT NULL,
+    FOREIGN KEY (item_a_id) REFERENCES ClothingItems(id) ON DELETE CASCADE,
+    FOREIGN KEY (item_b_id) REFERENCES ClothingItems(id) ON DELETE CASCADE,
+    CHECK (item_a_id < item_b_id),
+    UNIQUE(item_a_id, item_b_id)
+  );
+  INSERT INTO Item_Compatibility (id, item_a_id, item_b_id, status, createdAt)
+    SELECT id, item_a_id, item_b_id, status, createdAt FROM Item_Compatibility_backup;
+  DROP TABLE Item_Compatibility_backup;
+
+  CREATE INDEX idx_items_category ON ClothingItems(category);
+  CREATE INDEX idx_compat_item_b ON Item_Compatibility(item_b_id);
+  `,
 ];
 
 /**

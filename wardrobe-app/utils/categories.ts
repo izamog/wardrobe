@@ -7,13 +7,12 @@ import { canLayerEitherWay } from './layering';
 // the filter chips, the category picker and every complementary list follow it.
 export const ALL_CATEGORIES: Category[] = [
   'T-Shirt',
-  'Shirt',
-  'Tank',
-  'Sweater',
   'Top',
+  'Shirt',
+  'Cardigan',
+  'Sweater',
   'Jacket',
   'Coat',
-  'Outerwear',
   'Bottom',
   'Shoes',
   'Belt',
@@ -28,18 +27,20 @@ export const ALL_CATEGORIES: Category[] = [
  * are not ordinarily paired — except where the layering rules say they can be
  * worn together, which is the whole reason this mapping exists.
  *
+ * 'Outerwear' survives as a group even though it is no longer a category:
+ * Jacket and Coat share one slot, and that is what the group expresses.
+ *
  * Typed as a total Record, so adding a Category without classifying it is a
  * compile error rather than a silent misgrouping.
  */
 export const CATEGORY_GROUP: Record<Category, CategoryGroup> = {
   'T-Shirt': 'Top',
-  Shirt: 'Top',
-  Tank: 'Top',
-  Sweater: 'Top',
   Top: 'Top',
+  Shirt: 'Top',
+  Cardigan: 'Top',
+  Sweater: 'Top',
   Jacket: 'Outerwear',
   Coat: 'Outerwear',
-  Outerwear: 'Outerwear',
   Bottom: 'Bottom',
   Shoes: 'Shoes',
   Belt: 'Belt',

@@ -42,7 +42,8 @@ describe('buildUnratedPairs', () => {
   });
 
   it('does not pair two tops that cannot be layered together', () => {
-    expect(buildUnratedPairs([item('a', 'T-Shirt'), item('b', 'Tank')], new Set())).toEqual([]);
+    expect(buildUnratedPairs([item('a', 'T-Shirt'), item('b', 'Top')], new Set())).toEqual([]);
+    expect(buildUnratedPairs([item('a', 'Cardigan'), item('b', 'Sweater')], new Set())).toEqual([]);
   });
 
   it('does not pair a jacket with a coat', () => {

@@ -65,16 +65,15 @@ function ChoiceButton({ label, onPress }: { label: string; onPress: () => void }
   );
 }
 
-/** The capture step: choose a source, or go on without a photo. */
-export function PhotoSourceChooser({
-  onPicked,
-  onSkip,
-  skipLabel,
-}: {
-  onPicked: (uri: string) => void;
-  onSkip: () => void;
-  skipLabel: string;
-}) {
+/**
+ * The capture step: choose a source.
+ *
+ * There is no way past this without a photo. A wardrobe entry the user cannot
+ * see is close to useless — the closet, the matcher and the Phase 6 collages
+ * are all pictures — so a photo is required rather than encouraged. Backing
+ * out of the whole flow is still available through the modal's own dismiss.
+ */
+export function PhotoSourceChooser({ onPicked }: { onPicked: (uri: string) => void }) {
   const { capture, busy } = usePhotoCapture(onPicked);
 
   if (busy) {
@@ -90,9 +89,6 @@ export function PhotoSourceChooser({
     <View>
       <ChoiceButton label="Take a photo" onPress={() => void capture('camera')} />
       <ChoiceButton label="Choose from library" onPress={() => void capture('library')} />
-      <Pressable onPress={onSkip} accessibilityRole="button" className="py-3 items-center">
-        <Text className="text-slate-500 font-medium">{skipLabel}</Text>
-      </Pressable>
     </View>
   );
 }

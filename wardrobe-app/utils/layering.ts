@@ -6,36 +6,44 @@ import type { Category } from '../types/wardrobe';
  * Written as explicit [inner, outer] pairs rather than derived from a
  * hierarchy, because the rules are not a hierarchy: a Shirt sits over a
  * T-Shirt and under a Sweater, while a Sweater sits over both and under
- * neither. The transcription of the stated rules is:
+ * neither, and a Cardigan goes over a T-Shirt but has no relationship with a
+ * Sweater at all. The rules as stated:
  *
- *  - T-Shirts, Shirts and Tanks all go under Sweaters.
- *  - Those three and Sweaters all go under Jackets and Coats.
- *  - Shirts go over T-Shirts and Tanks.
+ *  - T-Shirts, Tops and Shirts all go under Sweaters.
+ *  - Those three, plus Sweaters and Cardigans, all go under Jackets and Coats.
+ *  - Shirts go over T-Shirts and Tops.
+ *  - Cardigans go over T-Shirts and Tops, but not over Shirts.
  *
  * Everything absent from this list is disallowed, which covers the rules
- * stated as prohibitions: Jacket under Coat and Coat under Jacket, Sweater
- * under any of T-Shirt/Shirt/Tank, and Sweater over a Jacket or Coat.
+ * stated as prohibitions: Jacket under Coat and the reverse, Sweater under any
+ * base layer, Sweater over a Jacket or Coat, Cardigan over a Jacket or Coat,
+ * and Cardigan and Sweater in either order.
  *
  * The one rule that cannot be expressed here is the Shirt exception — a Shirt
- * worn over a T-Shirt or Tank may not then go under a Sweater. That depends on
+ * worn over a T-Shirt or Top may not then go under a Sweater. That depends on
  * three garments at once, so it lives in isValidLayerStack().
  */
 const LAYER_PAIRS: readonly (readonly [Category, Category])[] = [
   ['T-Shirt', 'Shirt'],
-  ['Tank', 'Shirt'],
+  ['Top', 'Shirt'],
+
+  ['T-Shirt', 'Cardigan'],
+  ['Top', 'Cardigan'],
 
   ['T-Shirt', 'Sweater'],
+  ['Top', 'Sweater'],
   ['Shirt', 'Sweater'],
-  ['Tank', 'Sweater'],
 
   ['T-Shirt', 'Jacket'],
+  ['Top', 'Jacket'],
   ['Shirt', 'Jacket'],
-  ['Tank', 'Jacket'],
+  ['Cardigan', 'Jacket'],
   ['Sweater', 'Jacket'],
 
   ['T-Shirt', 'Coat'],
+  ['Top', 'Coat'],
   ['Shirt', 'Coat'],
-  ['Tank', 'Coat'],
+  ['Cardigan', 'Coat'],
   ['Sweater', 'Coat'],
 ];
 
@@ -55,9 +63,8 @@ const INNER_LAYERS: ReadonlyMap<Category, ReadonlySet<Category>> = LAYER_PAIRS.r
  * Every category that appears in at least one rule above.
  *
  * Derived from LAYER_PAIRS rather than listed again, so a new rule cannot make
- * the two disagree. Note what this excludes: the generic 'Top' and 'Outerwear'
- * carry no rules, so nothing can be concluded about layering them, and
- * isValidLayerStack() treats a stack containing one as unanswerable.
+ * the two disagree. In practice this is exactly the Top and Outerwear groups:
+ * anything worn on the upper body has rules, and nothing else does.
  */
 const LAYERABLE_CATEGORIES: ReadonlySet<Category> = new Set(LAYER_PAIRS.flat());
 
@@ -96,9 +103,9 @@ export function canLayerEitherWay(a: Category, b: Category): boolean {
  * check. The all-pairs loop costs nothing at these sizes.
  *
  * An empty or single-garment stack is wearable. A stack containing anything
- * with no layering rules — a Bottom, or a legacy generic 'Top' — is rejected
- * rather than assumed fine: the honest answer there is "unknown", and for a
- * generator choosing what to propose, unknown must not read as yes.
+ * with no layering rules — a Bottom, a pair of Shoes — is rejected rather than
+ * assumed fine: the honest answer there is "unknown", and for a generator
+ * choosing what to propose, unknown must not read as yes.
  */
 export function isValidLayerStack(stack: readonly Category[]): boolean {
   if (!stack.every(isLayerableCategory)) return false;
@@ -109,14 +116,14 @@ export function isValidLayerStack(stack: readonly Category[]): boolean {
     }
   }
 
-  // The Shirt exception: a Shirt already covering a T-Shirt or Tank is the
+  // The Shirt exception: a Shirt already covering a T-Shirt or Top is the
   // outermost that stack can wear beneath a Sweater. Every pair above is
   // individually legal, so only this three-garment view rejects it.
   for (let i = 0; i < stack.length; i++) {
     if (stack[i] !== 'Shirt') continue;
     const overBaseLayer = stack
       .slice(0, i)
-      .some((worn) => worn === 'T-Shirt' || worn === 'Tank');
+      .some((worn) => worn === 'T-Shirt' || worn === 'Top');
     const underSweater = stack.slice(i + 1).some((worn) => worn === 'Sweater');
     if (overBaseLayer && underSweater) return false;
   }
