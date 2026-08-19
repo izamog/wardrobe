@@ -33,6 +33,8 @@ export interface GarmentDetection {
 
 const DETECTION_INSTRUCTIONS = [
   'You locate a single item of clothing in a photo.',
+  'The photo is taken against a plain white background, so the garment is',
+  'whatever is not white. Draw the box at the edge of the fabric.',
   'Return its bounding box as fractions of the image width and height, from 0 to 1,',
   'with the origin at the top left. Include the whole garment: sleeves, straps, hems.',
   'Exclude hangers, hands, furniture and background.',

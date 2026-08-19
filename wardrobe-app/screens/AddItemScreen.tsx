@@ -1,58 +1,70 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Image,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   Text,
   View,
 } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { OptionRow, PrimaryButton } from '../components/Form';
 import { PhotoSourceChooser } from '../components/PhotoPicker';
-import { ProposalReview, type ReviewedValues } from '../components/ProposalReview';
+import {
+  ATTRIBUTE_FIELDS,
+  AttributeList,
+  type AttributeField,
+  type AttributeValues,
+} from '../components/AttributeList';
 import { VoiceBar } from '../components/VoiceCapture';
 import { createItem } from '../services/itemActions';
 import { withDb } from '../services/database';
 import { isVoiceConfigured, openAIVoicePipeline } from '../services/voice';
-import { ALL_CATEGORIES } from '../utils/categories';
 import type { ItemProposal } from '../utils/proposals';
 import type { RootStackParamList } from '../navigation/types';
 
 /**
  * Where the add flow has got to.
  *
- * Only two steps now: the photo, then everything else on one screen. Voice used
- * to be a page of its own, which meant describing a garment you could no longer
- * see — the point of holding the button is to look at the piece while you talk
- * about it.
+ * Two steps: the photo, then everything else on one screen. Voice used to be a
+ * page of its own, which meant describing a garment you could no longer see.
  */
 type Stage = { step: 'capture' } | { step: 'compose'; imageUri: string };
 
 /**
- * Attributes applied straight from the model without a confirmation card.
+ * Delay between one heard attribute landing in the list and the next.
  *
- * Warmth and wind are estimates on an arbitrary scale that a person cannot
- * usefully second-guess; hardware colour and belt loops only matter for a few
- * categories. All four stay editable on Item Details.
+ * The values arrive together; they are applied in sequence so the list fills
+ * in visibly rather than changing in one jump. Slow enough to follow, fast
+ * enough that six of them are done inside a second.
  */
-type SilentFields = Pick<
-  ItemProposal,
-  'inferredWarmth' | 'inferredWind' | 'hardwareColor' | 'hasBeltLoops'
->;
+const APPLY_INTERVAL_MS = 180;
+
+/** Which proposal field feeds which row. */
+const FIELD_SOURCES: Record<AttributeField, (p: ItemProposal) => Partial<AttributeValues> | null> = {
+  category: (p) => (p.category === undefined ? null : { category: p.category }),
+  brand: (p) => (p.brand === undefined ? null : { brand: p.brand }),
+  cost: (p) => (p.costMinorUnits === undefined ? null : { costMinorUnits: p.costMinorUnits }),
+  colors: (p) =>
+    p.primaryColor === undefined
+      ? null
+      : { primaryColor: p.primaryColor, secondaryColor: p.secondaryColor ?? '' },
+  isSecondHand: (p) => (p.isSecondHand === undefined ? null : { isSecondHand: p.isSecondHand }),
+  materials: (p) => (p.materials === undefined ? null : { materials: p.materials }),
+};
 
 export function AddItemScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'AddItem'>>();
 
   const [stage, setStage] = useState<Stage>({ step: 'capture' });
-  const [proposal, setProposal] = useState<ItemProposal>({});
   const [transcript, setTranscript] = useState<string | null>(null);
+  const [pending, setPending] = useState<ReadonlySet<AttributeField>>(new Set());
   const [saving, setSaving] = useState(false);
 
-  const [values, setValues] = useState<ReviewedValues>({
+  const [values, setValues] = useState<AttributeValues>({
     brand: 'Unknown',
     costMinorUnits: 0,
     primaryColor: '',
@@ -61,49 +73,97 @@ export function AddItemScreen() {
     isSecondHand: false,
     materials: [],
   });
-  const [silent, setSilent] = useState<SilentFields>({});
+  // Warmth, wind, hardware and belt loops are estimates or category-specific
+  // details, not questions worth confirming. Applied as heard, editable later.
+  const [silent, setSilent] = useState<
+    Pick<ItemProposal, 'inferredWarmth' | 'inferredWind' | 'hardwareColor' | 'hasBeltLoops'>
+  >({});
 
-  function applyProposal(next: ItemProposal) {
-    setProposal(next);
-    setValues((current) => ({
-      brand: next.brand ?? current.brand,
-      costMinorUnits: next.costMinorUnits ?? current.costMinorUnits,
-      primaryColor: next.primaryColor ?? current.primaryColor,
-      secondaryColor: next.secondaryColor ?? current.secondaryColor,
-      category: next.category ?? current.category,
-      isSecondHand: next.isSecondHand ?? current.isSecondHand,
-      materials: next.materials ?? current.materials,
-    }));
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current) clearInterval(timer.current);
+    },
+    [],
+  );
+
+  const applyProposal = useCallback((next: ItemProposal) => {
     setSilent({
       inferredWarmth: next.inferredWarmth,
       inferredWind: next.inferredWind,
       hardwareColor: next.hardwareColor,
       hasBeltLoops: next.hasBeltLoops,
     });
-  }
 
-  async function save(imageUri: string) {
-    setSaving(true);
-    try {
-      await createItem(
-        { runQuery: withDb },
-        {
-          ...values,
-          brand: values.brand.trim() || 'Unknown',
-          hardwareColor: silent.hardwareColor ?? 'None',
-          hasBeltLoops: silent.hasBeltLoops ?? false,
-          inferredWarmth: silent.inferredWarmth ?? 0,
-          inferredWind: silent.inferredWind ?? 0,
-        },
-        imageUri,
-      );
-      navigation.goBack();
-    } catch (e) {
-      console.error('Failed to save item:', e);
-      Alert.alert('Could not save', 'The item was not added. Please try again.');
-      setSaving(false);
-    }
-  }
+    const heard = ATTRIBUTE_FIELDS.filter((field) => FIELD_SOURCES[field](next) !== null);
+    if (heard.length === 0) return;
+
+    if (timer.current) clearInterval(timer.current);
+    // A fresh recording supersedes the previous one, so old confirmations no
+    // longer refer to anything.
+    setPending(new Set());
+
+    let index = 0;
+    timer.current = setInterval(() => {
+      const field = heard[index];
+      setValues((current) => ({ ...current, ...FIELD_SOURCES[field](next) }));
+      setPending((current) => new Set(current).add(field));
+
+      index += 1;
+      if (index >= heard.length && timer.current) clearInterval(timer.current);
+    }, APPLY_INTERVAL_MS);
+  }, []);
+
+  const save = useCallback(
+    async (imageUri: string) => {
+      setSaving(true);
+      try {
+        await createItem(
+          { runQuery: withDb },
+          {
+            ...values,
+            brand: values.brand.trim() || 'Unknown',
+            hardwareColor: silent.hardwareColor ?? 'None',
+            hasBeltLoops: silent.hasBeltLoops ?? false,
+            inferredWarmth: silent.inferredWarmth ?? 0,
+            inferredWind: silent.inferredWind ?? 0,
+          },
+          imageUri,
+        );
+        navigation.goBack();
+      } catch (e) {
+        console.error('Failed to save item:', e);
+        Alert.alert('Could not save', 'The item was not added. Please try again.');
+        setSaving(false);
+      }
+    },
+    [navigation, silent, values],
+  );
+
+  // Save lives in the header rather than the bottom bar, which belongs to the
+  // microphone. Two large targets side by side at the bottom edge left neither
+  // of them comfortably reachable.
+  const imageUri = stage.step === 'compose' ? stage.imageUri : null;
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: imageUri
+        ? () => (
+            <Pressable
+              onPress={() => void save(imageUri)}
+              disabled={saving}
+              accessibilityRole="button"
+              className="px-2 py-1"
+            >
+              <Text
+                className={`text-base font-semibold ${saving ? 'text-slate-300' : 'text-slate-900'}`}
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </Text>
+            </Pressable>
+          )
+        : undefined,
+    });
+  }, [navigation, imageUri, save, saving]);
 
   if (stage.step === 'capture') {
     return (
@@ -127,66 +187,57 @@ export function AddItemScreen() {
     );
   }
 
-  const { imageUri } = stage;
-
   return (
     <KeyboardAvoidingView
       className="flex-1 bg-slate-50"
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ScrollView contentContainerClassName="p-4 pb-6" keyboardShouldPersistTaps="handled">
-        {/* Not pressable — replacing goes through the button, so a stray tap on
-            a large image cannot throw away the form. */}
-        <View className="aspect-[3/4] rounded-2xl overflow-hidden bg-slate-200 mb-3">
-          <Image source={{ uri: imageUri }} className="w-full h-full" resizeMode="contain" />
-        </View>
-        <View className="mb-5">
-          <PrimaryButton
-            label="Replace image"
-            tone="secondary"
-            onPress={() => setStage({ step: 'capture' })}
-          />
+      <ScrollView contentContainerClassName="p-4" keyboardShouldPersistTaps="handled">
+        <View className="flex-row mb-4">
+          {/* A third of the width, matching a closet tile. Full width here was
+              most of a screen given to a photo the user has just looked at,
+              pushing the attributes they came to check below the fold. */}
+          <View className="w-1/3 aspect-[3/4] rounded-xl overflow-hidden bg-white border border-slate-200">
+            <Image source={{ uri: stage.imageUri }} className="w-full h-full" resizeMode="contain" />
+          </View>
+
+          <View className="flex-1 ml-4 justify-center">
+            <Pressable
+              onPress={() => setStage({ step: 'capture' })}
+              accessibilityRole="button"
+              className="self-start rounded-lg border border-slate-300 bg-white px-3 py-2"
+            >
+              <Text className="text-sm font-medium text-slate-700">Replace image</Text>
+            </Pressable>
+            {transcript ? (
+              <Text className="text-xs text-slate-500 italic mt-3" numberOfLines={4}>
+                “{transcript}”
+              </Text>
+            ) : null}
+          </View>
         </View>
 
-        {transcript ? (
-          <Text className="text-sm text-slate-500 italic mb-4">“{transcript}”</Text>
-        ) : null}
-
-        <ProposalReview
-          proposal={proposal}
+        <AttributeList
           values={values}
+          pending={pending}
           onChange={(patch) => setValues((current) => ({ ...current, ...patch }))}
+          onResolve={(field) =>
+            setPending((current) => {
+              const next = new Set(current);
+              next.delete(field);
+              return next;
+            })
+          }
         />
-
-        {/* Only when nothing proposed a category, so there is always exactly
-            one place to set it and never two. Detection usually fills this in
-            from the photo before a word is spoken. */}
-        {proposal.category === undefined ? (
-          <OptionRow
-            label="Category"
-            options={ALL_CATEGORIES}
-            value={values.category}
-            onChange={(category) => setValues((current) => ({ ...current, category }))}
-          />
-        ) : null}
       </ScrollView>
 
-      <View className="flex-row items-center px-4 py-3 bg-white border-t border-slate-200">
-        <View className="flex-1 mr-3">
-          <PrimaryButton
-            label={saving ? 'Saving…' : 'Save item'}
-            onPress={() => void save(imageUri)}
-            disabled={saving}
-          />
-        </View>
-        {isVoiceConfigured() ? (
-          <VoiceBar
-            pipeline={openAIVoicePipeline}
-            onProposal={applyProposal}
-            onTranscript={setTranscript}
-          />
-        ) : null}
-      </View>
+      {isVoiceConfigured() ? (
+        <VoiceBar
+          pipeline={openAIVoicePipeline}
+          onProposal={applyProposal}
+          onTranscript={setTranscript}
+        />
+      ) : null}
     </KeyboardAvoidingView>
   );
 }

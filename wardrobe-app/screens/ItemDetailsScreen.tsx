@@ -1,5 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { EmptyState } from '../components/EmptyState';
@@ -77,6 +86,7 @@ function ReadRow({ label, value }: { label: string; value: string }) {
 export function ItemDetailsScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { itemId } = useRoute<RouteProp<RootStackParamList, 'ItemDetails'>>().params;
+  const { height: windowHeight } = useWindowDimensions();
 
   const { data: item, error, loading, reload } = useDbQuery((db) => getItem(db, itemId), [itemId]);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -127,7 +137,11 @@ export function ItemDetailsScreen() {
           accessibilityLabel={editing ? 'Stop editing' : 'Edit item'}
           className="px-2 py-1"
         >
-          <Text className="text-base text-slate-900">{editing ? 'Done' : '✎'}</Text>
+          {editing ? (
+            <Text className="text-base font-semibold text-slate-900">Done</Text>
+          ) : (
+            <Ionicons name="create-outline" size={22} color="#0f172a" />
+          )}
         </Pressable>
       ),
     });
@@ -224,7 +238,13 @@ export function ItemDetailsScreen() {
           tapping it by accident used to launch the picker and lose the user's
           place. Replacing a photo goes through the button below and nothing
           else. */}
-      <View className="aspect-[3/4] bg-slate-100 items-center justify-center">
+      {/* Capped at a third of the screen. At 3:4 full width the photo was most
+          of a phone screen, so the attributes the user opened the item to read
+          began below the fold. */}
+      <View
+        className="bg-white items-center justify-center border-b border-slate-200"
+        style={{ height: windowHeight / 3 }}
+      >
         {capturing ? (
           <ActivityIndicator />
         ) : (

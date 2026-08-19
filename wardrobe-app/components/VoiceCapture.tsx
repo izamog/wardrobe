@@ -1,5 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Pressable, Text, View } from 'react-native';
+import { Alert, Linking, Pressable, Text, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BouncingDots } from './BouncingDots';
 import {
   AudioModule,
   RecordingPresets,
@@ -33,7 +36,7 @@ function discardRecording(uri: string | null): void {
 }
 
 /**
- * Hold-to-talk capture as a single button, sized to sit in a bottom bar.
+ * Hold-to-talk capture as a bottom bar: a prompt on the left, the button right.
  *
  * The recording is deleted on every path — success, failure, and permission
  * refusal — and is never copied anywhere permanent. Audio does leave the
@@ -119,31 +122,48 @@ export function VoiceBar({
 
   const busy = stage === 'transcribing' || stage === 'extracting';
   const seconds = Math.floor((recorderState.durationMillis ?? 0) / 1000);
+  const insets = useSafeAreaInsets();
 
   return (
-    <View className="items-center">
+    <View
+      className="flex-row items-center px-4 pt-3 bg-white border-t border-slate-200"
+      // The home indicator sits over anything drawn at the very bottom, which
+      // put the microphone half under it. The inset comes from the device, so
+      // this is right on every model; the extra 12 keeps it comfortably clear
+      // rather than merely legal.
+      style={{ paddingBottom: insets.bottom + 12 }}
+    >
+      <View className="flex-1 mr-4">
+        {busy ? (
+          <BouncingDots />
+        ) : stage === 'recording' ? (
+          <Text className="text-sm font-medium text-slate-900">Listening… {seconds}s</Text>
+        ) : (
+          <>
+            <Text className="text-sm font-medium text-slate-900">Describe your item</Text>
+            <Text className="text-xs text-slate-500 mt-0.5">
+              Brand, cost, colour, new or second-hand
+            </Text>
+          </>
+        )}
+      </View>
+
       <Pressable
         onPressIn={() => void start()}
         onPressOut={() => void stopAndIngest()}
         disabled={busy}
         accessibilityRole="button"
         accessibilityLabel="Hold to describe this item"
-        className={`w-14 h-14 rounded-full items-center justify-center ${
+        className={`w-16 h-16 rounded-full items-center justify-center ${
           stage === 'recording' ? 'bg-rose-600' : busy ? 'bg-slate-200' : 'bg-slate-900'
         }`}
       >
-        {busy ? (
-          <ActivityIndicator color="#0f172a" />
-        ) : (
-          <Text className="text-2xl">{stage === 'recording' ? '⏺' : '🎤'}</Text>
+        {/* No glyph while recording: the button turning red is the whole
+            message, and an icon on top of it just competes. */}
+        {stage === 'recording' ? null : (
+          <Ionicons name="mic" size={28} color={busy ? '#94a3b8' : '#ffffff'} />
         )}
       </Pressable>
-
-      {stage !== 'idle' ? (
-        <Text className="text-[11px] text-slate-500 mt-1 absolute -top-5">
-          {stage === 'recording' ? `${seconds}s` : stage === 'transcribing' ? 'Hearing…' : 'Reading…'}
-        </Text>
-      ) : null}
     </View>
   );
 }

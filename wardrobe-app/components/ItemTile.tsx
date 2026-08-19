@@ -43,7 +43,7 @@ export function ItemTile({
     // and one banner. A fixed third keeps every tile the same size whatever
     // the count. The fraction must match GRID_COLUMNS above.
     <Pressable onPress={onPress} className="w-1/3 p-1.5" accessibilityRole="button">
-      <View className="aspect-[3/4] rounded-xl overflow-hidden bg-slate-100 items-center justify-center">
+      <View className="aspect-[3/4] rounded-xl overflow-hidden bg-white border border-slate-200 items-center justify-center">
         <StoredImage
           path={item.imagePath}
           placeholder="No photo"

@@ -93,8 +93,13 @@ function centeredFallback(imageWidth: number, imageHeight: number): CropRect {
  * Prefers TARGET_ASPECT but never at the garment's expense. A wide piece — a
  * scarf laid flat — cannot fit a 3:4 portrait frame without losing its ends,
  * so when the image has no room to grow, the rectangle keeps whatever shape
- * contains the whole piece and the tile letterboxes it instead. Cropping is
- * the one step that destroys pixels; letterboxing is reversible.
+ * contains the whole piece.
+ *
+ * The shortfall is made up at display time: tiles are 3:4 with a white
+ * background and scale to fit, so a wide garment shot on white gains white
+ * bands above and below and looks padded rather than cropped. Doing it in the
+ * file instead would need expo-image-manipulator's extent(), which is
+ * web-only, so on iOS this is the whole of the mechanism.
  *
  * The steps: pad by LEEWAY, grow towards TARGET_ASPECT, shrink if that
  * overflowed the image, then restore anything the shrink took from the padded
