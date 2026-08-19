@@ -16,25 +16,13 @@ import { useDbQuery } from '../hooks/useDbQuery';
 import { getItem, updateItem, type ItemUpdate } from '../services/items';
 import { removeItem, replaceItemImage } from '../services/itemActions';
 import { withDb } from '../services/database';
-import { ALL_CATEGORIES } from '../utils/categories';
+import { ALL_CATEGORIES, beltLoopsApply, hardwareColorApplies } from '../utils/categories';
 import { ALL_MATERIALS } from '../utils/materials';
 import { costPerWear, formatCost, parseCost, parseScale, SCALE_MAX } from '../utils/format';
 import type { RootStackParamList } from '../navigation/types';
 import type { Category, ClothingItem, HardwareColor } from '../types/wardrobe';
 
 const HARDWARE_COLORS: readonly HardwareColor[] = ['None', 'Gold', 'Silver'];
-
-/**
- * Hardware colour is only worth recording where it drives a decision.
- *
- * Phase 4 matches a belt's hardware against a bag's; nothing consults the
- * finish on a t-shirt. Asking for it everywhere is a question with no
- * consequence attached.
- */
-const hardwareColorApplies = (category: Category) => category === 'Belt' || category === 'Bag';
-
-/** Only bottoms have belt loops, and only bottoms decide whether a belt is wearable. */
-const beltLoopsApply = (category: Category) => category === 'Bottom';
 
 /**
  * The edit form's own state, strings wherever the user types.
@@ -91,7 +79,7 @@ export function ItemDetailsScreen() {
       void (async () => {
         if (!item) return;
         try {
-          await replaceItemImage(item, uri);
+          await replaceItemImage({ runQuery: withDb }, item, uri);
           await reload();
         } catch (e) {
           console.error('Failed to replace photo:', e);
@@ -179,7 +167,7 @@ export function ItemDetailsScreen() {
             try {
               // Removes the row, its photos and, through the foreign key, its
               // match and dismatch records.
-              await removeItem(item);
+              await removeItem({ runQuery: withDb }, item);
               navigation.goBack();
             } catch (e) {
               console.error('Failed to delete item:', e);
@@ -289,7 +277,7 @@ export function ItemDetailsScreen() {
           <View className="flex-row">
             <View className="flex-1 mr-2">
               <TextField
-                label={`Warmth (1-${SCALE_MAX})`}
+                label={`Warmth (0-${SCALE_MAX})`}
                 value={draft.inferredWarmth}
                 onChangeText={(v) => set('inferredWarmth', v)}
                 keyboardType="number-pad"
@@ -298,7 +286,7 @@ export function ItemDetailsScreen() {
             </View>
             <View className="flex-1 ml-2">
               <TextField
-                label={`Windproof (1-${SCALE_MAX})`}
+                label={`Windproof (0-${SCALE_MAX})`}
                 value={draft.inferredWind}
                 onChangeText={(v) => set('inferredWind', v)}
                 keyboardType="number-pad"

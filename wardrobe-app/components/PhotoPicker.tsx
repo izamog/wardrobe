@@ -39,7 +39,7 @@ export function usePhotoCapture(onPicked: (uri: string) => void) {
           if (picked.reason === 'permission-denied') explainPermissionDenied(source);
           return;
         }
-        onPicked(await prepareImage(picked.uri));
+        onPicked(await prepareImage(picked.image));
       } catch (e) {
         console.error('Photo capture failed:', e);
         Alert.alert('Could not use that photo', 'Please try another one.');

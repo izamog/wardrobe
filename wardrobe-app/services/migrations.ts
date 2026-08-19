@@ -375,6 +375,89 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX idx_items_category ON ClothingItems(category);
   CREATE INDEX idx_compat_item_b ON Item_Compatibility(item_b_id);
   `,
+
+  // v5 -> v6: warmth and windproof go back to 0-10.
+  //
+  // v5 narrowed them to 0-5 and this reverses it, so on a database that has
+  // not yet run either the pair is a no-op in schema terms. Appending rather
+  // than editing v5 is not bureaucracy: a device that already ran v5 will
+  // never run it again, so editing it there would leave the column at 0-5
+  // while this build believes it is 0-10, and the mismatch would only surface
+  // as a CHECK failure the first time someone typed a 7.
+  //
+  // The cost of appending is that v5's clamp still runs on a database sitting
+  // at v4, so a hand-set value above 5 is lost on the way through. These are
+  // placeholders that Phase 3 regenerates, so that is the cheaper of the two
+  // risks.
+  //
+  // 0-10 is the scale Phase 5's thermal targets are computed on; the two have
+  // to agree because an outfit qualifies when its pieces' scores sum to at
+  // least the target.
+  `
+  CREATE TABLE ClothingItems_new (
+    id TEXT PRIMARY KEY NOT NULL,
+    imagePath TEXT NOT NULL,
+    originalImagePath TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL
+      CHECK (category IN (
+        'T-Shirt','Top','Shirt','Cardigan','Sweater',
+        'Jacket','Coat',
+        'Bottom','Shoes','Belt','Bag','Scarf'
+      )),
+    brand TEXT NOT NULL DEFAULT 'Unknown',
+    costMinorUnits INTEGER NOT NULL DEFAULT 0 CHECK (costMinorUnits >= 0),
+    isSecondHand INTEGER NOT NULL DEFAULT 0 CHECK (isSecondHand IN (0,1)),
+    materials TEXT NOT NULL DEFAULT '[]',
+    hardwareColor TEXT NOT NULL DEFAULT 'None'
+      CHECK (hardwareColor IN ('Gold','Silver','None')),
+    hasBeltLoops INTEGER NOT NULL DEFAULT 0 CHECK (hasBeltLoops IN (0,1)),
+    inferredWarmth INTEGER NOT NULL DEFAULT 0 CHECK (inferredWarmth BETWEEN 0 AND 10),
+    inferredWind INTEGER NOT NULL DEFAULT 0 CHECK (inferredWind BETWEEN 0 AND 10),
+    wearCount INTEGER NOT NULL DEFAULT 0 CHECK (wearCount >= 0),
+    createdAt TEXT NOT NULL
+  );
+
+  INSERT INTO ClothingItems_new (
+    id, imagePath, originalImagePath, category, brand, costMinorUnits, isSecondHand,
+    materials, hardwareColor, hasBeltLoops, inferredWarmth, inferredWind, wearCount, createdAt
+  )
+  SELECT
+    id, imagePath, originalImagePath, category, brand, costMinorUnits, isSecondHand,
+    materials, hardwareColor, hasBeltLoops, inferredWarmth, inferredWind, wearCount, createdAt
+  FROM ClothingItems;
+
+  CREATE TABLE Item_Compatibility_backup (
+    id TEXT NOT NULL,
+    item_a_id TEXT NOT NULL,
+    item_b_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    createdAt TEXT NOT NULL
+  );
+  INSERT INTO Item_Compatibility_backup (id, item_a_id, item_b_id, status, createdAt)
+    SELECT id, item_a_id, item_b_id, status, createdAt FROM Item_Compatibility;
+
+  DROP TABLE Item_Compatibility;
+  DROP TABLE ClothingItems;
+  ALTER TABLE ClothingItems_new RENAME TO ClothingItems;
+
+  CREATE TABLE Item_Compatibility (
+    id TEXT PRIMARY KEY NOT NULL,
+    item_a_id TEXT NOT NULL,
+    item_b_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('MATCH','DISMATCH')),
+    createdAt TEXT NOT NULL,
+    FOREIGN KEY (item_a_id) REFERENCES ClothingItems(id) ON DELETE CASCADE,
+    FOREIGN KEY (item_b_id) REFERENCES ClothingItems(id) ON DELETE CASCADE,
+    CHECK (item_a_id < item_b_id),
+    UNIQUE(item_a_id, item_b_id)
+  );
+  INSERT INTO Item_Compatibility (id, item_a_id, item_b_id, status, createdAt)
+    SELECT id, item_a_id, item_b_id, status, createdAt FROM Item_Compatibility_backup;
+  DROP TABLE Item_Compatibility_backup;
+
+  CREATE INDEX idx_items_category ON ClothingItems(category);
+  CREATE INDEX idx_compat_item_b ON Item_Compatibility(item_b_id);
+  `,
 ];
 
 /**

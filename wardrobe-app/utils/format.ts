@@ -38,16 +38,17 @@ export function costPerWear(costMinorUnits: number, wearCount: number): string |
 /**
  * Highest value on the warmth and windproof scales.
  *
- * 1-5, with 0 meaning "not assessed yet" — which is every item until Phase 3
- * starts deriving these from the spoken description. Mirrored by a CHECK
+ * 0-10, matching the thermal targets Phase 5 computes from the forecast: an
+ * outfit qualifies when its pieces' scores sum to at least the target, so both
+ * sides of that comparison have to share a scale. Mirrored by a CHECK
  * constraint in services/migrations.ts.
  */
-export const SCALE_MAX = 5;
+export const SCALE_MAX = 10;
 
 /**
  * Parses a typed warmth or windproof value.
  *
- * Returns null for anything outside 0-{SCALE_MAX} or non-integer, so the form
+ * Returns null for anything outside 0-SCALE_MAX or non-integer, so the form
  * can refuse the write rather than handing the CHECK constraint a value it
  * will reject with a stack trace. An empty field is 0, not an error: these
  * are meant to be left alone until the app fills them in.

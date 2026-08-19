@@ -25,6 +25,18 @@ describe('itemImageRelativePath', () => {
     );
   });
 
+  it('refuses an id that would place the file outside the items directory', () => {
+    // The write-side counterpart to resolveImagePath's guard. Ids are UUIDs so
+    // this cannot happen today; it fails loudly rather than escaping quietly.
+    for (const bad of ['../escape', 'a/b', '..', '', 'a\\b', 'a\0b']) {
+      expect(() => itemImageRelativePath(bad, '.jpg')).toThrow(/Unsafe item id/);
+    }
+  });
+
+  it('refuses a variant that would do the same', () => {
+    expect(() => itemImageRelativePath('abc', '.jpg', '../x')).toThrow(/Unsafe image variant/);
+  });
+
   it('never returns an absolute path', () => {
     expect(itemImageRelativePath('abc', '.jpg').startsWith('/')).toBe(false);
   });

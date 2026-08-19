@@ -5,6 +5,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { OptionRow, PrimaryButton } from '../components/Form';
 import { PhotoPreview, PhotoSourceChooser } from '../components/PhotoPicker';
 import { createItem } from '../services/itemActions';
+import { withDb } from '../services/database';
 import { ALL_CATEGORIES } from '../utils/categories';
 import type { RootStackParamList } from '../navigation/types';
 import type { Category } from '../types/wardrobe';
@@ -43,6 +44,7 @@ export function AddItemScreen() {
     setSaving(true);
     try {
       await createItem(
+        { runQuery: withDb },
         {
           category,
           brand: 'Unknown',

@@ -6,6 +6,7 @@ import {
   itemImageRelativePath,
   resolveImagePath,
 } from '../utils/imagePaths';
+import { resizeTargetFor } from '../utils/imageSizing';
 
 /**
  * The one module that touches the camera, the photo library and the disk.
@@ -14,16 +15,6 @@ import {
  * is left here is native calls only, and it is not unit-testable off-device —
  * everything in this file has to be verified by running the app.
  */
-
-/**
- * Longest edge of a stored photo, in pixels.
- *
- * A modern phone camera produces 12MP images of ~4MB. Storing those unchanged
- * would put a gigabyte in the document directory for a few hundred garments,
- * for a picture never shown larger than a phone screen. 1500px is generous for
- * a full-screen view on a 3x display and roughly a tenth of the bytes.
- */
-const MAX_IMAGE_DIMENSION = 1500;
 
 /**
  * JPEG quality for stored photos, 0-1.
@@ -42,7 +33,14 @@ export type PickSource = 'camera' | 'library';
 /** Why a pick produced no image, so the caller can say something specific. */
 export type PickFailure = 'cancelled' | 'permission-denied';
 
-export type PickResult = { ok: true; uri: string } | { ok: false; reason: PickFailure };
+/** A picked photo, with the dimensions the resize step needs. */
+export interface PickedImage {
+  uri: string;
+  width: number;
+  height: number;
+}
+
+export type PickResult = { ok: true; image: PickedImage } | { ok: false; reason: PickFailure };
 
 /**
  * Asks for a photo from the camera or the library.
@@ -74,7 +72,9 @@ export async function pickImage(source: PickSource): Promise<PickResult> {
       : await ImagePicker.launchImageLibraryAsync(options);
 
   if (result.canceled || result.assets.length === 0) return { ok: false, reason: 'cancelled' };
-  return { ok: true, uri: result.assets[0].uri };
+
+  const asset = result.assets[0];
+  return { ok: true, image: { uri: asset.uri, width: asset.width, height: asset.height } };
 }
 
 /**
@@ -84,9 +84,15 @@ export async function pickImage(source: PickSource): Promise<PickResult> {
  * storage until the item is actually saved, so abandoning the add flow leaves
  * only a cache file, which the system reclaims on its own.
  */
-export async function prepareImage(uri: string): Promise<string> {
-  const context = ImageManipulator.ImageManipulator.manipulate(uri);
-  context.resize({ width: MAX_IMAGE_DIMENSION });
+export async function prepareImage(picked: PickedImage): Promise<string> {
+  const context = ImageManipulator.ImageManipulator.manipulate(picked.uri);
+
+  // Skipped entirely for a photo already within the cap. resize() has no
+  // "only if larger" mode, so calling it unconditionally scaled small images
+  // up — more bytes, no more detail.
+  const target = resizeTargetFor(picked.width, picked.height);
+  if (target) context.resize(target);
+
   const image = await context.renderAsync();
   const saved = await image.saveAsync({
     compress: IMAGE_QUALITY,

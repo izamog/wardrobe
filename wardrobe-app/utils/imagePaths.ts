@@ -1,3 +1,15 @@
+/** True when a string is safe to use as a single file-name component. */
+function isPathSafeSegment(segment: string): boolean {
+  return (
+    segment.length > 0 &&
+    !segment.includes('/') &&
+    !segment.includes('\\') &&
+    !segment.includes('\0') &&
+    segment !== '.' &&
+    segment !== '..'
+  );
+}
+
 /** Sub-directory of the app's document directory where item photos live. */
 export const ITEM_IMAGE_DIRECTORY = 'items';
 
@@ -17,6 +29,17 @@ export function itemImageRelativePath(
   extension: string,
   variant?: string,
 ): string {
+  // Ids are generated UUIDs, so this cannot fire today. It exists because this
+  // function is the write side of the sandbox boundary that resolveImagePath
+  // guards on the read side, and an id carrying a separator would put a file
+  // outside the document directory rather than merely fail to load one.
+  if (!isPathSafeSegment(itemId)) {
+    throw new Error(`Unsafe item id for a file name: ${JSON.stringify(itemId)}`);
+  }
+  if (variant !== undefined && !isPathSafeSegment(variant)) {
+    throw new Error(`Unsafe image variant: ${JSON.stringify(variant)}`);
+  }
+
   const suffix = variant ? `-${variant}` : '';
   const dot = extension.startsWith('.') ? extension : `.${extension}`;
   return `${ITEM_IMAGE_DIRECTORY}/${itemId}${suffix}${dot}`;

@@ -88,3 +88,19 @@ export function getComplementaryCategories(sourceCategory: Category): Category[]
     return !(ACCESSORY_ONLY_GROUPS.has(sourceGroup) && ACCESSORY_ONLY_GROUPS.has(candidateGroup));
   });
 }
+
+/**
+ * Whether hardware colour is worth recording for this category.
+ *
+ * Only where it drives a decision: Phase 4 matches a belt's finish against a
+ * bag's, and nothing consults the finish on a t-shirt. Asking everywhere is a
+ * question with no consequence attached.
+ */
+export function hardwareColorApplies(category: Category): boolean {
+  return category === 'Belt' || category === 'Bag';
+}
+
+/** Whether belt loops are worth recording. Only bottoms have them, and only bottoms make a belt wearable. */
+export function beltLoopsApply(category: Category): boolean {
+  return category === 'Bottom';
+}

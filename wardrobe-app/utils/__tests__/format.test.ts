@@ -50,9 +50,8 @@ describe('parseScale', () => {
   });
 
   it('rejects values past the top of the scale', () => {
-    // The old column allowed up to 10; the UI must not let one back in.
     expect(parseScale(String(SCALE_MAX + 1))).toBeNull();
-    expect(parseScale('10')).toBeNull();
+    expect(parseScale('99')).toBeNull();
   });
 
   it('rejects negatives, decimals and non-numbers', () => {

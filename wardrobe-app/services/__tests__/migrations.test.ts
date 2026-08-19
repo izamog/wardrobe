@@ -393,6 +393,49 @@ describe('v3 -> v4: settling the garment vocabulary', () => {
   });
 });
 
+describe('v5 -> v6: warmth and windproof widened back to 0-10', () => {
+  function v5Db(): DatabaseSync {
+    const db = freshDb();
+    for (const migration of MIGRATIONS.slice(0, 5)) db.exec(migration);
+    db.exec('PRAGMA user_version = 5;');
+    return db;
+  }
+
+  it('accepts the full scale afterwards, and nothing beyond it', async () => {
+    const db = v5Db();
+    await runMigrations(adapt(db));
+
+    const insert = (id: string, warmth: number) =>
+      db
+        .prepare(
+          `INSERT INTO ClothingItems (id, imagePath, category, inferredWarmth, createdAt)
+           VALUES (?,?,?,?,?)`,
+        )
+        .run(id, '', 'Top', warmth, 'then');
+
+    expect(() => insert('at-max', SCALE_MAX)).not.toThrow();
+    expect(() => insert('over', SCALE_MAX + 1)).toThrow(/CHECK constraint failed/);
+  });
+
+  it('keeps rows and verdicts across the rebuild', async () => {
+    const db = v5Db();
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('aaa', 'items/a.jpg', 'Top', 'then');
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('bbb', '', 'Bottom', 'then');
+    db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
+      .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM ClothingItems').get()).toEqual({ n: 2 });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM Item_Compatibility').get()).toEqual({ n: 1 });
+    expect(db.prepare('SELECT imagePath AS p FROM ClothingItems WHERE id=?').get('aaa')).toEqual({
+      p: 'items/a.jpg',
+    });
+  });
+});
+
 describe('v4 -> v5: warmth and windproof rescaled to 0-5', () => {
   /** Builds a database at exactly v4, while the columns still allowed 0-10. */
   function v4Db(): DatabaseSync {
@@ -414,13 +457,15 @@ describe('v4 -> v5: warmth and windproof rescaled to 0-5', () => {
     db.prepare('SELECT inferredWarmth AS warmth, inferredWind AS wind FROM ClothingItems WHERE id=?')
       .get(id);
 
-  it('clamps values that were legal on the old wider scale', async () => {
+  it('clamps values above its own ceiling', async () => {
+    // 5 is v5's ceiling, not SCALE_MAX: v6 widens the column again, but the
+    // clamp v5 applied on the way through is not undone.
     const db = v4Db();
     addV4Item(db, 'hot', 9, 10);
 
     await runMigrations(adapt(db));
 
-    expect(scalesOf(db, 'hot')).toEqual({ warmth: SCALE_MAX, wind: SCALE_MAX });
+    expect(scalesOf(db, 'hot')).toEqual({ warmth: 5, wind: 5 });
   });
 
   it('leaves values already on the new scale untouched', async () => {
@@ -430,20 +475,6 @@ describe('v4 -> v5: warmth and windproof rescaled to 0-5', () => {
     await runMigrations(adapt(db));
 
     expect(scalesOf(db, 'mild')).toEqual({ warmth: 3, wind: 0 });
-  });
-
-  it('rejects the old top of the scale afterwards', async () => {
-    const db = v4Db();
-    await runMigrations(adapt(db));
-
-    expect(() =>
-      db
-        .prepare(
-          `INSERT INTO ClothingItems (id, imagePath, category, inferredWarmth, createdAt)
-           VALUES (?,?,?,?,?)`,
-        )
-        .run('too-warm', '', 'Top', 10, 'then'),
-    ).toThrow(/CHECK constraint failed/);
   });
 
   it('keeps every verdict across this rebuild too', async () => {

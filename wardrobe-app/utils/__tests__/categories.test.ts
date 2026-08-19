@@ -1,5 +1,11 @@
 /** @jest-environment node */
-import { ALL_CATEGORIES, CATEGORY_GROUP, getComplementaryCategories } from '../categories';
+import {
+  ALL_CATEGORIES,
+  beltLoopsApply,
+  CATEGORY_GROUP,
+  getComplementaryCategories,
+  hardwareColorApplies,
+} from '../categories';
 import { canLayerEitherWay } from '../layering';
 import type { Category } from '../../types/wardrobe';
 
@@ -106,5 +112,15 @@ describe('CATEGORY_GROUP', () => {
     const keys = Object.keys(CATEGORY_GROUP) as Category[];
     expect([...ALL_CATEGORIES].sort()).toEqual(keys.sort());
     expect(new Set(ALL_CATEGORIES).size).toBe(ALL_CATEGORIES.length);
+  });
+});
+
+describe('attribute applicability', () => {
+  it('asks for hardware colour on belts and bags only', () => {
+    expect(ALL_CATEGORIES.filter(hardwareColorApplies)).toEqual(['Belt', 'Bag']);
+  });
+
+  it('asks for belt loops on bottoms only', () => {
+    expect(ALL_CATEGORIES.filter(beltLoopsApply)).toEqual(['Bottom']);
   });
 });

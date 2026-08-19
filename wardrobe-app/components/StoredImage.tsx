@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Image, Text } from 'react-native';
 import { imageUriFor } from '../services/images';
 
@@ -18,8 +18,23 @@ export function StoredImage({
   placeholderClassName?: string;
 }) {
   const uri = imageUriFor(path);
+  // A stored path whose file has gone missing used to render as an empty grey
+  // box, which reads as a layout bug rather than as missing data. Falling back
+  // to the placeholder says what actually happened.
+  const [failed, setFailed] = useState(false);
 
-  if (!uri) return <Text className={placeholderClassName}>{placeholder}</Text>;
+  // Tiles are recycled as the grid scrolls, so a failure recorded for one item
+  // must not stick to the next one shown in the same slot.
+  useEffect(() => setFailed(false), [uri]);
 
-  return <Image source={{ uri }} className="w-full h-full" resizeMode="cover" />;
+  if (!uri || failed) return <Text className={placeholderClassName}>{placeholder}</Text>;
+
+  return (
+    <Image
+      source={{ uri }}
+      className="w-full h-full"
+      resizeMode="cover"
+      onError={() => setFailed(true)}
+    />
+  );
 }
