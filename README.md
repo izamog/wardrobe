@@ -7,22 +7,29 @@ The app lives in `wardrobe-app/`. Everything is on-device; there is no server.
 
 ## Status
 
-**Phase 2 — photos.** Adding an item takes a photo and a category and nothing
-else, because populating a wardrobe is the same two actions repeated dozens of
-times. Everything else — brand, cost, materials, second-hand — is filled in
-later on Item Details. Browse and filter the closet, edit or delete an item
-(its photos and match records go with it), replace a photo, and rate pairs as
-match/dismatch either from an item or through the Speed Matcher.
+**Phase 3 — voice ingestion.** Adding an item is: take a photo, hold a button
+and describe it, then confirm what was heard. Each attribute the model picked
+out appears as its own card with accept/reject; rejecting opens an editor for
+that field. Attributes it did not hear get no card and keep their defaults.
 
-Background removal is **deferred**. Every cloud API's free tier is too small to
-populate a wardrobe, and the free unlimited option — Apple's on-device subject
-lifting — needs a native module, which Expo Go cannot load. It lands when the
-project moves to a development build, which Phase 6 requires anyway. Photos are
-stored as taken, and every item keeps its original so removal can later be run
-over an existing wardrobe without re-photographing anything.
+Colour is now recorded — up to two per garment, enforced by the schema rather
+than by app code.
 
-Still stubs: **Today** (weather and outfit generation, Phase 5) and **Calendar**
-(outfit logs, collages and stats, Phase 6).
+Background removal is still deferred to the development build Phase 6
+requires; see below. Still stubs: **Today** (Phase 5) and **Calendar** (Phase 6).
+
+### Voice setup
+
+Copy `wardrobe-app/.env.example` to `.env` and add an OpenAI key. Without one
+the app skips the voice step entirely and everything else works.
+
+Audio leaves the device to be transcribed and the recording is deleted
+immediately afterwards, on every path including failure. `EXPO_PUBLIC_` values
+are inlined into the JS bundle in plain text, which is fine for a personal
+build and **not** fine for TestFlight — distribution needs the call moved
+behind a server.
+
+Roughly £0.002 per item, with no monthly cap.
 
 ## Running it
 
@@ -100,6 +107,29 @@ URI, so the old picture would keep rendering.
 Writes that span both stores live in `services/itemActions.ts`, because the
 ordering is the interesting part: the file is written before the row and
 removed again if the row fails, so a row never points at a missing image.
+
+### Colour
+
+Two columns, `primaryColor` and `secondaryColor`, not a list. That puts "at
+most two colours" in the schema instead of in app code and keeps colour
+indexable for Phase 5. Four CHECK constraints carry the rules: each value is in
+the vocabulary or empty, no second without a first, never the same colour
+twice, and `Multi` never appears alongside anything — in either column.
+
+`utils/colors.ts`'s `toColorPair` applies exactly those rules, so neither the
+picker nor a spoken description can produce a pair SQLite would reject.
+
+### Voice ingestion
+
+`utils/proposals.ts` is the boundary between the model and the database. A
+language model is an input source, not an authority: structured output
+constrains the shape of a reply and nothing about the values in it, so every
+field is re-checked there against the same vocabularies the CHECK constraints
+enforce. Anything invalid becomes "not heard" rather than reaching SQLite.
+
+Facts and estimates are treated differently on purpose. A bad brand or price is
+discarded; an out-of-range warmth is clamped, because a model answering 12 for
+a parka has still said something true.
 
 ### Categories and layering
 

@@ -49,6 +49,38 @@ export type Category =
  */
 export type HardwareColor = 'Gold' | 'Silver' | 'None';
 
+/**
+ * The colour of the fabric itself.
+ *
+ * Distinct from HardwareColor, which is the finish on a buckle or clasp — an
+ * item can be a Brown belt with Gold hardware.
+ *
+ * Each member has a matching entry in the colour CHECK constraints in
+ * services/migrations.ts. Adding one means adding a migration.
+ */
+export type ItemColor =
+  | 'Black'
+  | 'Grey'
+  | 'White'
+  | 'Cream'
+  | 'Beige'
+  | 'Tan'
+  | 'Brown'
+  | 'Burgundy'
+  | 'Red'
+  | 'Pink'
+  | 'Orange'
+  | 'Yellow'
+  | 'Olive'
+  | 'Green'
+  | 'Teal'
+  | 'Blue'
+  | 'Navy'
+  | 'Purple'
+  | 'Gold'
+  | 'Silver'
+  | 'Multi';
+
 export type CompatibilityStatus = 'MATCH' | 'DISMATCH';
 
 export interface ClothingItem {
@@ -82,6 +114,16 @@ export interface ClothingItem {
   isSecondHand: boolean;
   /** Stored as a JSON array string in SQLite; parse on read, stringify on write. */
   materials: string[];
+  /**
+   * The garment's main colour, or '' when not recorded.
+   *
+   * Stored as two columns rather than a list because the "at most two" rule is
+   * then the schema's job, not the app's, and because Phase 5 filters on
+   * colour — a JSON array would not be indexable.
+   */
+  primaryColor: ItemColor | '';
+  /** A second colour, or ''. Never set without a primary, never equal to it, never alongside 'Multi'. */
+  secondaryColor: ItemColor | '';
   hardwareColor: HardwareColor;
   hasBeltLoops: boolean;
   /**

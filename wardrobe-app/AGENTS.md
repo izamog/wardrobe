@@ -61,6 +61,20 @@ overwriting a path leaves the old image on screen.
 File before row on create, row before file on delete — read the comments there
 before changing the order.
 
+## Voice ingestion
+
+Model output is untrusted. Everything a language model returns goes through
+`utils/proposals.ts`, which validates each field against the same vocabularies
+the CHECK constraints enforce; invalid values become "not heard". Never widen
+that boundary to trust a field because structured output "guarantees" it —
+structured output guarantees shape, not values.
+
+Recordings are deleted in a `finally` and never written to permanent storage.
+
+The OpenAI key comes from `EXPO_PUBLIC_OPENAI_API_KEY`, which is inlined into
+the bundle in plain text. Fine for a personal build; move it behind a server
+before any distribution. When it is unset the app skips the voice step.
+
 ## Categories
 
 `Category` is the garment type; `CATEGORY_GROUP` in `utils/categories.ts` maps

@@ -93,6 +93,8 @@ const failingRunQuery: RunQuery = () => Promise.reject(new Error('database is lo
 
 const draft: ItemDraft = {
   category: 'T-Shirt',
+  primaryColor: '',
+  secondaryColor: '',
   brand: 'Unknown',
   costMinorUnits: 0,
   isSecondHand: false,

@@ -10,7 +10,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "Wardrobe uses the camera to photograph your clothes. Photos stay on this device.",
-        "NSPhotoLibraryUsageDescription": "Wardrobe lets you choose existing photos of your clothes. Photos stay on this device."
+        "NSPhotoLibraryUsageDescription": "Wardrobe lets you choose existing photos of your clothes. Photos stay on this device.",
+        "NSMicrophoneUsageDescription": "Wardrobe uses the microphone so you can describe an item instead of typing. Recordings are deleted immediately after they are transcribed."
       }
     },
     "android": {
@@ -27,7 +28,8 @@
     },
     "plugins": [
       "expo-sqlite",
-      "expo-image-picker"
+      "expo-image-picker",
+      "expo-audio"
     ]
   }
 }

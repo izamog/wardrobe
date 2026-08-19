@@ -1,5 +1,11 @@
 import * as Crypto from 'expo-crypto';
-import { ClothingItem, Category, CompatibilityStatus, HardwareColor } from '../types/wardrobe';
+import {
+  ClothingItem,
+  Category,
+  CompatibilityStatus,
+  HardwareColor,
+  ItemColor,
+} from '../types/wardrobe';
 
 /**
  * The slice of a database connection this module needs.
@@ -33,6 +39,8 @@ interface ClothingItemRow {
   costMinorUnits: number;
   isSecondHand: number;
   materials: string;
+  primaryColor: string;
+  secondaryColor: string;
   hardwareColor: string;
   hasBeltLoops: number;
   inferredWarmth: number;
@@ -70,6 +78,10 @@ export function rowToItem(row: ClothingItemRow): ClothingItem {
     costMinorUnits: row.costMinorUnits,
     isSecondHand: row.isSecondHand === 1,
     materials: parseMaterials(row.materials),
+    // Safe casts for the same reason as category: the CHECK constraints mean
+    // no other value can reach these columns.
+    primaryColor: row.primaryColor as ItemColor | '',
+    secondaryColor: row.secondaryColor as ItemColor | '',
     hardwareColor: row.hardwareColor as HardwareColor,
     hasBeltLoops: row.hasBeltLoops === 1,
     inferredWarmth: row.inferredWarmth,
@@ -86,7 +98,8 @@ export type NewClothingItem = Omit<ClothingItem, 'id' | 'wearCount' | 'createdAt
 export type ItemUpdate = Partial<Omit<ClothingItem, 'id' | 'wearCount' | 'createdAt'>>;
 
 const ITEM_COLUMNS = `id, imagePath, originalImagePath, category, brand, costMinorUnits, isSecondHand,
-  materials, hardwareColor, hasBeltLoops, inferredWarmth, inferredWind, wearCount, createdAt`;
+  materials, primaryColor, secondaryColor, hardwareColor, hasBeltLoops,
+  inferredWarmth, inferredWind, wearCount, createdAt`;
 
 /**
  * Inserts an item and returns it as stored.
@@ -103,7 +116,7 @@ export async function insertItem(
 ): Promise<ClothingItem> {
   await db.runAsync(
     `INSERT INTO ClothingItems (${ITEM_COLUMNS})
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       item.imagePath,
@@ -113,6 +126,8 @@ export async function insertItem(
       item.costMinorUnits,
       item.isSecondHand ? 1 : 0,
       JSON.stringify(item.materials),
+      item.primaryColor,
+      item.secondaryColor,
       item.hardwareColor,
       item.hasBeltLoops ? 1 : 0,
       item.inferredWarmth,
@@ -185,6 +200,8 @@ const UPDATE_ENCODERS: {
   costMinorUnits: (v) => v,
   isSecondHand: (v) => (v ? 1 : 0),
   materials: (v) => JSON.stringify(v),
+  primaryColor: (v) => v,
+  secondaryColor: (v) => v,
   hardwareColor: (v) => v,
   hasBeltLoops: (v) => (v ? 1 : 0),
   inferredWarmth: (v) => v,

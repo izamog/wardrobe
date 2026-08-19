@@ -152,6 +152,8 @@ describe('v1 -> v2: widening the category constraint', () => {
       id: 'x',
       imagePath: 'items/a.png',
       originalImagePath: 'items/a.png',
+      primaryColor: '',
+      secondaryColor: '',
       category: 'Bottom',
       brand: 'Levis',
       costMinorUnits: 4599,
@@ -480,6 +482,101 @@ describe('v4 -> v5: warmth and windproof rescaled to 0-5', () => {
   it('keeps every verdict across this rebuild too', async () => {
     const db = v4Db();
     addV4Item(db, 'aaa', 0, 0);
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('bbb', '', 'Bottom', 'then');
+    db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
+      .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM Item_Compatibility').get()).toEqual({ n: 1 });
+  });
+});
+
+describe('v6 -> v7: garment colour', () => {
+  function v6Db(): DatabaseSync {
+    const db = freshDb();
+    for (const migration of MIGRATIONS.slice(0, 6)) db.exec(migration);
+    db.exec('PRAGMA user_version = 6;');
+    return db;
+  }
+
+  const addColored = (db: DatabaseSync, id: string, primary: string, secondary: string) =>
+    db
+      .prepare(
+        `INSERT INTO ClothingItems (id, imagePath, category, primaryColor, secondaryColor, createdAt)
+         VALUES (?,?,?,?,?,?)`,
+      )
+      .run(id, '', 'Top', primary, secondary, 'then');
+
+  it('leaves existing rows with no colour recorded', async () => {
+    const db = v6Db();
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('old', 'items/a.jpg', 'Top', 'then');
+
+    await runMigrations(adapt(db));
+
+    expect(
+      db.prepare('SELECT primaryColor AS p, secondaryColor AS s FROM ClothingItems').get(),
+    ).toEqual({ p: '', s: '' });
+  });
+
+  it('accepts one colour, two colours, and none', async () => {
+    const db = v6Db();
+    await runMigrations(adapt(db));
+
+    expect(() => addColored(db, 'none', '', '')).not.toThrow();
+    expect(() => addColored(db, 'one', 'Navy', '')).not.toThrow();
+    expect(() => addColored(db, 'two', 'Navy', 'Cream')).not.toThrow();
+  });
+
+  it('rejects a colour outside the vocabulary', async () => {
+    const db = v6Db();
+    await runMigrations(adapt(db));
+
+    expect(() => addColored(db, 'bad', 'Chartreuse', '')).toThrow(/CHECK constraint failed/);
+    expect(() => addColored(db, 'bad2', 'Navy', 'Chartreuse')).toThrow(/CHECK constraint failed/);
+  });
+
+  it('rejects a second colour with no first', async () => {
+    const db = v6Db();
+    await runMigrations(adapt(db));
+
+    expect(() => addColored(db, 'orphan', '', 'Navy')).toThrow(/CHECK constraint failed/);
+  });
+
+  it('rejects the same colour twice', async () => {
+    const db = v6Db();
+    await runMigrations(adapt(db));
+
+    expect(() => addColored(db, 'dupe', 'Navy', 'Navy')).toThrow(/CHECK constraint failed/);
+  });
+
+  it('rejects Multi paired with a specific colour, in either position', async () => {
+    // Forbidding Multi as the primary is not enough on its own: without the
+    // second rule it slips into the secondary column, which is as meaningless.
+    const db = v6Db();
+    await runMigrations(adapt(db));
+
+    expect(() => addColored(db, 'm1', 'Multi', 'Red')).toThrow(/CHECK constraint failed/);
+    expect(() => addColored(db, 'm2', 'Red', 'Multi')).toThrow(/CHECK constraint failed/);
+    expect(() => addColored(db, 'm3', 'Multi', '')).not.toThrow();
+  });
+
+  it('indexes primaryColor, which Phase 5 filters on', async () => {
+    const db = v6Db();
+    await runMigrations(adapt(db));
+
+    const plan = db
+      .prepare("EXPLAIN QUERY PLAN SELECT * FROM ClothingItems WHERE primaryColor = 'Navy'")
+      .all() as { detail: string }[];
+    expect(plan.map((r) => r.detail).join(' ')).toMatch(/USING (COVERING )?INDEX/);
+  });
+
+  it('keeps every verdict across this rebuild too', async () => {
+    const db = v6Db();
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('aaa', '', 'Top', 'then');
     db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
       .run('bbb', '', 'Bottom', 'then');
     db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')

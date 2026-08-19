@@ -18,9 +18,10 @@ import { removeItem, replaceItemImage } from '../services/itemActions';
 import { withDb } from '../services/database';
 import { ALL_CATEGORIES, beltLoopsApply, hardwareColorApplies } from '../utils/categories';
 import { ALL_MATERIALS } from '../utils/materials';
+import { ALL_COLORS, toColorPair } from '../utils/colors';
 import { costPerWear, formatCost, parseCost, parseScale, SCALE_MAX } from '../utils/format';
 import type { RootStackParamList } from '../navigation/types';
-import type { Category, ClothingItem, HardwareColor } from '../types/wardrobe';
+import type { Category, ClothingItem, HardwareColor, ItemColor } from '../types/wardrobe';
 
 const HARDWARE_COLORS: readonly HardwareColor[] = ['None', 'Gold', 'Silver'];
 
@@ -37,6 +38,8 @@ interface Draft {
   brand: string;
   cost: string;
   isSecondHand: boolean;
+  /** Held as a list because that is what the picker speaks; split into the two columns on save. */
+  colors: ItemColor[];
   materials: string[];
   hardwareColor: HardwareColor;
   hasBeltLoops: boolean;
@@ -50,6 +53,9 @@ function toDraft(item: ClothingItem): Draft {
     brand: item.brand,
     cost: (item.costMinorUnits / 100).toFixed(2),
     isSecondHand: item.isSecondHand,
+    colors: [item.primaryColor, item.secondaryColor].filter(
+      (color): color is ItemColor => color !== '',
+    ),
     materials: item.materials,
     hardwareColor: item.hardwareColor,
     hasBeltLoops: item.hasBeltLoops,
@@ -136,6 +142,9 @@ export function ItemDetailsScreen() {
       costMinorUnits,
       isSecondHand: draft.isSecondHand,
       materials: draft.materials,
+      // toColorPair applies the same rules as the CHECK constraints, so the
+      // form cannot submit a pair SQLite would reject.
+      ...toColorPair(draft.colors),
       // Both of these are only askable for some categories. Clearing them for
       // the rest means recategorising a garment cannot leave an invisible
       // value behind -- Phase 4's belt rules read hasBeltLoops, and would
@@ -240,6 +249,19 @@ export function ItemDetailsScreen() {
           value={draft.cost}
           onChangeText={(v) => set('cost', v)}
           keyboardType="decimal-pad"
+        />
+        <MultiSelectField
+          label="Colours (up to 2)"
+          options={ALL_COLORS}
+          selected={draft.colors}
+          onChange={(next) => {
+            const { primaryColor, secondaryColor } = toColorPair(next as ItemColor[]);
+            set(
+              'colors',
+              [primaryColor, secondaryColor].filter((color): color is ItemColor => color !== ''),
+            );
+          }}
+          emptyLabel="Select colours"
         />
         <MultiSelectField
           label="Materials"

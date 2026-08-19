@@ -6,6 +6,8 @@ const item = (id: string, category: Category): ClothingItem => ({
   id,
   imagePath: '',
   originalImagePath: '',
+  primaryColor: '',
+  secondaryColor: '',
   category,
   brand: id,
   costMinorUnits: 0,
