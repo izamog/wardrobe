@@ -5,14 +5,20 @@
 import { DatabaseSync } from 'node:sqlite';
 import type { MigratableDatabase } from './migrations';
 
-/** Presents a node:sqlite database as the interface runMigrations expects. */
+/**
+ * Presents a node:sqlite database as the interface runMigrations expects.
+ *
+ * node:sqlite is synchronous; execAsync/getFirstAsync return Promise.resolve(...)
+ * rather than being declared async, since neither ever awaits anything.
+ */
 export function adapt(db: DatabaseSync): MigratableDatabase {
   return {
-    execAsync: async (sql: string) => {
+    execAsync: (sql: string) => {
       db.exec(sql);
+      return Promise.resolve();
     },
-    async getFirstAsync<T>(sql: string): Promise<T | null> {
-      return (db.prepare(sql).get() ?? null) as T | null;
+    getFirstAsync<T>(sql: string): Promise<T | null> {
+      return Promise.resolve((db.prepare(sql).get() ?? null) as T | null);
     },
     withTransactionAsync: async (fn: () => Promise<void>) => {
       db.exec('BEGIN');
