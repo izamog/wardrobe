@@ -4,6 +4,12 @@ Local-first iOS app (Expo / React Native) for organising clothing, recording
 pairwise MATCH/DISMATCH compatibility between items, and generating
 weather-appropriate outfits. The app itself lives in `wardrobe-app/`.
 
+## Boundaries
+
+Build/scope constraints — what not to do, and why — live in
+`wardrobe-app/AGENTS.md`. Read it before touching anything under
+`wardrobe-app/`.
+
 ## Agent skills
 
 ### Issue tracker
