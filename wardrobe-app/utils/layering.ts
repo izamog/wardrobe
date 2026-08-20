@@ -94,13 +94,37 @@ export function canLayerEitherWay(a: Category, b: Category): boolean {
 }
 
 /**
- * True when an ordered stack of garments, innermost first, is wearable.
+ * True when every ordered pair in the stack is individually legal.
  *
  * Checks every ordered pair rather than only neighbours. The rules as they
  * stand happen to be transitive, so for this table the two are equivalent —
  * but nothing enforces that, and a rule added later that breaks transitivity
  * would silently start admitting illegal stacks through a neighbours-only
  * check. The all-pairs loop costs nothing at these sizes.
+ */
+function hasIllegalPair(stack: readonly Category[]): boolean {
+  return stack.some((inner, i) => stack.slice(i + 1).some((outer) => !canLayerUnder(inner, outer)));
+}
+
+/**
+ * The Shirt exception: a Shirt already covering a T-Shirt or Top is the
+ * outermost that stack can wear beneath a Sweater. Every pair `hasIllegalPair`
+ * checks is individually legal, so only this three-garment view catches it.
+ */
+function violatesShirtException(stack: readonly Category[]): boolean {
+  for (let i = 0; i < stack.length; i++) {
+    if (stack[i] !== 'Shirt') continue;
+    const overBaseLayer = stack
+      .slice(0, i)
+      .some((worn) => worn === 'T-Shirt' || worn === 'Top');
+    const underSweater = stack.slice(i + 1).some((worn) => worn === 'Sweater');
+    if (overBaseLayer && underSweater) return true;
+  }
+  return false;
+}
+
+/**
+ * True when an ordered stack of garments, innermost first, is wearable.
  *
  * An empty or single-garment stack is wearable. A stack containing anything
  * with no layering rules — a Bottom, a pair of Shoes — is rejected rather than
@@ -109,24 +133,7 @@ export function canLayerEitherWay(a: Category, b: Category): boolean {
  */
 export function isValidLayerStack(stack: readonly Category[]): boolean {
   if (!stack.every(isLayerableCategory)) return false;
-
-  for (let inner = 0; inner < stack.length; inner++) {
-    for (let outer = inner + 1; outer < stack.length; outer++) {
-      if (!canLayerUnder(stack[inner], stack[outer])) return false;
-    }
-  }
-
-  // The Shirt exception: a Shirt already covering a T-Shirt or Top is the
-  // outermost that stack can wear beneath a Sweater. Every pair above is
-  // individually legal, so only this three-garment view rejects it.
-  for (let i = 0; i < stack.length; i++) {
-    if (stack[i] !== 'Shirt') continue;
-    const overBaseLayer = stack
-      .slice(0, i)
-      .some((worn) => worn === 'T-Shirt' || worn === 'Top');
-    const underSweater = stack.slice(i + 1).some((worn) => worn === 'Sweater');
-    if (overBaseLayer && underSweater) return false;
-  }
-
+  if (hasIllegalPair(stack)) return false;
+  if (violatesShirtException(stack)) return false;
   return true;
 }
