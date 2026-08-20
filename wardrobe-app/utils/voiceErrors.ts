@@ -63,33 +63,36 @@ export function failureFromStatus(status: number): VoiceFailure {
 }
 
 /**
- * What to tell the user.
+ * What to tell the user, keyed by reason.
  *
  * Each reason gets its own wording because each has a different next step, and
  * "something went wrong" leaves someone retrying a thing that will never work.
  * Deliberately says nothing about endpoints, models or response bodies.
+ *
+ * A `Record` rather than a `switch` so this is a lookup, not a branch tree —
+ * `describeVoiceFailure` below reads it through `Map.get`, not bracket
+ * indexing, so it isn't a dynamic-property-access sink: `reason` never comes
+ * from anywhere but this closed union.
  */
+const VOICE_FAILURE_MESSAGES: Record<VoiceFailure, string> = {
+  'no-key': 'Voice input is not set up on this build. You can type the details instead.',
+  unauthorized: 'The API key was rejected. Check it in .env, then restart with: npx expo start -c',
+  forbidden: 'The key is valid but this account is not allowed to use that model. See the details below.',
+  'rate-limited': 'Too many requests just now. Wait a moment and try again.',
+  'too-large': 'That recording was too long. Try a shorter description.',
+  timeout: 'The voice service took too long to answer. Try again.',
+  offline: 'No connection. Voice input needs the internet — you can type the details instead.',
+  server: 'The voice service had a problem. Try again in a moment.',
+  'unusable-reply': 'Could not make sense of that. Try describing the item again.',
+  'empty-transcript': 'Nothing was heard. Hold the button while you speak.',
+};
+
+const MESSAGE_BY_FAILURE = new Map<VoiceFailure, string>(
+  Object.entries(VOICE_FAILURE_MESSAGES) as [VoiceFailure, string][],
+);
+
 export function describeVoiceFailure(reason: VoiceFailure): string {
-  switch (reason) {
-    case 'no-key':
-      return 'Voice input is not set up on this build. You can type the details instead.';
-    case 'unauthorized':
-      return 'The API key was rejected. Check it in .env, then restart with: npx expo start -c';
-    case 'forbidden':
-      return 'The key is valid but this account is not allowed to use that model. See the details below.';
-    case 'rate-limited':
-      return 'Too many requests just now. Wait a moment and try again.';
-    case 'too-large':
-      return 'That recording was too long. Try a shorter description.';
-    case 'timeout':
-      return 'The voice service took too long to answer. Try again.';
-    case 'offline':
-      return 'No connection. Voice input needs the internet — you can type the details instead.';
-    case 'server':
-      return 'The voice service had a problem. Try again in a moment.';
-    case 'unusable-reply':
-      return "Could not make sense of that. Try describing the item again.";
-    case 'empty-transcript':
-      return 'Nothing was heard. Hold the button while you speak.';
-  }
+  const message = MESSAGE_BY_FAILURE.get(reason);
+  if (message === undefined) throw new Error(`No message defined for voice failure "${reason}"`);
+  return message;
 }
