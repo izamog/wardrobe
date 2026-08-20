@@ -41,26 +41,30 @@ export interface AttributeValues {
  * and the category moved. Only the trailing control differs now: a pending
  * suggestion offers accept and reject, anything else offers edit.
  */
+/** Where a row's value currently stands. */
+interface AttributeRowStatus {
+  pending: boolean;
+  /** Something is still working this value out; the row shows dots instead. */
+  loading: boolean;
+  expanded: boolean;
+}
+
 function AttributeRow({
   label,
   value,
-  pending,
-  loading,
-  expanded,
+  status,
   onAccept,
   onEdit,
   children,
 }: {
   label: string;
   value: string;
-  pending: boolean;
-  /** Something is still working this value out; the row shows dots instead. */
-  loading: boolean;
-  expanded: boolean;
+  status: AttributeRowStatus;
   onAccept: () => void;
   onEdit: () => void;
   children: React.ReactNode;
 }) {
+  const { pending, loading, expanded } = status;
   return (
     <View className="border-b border-slate-100">
       <Pressable
@@ -150,9 +154,11 @@ export function AttributeList({
       key={field}
       label={label}
       value={value}
-      pending={pending.has(field)}
-      loading={loading?.has(field) ?? false}
-      expanded={expanded === field}
+      status={{
+        pending: pending.has(field),
+        loading: loading?.has(field) ?? false,
+        expanded: expanded === field,
+      }}
       onAccept={() => {
         onResolve(field);
         setExpanded(null);

@@ -137,6 +137,39 @@ function parseBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
 }
 
+/** Brand, category, materials and hardware colour — the identity fields. */
+function applyIdentityFields(source: Record<string, unknown>, proposal: ItemProposal): void {
+  const brand = parseBrand(source.brand);
+  if (brand !== undefined) proposal.brand = brand;
+
+  const category = matchVocabulary(source.category, ALL_CATEGORIES);
+  if (category !== null) proposal.category = category;
+
+  const materials = parseMaterialList(source.materials);
+  if (materials !== undefined) proposal.materials = materials;
+
+  const hardwareColor = matchVocabulary(source.hardwareColor, HARDWARE_COLORS);
+  if (hardwareColor !== null) proposal.hardwareColor = hardwareColor;
+}
+
+/** Cost, condition and the warmth/wind estimates — the quantity fields. */
+function applyQuantityFields(source: Record<string, unknown>, proposal: ItemProposal): void {
+  const costMinorUnits = parseCostInPounds(source.costInPounds);
+  if (costMinorUnits !== undefined) proposal.costMinorUnits = costMinorUnits;
+
+  const isSecondHand = parseBoolean(source.isSecondHand);
+  if (isSecondHand !== undefined) proposal.isSecondHand = isSecondHand;
+
+  const hasBeltLoops = parseBoolean(source.hasBeltLoops);
+  if (hasBeltLoops !== undefined) proposal.hasBeltLoops = hasBeltLoops;
+
+  const inferredWarmth = parseScaleEstimate(source.inferredWarmth);
+  if (inferredWarmth !== undefined) proposal.inferredWarmth = inferredWarmth;
+
+  const inferredWind = parseScaleEstimate(source.inferredWind);
+  if (inferredWind !== undefined) proposal.inferredWind = inferredWind;
+}
+
 /**
  * Turns a language model's answer into the subset the app is willing to store.
  *
@@ -153,36 +186,12 @@ export function parseExtraction(raw: unknown): ItemProposal {
   const source = asRecord(raw);
   const proposal: ItemProposal = {};
 
-  const brand = parseBrand(source.brand);
-  if (brand !== undefined) proposal.brand = brand;
-
-  const costMinorUnits = parseCostInPounds(source.costInPounds);
-  if (costMinorUnits !== undefined) proposal.costMinorUnits = costMinorUnits;
+  applyIdentityFields(source, proposal);
+  applyQuantityFields(source, proposal);
 
   const { primaryColor, secondaryColor } = parseColors(source.colors);
   if (primaryColor !== undefined) proposal.primaryColor = primaryColor;
   if (secondaryColor !== undefined) proposal.secondaryColor = secondaryColor;
-
-  const category = matchVocabulary(source.category, ALL_CATEGORIES);
-  if (category !== null) proposal.category = category;
-
-  const isSecondHand = parseBoolean(source.isSecondHand);
-  if (isSecondHand !== undefined) proposal.isSecondHand = isSecondHand;
-
-  const materials = parseMaterialList(source.materials);
-  if (materials !== undefined) proposal.materials = materials;
-
-  const hardwareColor = matchVocabulary(source.hardwareColor, HARDWARE_COLORS);
-  if (hardwareColor !== null) proposal.hardwareColor = hardwareColor;
-
-  const hasBeltLoops = parseBoolean(source.hasBeltLoops);
-  if (hasBeltLoops !== undefined) proposal.hasBeltLoops = hasBeltLoops;
-
-  const inferredWarmth = parseScaleEstimate(source.inferredWarmth);
-  if (inferredWarmth !== undefined) proposal.inferredWarmth = inferredWarmth;
-
-  const inferredWind = parseScaleEstimate(source.inferredWind);
-  if (inferredWind !== undefined) proposal.inferredWind = inferredWind;
 
   return proposal;
 }

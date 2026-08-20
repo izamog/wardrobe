@@ -70,6 +70,27 @@ const FIELD_SOURCES: Record<AttributeField, (p: ItemProposal) => Partial<Attribu
   materials: (p) => (p.materials === undefined ? null : { materials: p.materials }),
 };
 
+/**
+ * Fills in the silently-applied fields with their defaults before saving.
+ *
+ * Separated from save() so the branching around each default lives in one
+ * small, easily-scanned place rather than inline in the object literal
+ * createItem is called with.
+ */
+function withDefaults(
+  values: AttributeValues,
+  silent: Pick<ItemProposal, 'inferredWarmth' | 'inferredWind' | 'hardwareColor' | 'hasBeltLoops'>,
+) {
+  return {
+    ...values,
+    brand: values.brand.trim() || 'Unknown',
+    hardwareColor: silent.hardwareColor ?? 'None',
+    hasBeltLoops: silent.hasBeltLoops ?? false,
+    inferredWarmth: silent.inferredWarmth ?? 0,
+    inferredWind: silent.inferredWind ?? 0,
+  };
+}
+
 export function AddItemScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'AddItem'>>();
@@ -166,18 +187,7 @@ export function AddItemScreen() {
       const imageUri = imageUriRef.current;
       if (!imageUri) return;
 
-      await createItem(
-        { runQuery: withDb },
-        {
-          ...values,
-          brand: values.brand.trim() || 'Unknown',
-          hardwareColor: silent.hardwareColor ?? 'None',
-          hasBeltLoops: silent.hasBeltLoops ?? false,
-          inferredWarmth: silent.inferredWarmth ?? 0,
-          inferredWind: silent.inferredWind ?? 0,
-        },
-        imageUri,
-      );
+      await createItem({ runQuery: withDb }, withDefaults(values, silent), imageUri);
       navigation.goBack();
     } catch (e) {
       console.error('Failed to save item:', e);
