@@ -19,5 +19,7 @@ See `docs/agents/issue-tracker.md`.
 
 ### Domain docs
 
-Single-context — `CONTEXT.md` and `docs/adr/` at the repo root.
-See `docs/agents/domain.md`.
+See `docs/agents/domain.md` for how domain documentation is consumed —
+this is a single-context repo, so that means a root-level `CONTEXT.md`
+and `docs/adr/` once they exist. Both are created lazily; their absence
+is expected, not a gap to fill.
