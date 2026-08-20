@@ -83,6 +83,132 @@ function ReadRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * Turns the edit draft into the update `updateItem` expects, applying the
+ * same category-conditional clearing the save button always did.
+ */
+function buildItemUpdate(draft: Draft): ItemUpdate | { errorTitle: string; error: string } {
+  const costMinorUnits = parseCost(draft.cost);
+  if (costMinorUnits === null) {
+    return { errorTitle: 'Check the cost', error: 'Enter a number like 24.99, or leave it blank.' };
+  }
+
+  const inferredWarmth = parseScale(draft.inferredWarmth);
+  const inferredWind = parseScale(draft.inferredWind);
+  if (inferredWarmth === null || inferredWind === null) {
+    return {
+      errorTitle: 'Check warmth and windproof',
+      error: `Whole numbers from 0 to ${SCALE_MAX}, or leave blank for not set.`,
+    };
+  }
+
+  return {
+    category: draft.category,
+    brand: draft.brand.trim() || 'Unknown',
+    costMinorUnits,
+    isSecondHand: draft.isSecondHand,
+    materials: draft.materials,
+    // toColorPair applies the same rules as the CHECK constraints, so the
+    // form cannot submit a pair SQLite would reject.
+    ...toColorPair(draft.colors),
+    // Both of these are only askable for some categories. Clearing them for
+    // the rest means recategorising a garment cannot leave an invisible
+    // value behind -- Phase 4's belt rules read hasBeltLoops, and would
+    // otherwise act on a flag set while the item was still a Bottom.
+    hardwareColor: hardwareColorApplies(draft.category) ? draft.hardwareColor : 'None',
+    hasBeltLoops: beltLoopsApply(draft.category) ? draft.hasBeltLoops : false,
+    inferredWarmth,
+    inferredWind,
+  };
+}
+
+function EditForm({
+  draft,
+  set,
+}: {
+  draft: Draft;
+  set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
+}) {
+  return (
+    <>
+      {/* Category is hidden in the read view but kept here: it is now
+          inferred rather than chosen, so a wrong one has to be fixable. */}
+      <OptionRow
+        label="Category"
+        options={ALL_CATEGORIES}
+        value={draft.category}
+        onChange={(v) => set('category', v)}
+      />
+      <TextField label="Brand or name" value={draft.brand} onChangeText={(v) => set('brand', v)} />
+      <TextField
+        label="Cost (£)"
+        value={draft.cost}
+        onChangeText={(v) => set('cost', v)}
+        keyboardType="decimal-pad"
+      />
+      <MultiSelectField
+        label="Colours (up to 2)"
+        options={ALL_COLORS}
+        selected={draft.colors}
+        onChange={(next) => {
+          const { primaryColor, secondaryColor } = toColorPair(next as ItemColor[]);
+          set(
+            'colors',
+            [primaryColor, secondaryColor].filter((color): color is ItemColor => color !== ''),
+          );
+        }}
+        emptyLabel="Select colours"
+      />
+      <MultiSelectField
+        label="Materials"
+        options={ALL_MATERIALS}
+        selected={draft.materials}
+        onChange={(v) => set('materials', v)}
+        emptyLabel="Select materials"
+      />
+      {hardwareColorApplies(draft.category) && (
+        <OptionRow
+          label="Hardware colour"
+          options={HARDWARE_COLORS}
+          value={draft.hardwareColor}
+          onChange={(v) => set('hardwareColor', v)}
+        />
+      )}
+      <SwitchField
+        label="Bought second-hand"
+        value={draft.isSecondHand}
+        onValueChange={(v) => set('isSecondHand', v)}
+      />
+      {beltLoopsApply(draft.category) && (
+        <SwitchField
+          label="Has belt loops"
+          value={draft.hasBeltLoops}
+          onValueChange={(v) => set('hasBeltLoops', v)}
+        />
+      )}
+    </>
+  );
+}
+
+function ReadOnlyDetails({ item }: { item: ClothingItem }) {
+  return (
+    <View className="bg-white rounded-xl border border-slate-200 px-4 mb-4">
+      <ReadRow label="Brand" value={item.brand === 'Unknown' ? '' : item.brand} />
+      <ReadRow label="Cost" value={formatCost(item.costMinorUnits)} />
+      <ReadRow
+        label="Colour"
+        value={[item.primaryColor, item.secondaryColor].filter(Boolean).join(' / ')}
+      />
+      <ReadRow label="Materials" value={item.materials.join(', ')} />
+      {hardwareColorApplies(item.category) && <ReadRow label="Hardware" value={item.hardwareColor} />}
+      <ReadRow label="Second-hand" value={item.isSecondHand ? 'Yes' : 'No'} />
+      {beltLoopsApply(item.category) && (
+        <ReadRow label="Belt loops" value={item.hasBeltLoops ? 'Yes' : 'No'} />
+      )}
+    </View>
+  );
+}
+
 export function ItemDetailsScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { itemId } = useRoute<RouteProp<RootStackParamList, 'ItemDetails'>>().params;
@@ -162,40 +288,11 @@ export function ItemDetailsScreen() {
 
   async function save() {
     if (!draft) return;
-    const costMinorUnits = parseCost(draft.cost);
-    if (costMinorUnits === null) {
-      Alert.alert('Check the cost', 'Enter a number like 24.99, or leave it blank.');
+    const update = buildItemUpdate(draft);
+    if ('error' in update) {
+      Alert.alert(update.errorTitle, update.error);
       return;
     }
-
-    const inferredWarmth = parseScale(draft.inferredWarmth);
-    const inferredWind = parseScale(draft.inferredWind);
-    if (inferredWarmth === null || inferredWind === null) {
-      Alert.alert(
-        'Check warmth and windproof',
-        `Whole numbers from 0 to ${SCALE_MAX}, or leave blank for not set.`,
-      );
-      return;
-    }
-
-    const update: ItemUpdate = {
-      category: draft.category,
-      brand: draft.brand.trim() || 'Unknown',
-      costMinorUnits,
-      isSecondHand: draft.isSecondHand,
-      materials: draft.materials,
-      // toColorPair applies the same rules as the CHECK constraints, so the
-      // form cannot submit a pair SQLite would reject.
-      ...toColorPair(draft.colors),
-      // Both of these are only askable for some categories. Clearing them for
-      // the rest means recategorising a garment cannot leave an invisible
-      // value behind -- Phase 4's belt rules read hasBeltLoops, and would
-      // otherwise act on a flag set while the item was still a Bottom.
-      hardwareColor: hardwareColorApplies(draft.category) ? draft.hardwareColor : 'None',
-      hasBeltLoops: beltLoopsApply(draft.category) ? draft.hasBeltLoops : false,
-      inferredWarmth,
-      inferredWind,
-    };
 
     try {
       await withDb((db) => updateItem(db, itemId, update));
@@ -283,88 +380,7 @@ export function ItemDetailsScreen() {
       </View>
 
       <View className="p-4">
-        {editing ? (
-          <>
-            {/* Category is hidden in the read view but kept here: it is now
-                inferred rather than chosen, so a wrong one has to be fixable. */}
-            <OptionRow
-              label="Category"
-              options={ALL_CATEGORIES}
-              value={draft.category}
-              onChange={(v) => set('category', v)}
-            />
-            <TextField
-              label="Brand or name"
-              value={draft.brand}
-              onChangeText={(v) => set('brand', v)}
-            />
-            <TextField
-              label="Cost (£)"
-              value={draft.cost}
-              onChangeText={(v) => set('cost', v)}
-              keyboardType="decimal-pad"
-            />
-            <MultiSelectField
-              label="Colours (up to 2)"
-              options={ALL_COLORS}
-              selected={draft.colors}
-              onChange={(next) => {
-                const { primaryColor, secondaryColor } = toColorPair(next as ItemColor[]);
-                set(
-                  'colors',
-                  [primaryColor, secondaryColor].filter(
-                    (color): color is ItemColor => color !== '',
-                  ),
-                );
-              }}
-              emptyLabel="Select colours"
-            />
-            <MultiSelectField
-              label="Materials"
-              options={ALL_MATERIALS}
-              selected={draft.materials}
-              onChange={(v) => set('materials', v)}
-              emptyLabel="Select materials"
-            />
-            {hardwareColorApplies(draft.category) && (
-              <OptionRow
-                label="Hardware colour"
-                options={HARDWARE_COLORS}
-                value={draft.hardwareColor}
-                onChange={(v) => set('hardwareColor', v)}
-              />
-            )}
-            <SwitchField
-              label="Bought second-hand"
-              value={draft.isSecondHand}
-              onValueChange={(v) => set('isSecondHand', v)}
-            />
-            {beltLoopsApply(draft.category) && (
-              <SwitchField
-                label="Has belt loops"
-                value={draft.hasBeltLoops}
-                onValueChange={(v) => set('hasBeltLoops', v)}
-              />
-            )}
-          </>
-        ) : (
-          <View className="bg-white rounded-xl border border-slate-200 px-4 mb-4">
-            <ReadRow label="Brand" value={item.brand === 'Unknown' ? '' : item.brand} />
-            <ReadRow label="Cost" value={formatCost(item.costMinorUnits)} />
-            <ReadRow
-              label="Colour"
-              value={[item.primaryColor, item.secondaryColor].filter(Boolean).join(' / ')}
-            />
-            <ReadRow label="Materials" value={item.materials.join(', ')} />
-            {hardwareColorApplies(item.category) && (
-              <ReadRow label="Hardware" value={item.hardwareColor} />
-            )}
-            <ReadRow label="Second-hand" value={item.isSecondHand ? 'Yes' : 'No'} />
-            {beltLoopsApply(item.category) && (
-              <ReadRow label="Belt loops" value={item.hasBeltLoops ? 'Yes' : 'No'} />
-            )}
-          </View>
-        )}
+        {editing ? <EditForm draft={draft} set={set} /> : <ReadOnlyDetails item={item} />}
 
         <View className="mt-2 mb-4 p-3 rounded-xl bg-slate-100 border border-slate-200">
           <Text className="text-xs text-slate-500 mb-3">

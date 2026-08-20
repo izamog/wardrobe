@@ -81,6 +81,9 @@ export async function callOpenAI(path: string, init: RequestInit): Promise<unkno
 
   let response: Response;
   try {
+    // path is never user input: callOpenAI has two call sites (vision.ts,
+    // voice.ts), both passing a hardcoded string literal endpoint.
+    // nosemgrep
     response = await fetch(`${OPENAI_BASE_URL}${path}`, {
       ...init,
       signal: controller.signal,

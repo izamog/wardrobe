@@ -143,6 +143,9 @@ export function AddItemScreen() {
       hasBeltLoops: next.hasBeltLoops,
     });
 
+    // field is AttributeField, a closed union checked against FIELD_SOURCES's
+    // keys — not external input, so this isn't a dynamic-dispatch risk.
+    // nosemgrep
     const heard = ATTRIBUTE_FIELDS.filter((field) => FIELD_SOURCES[field](next) !== null);
     if (heard.length === 0) return;
 
@@ -155,6 +158,9 @@ export function AddItemScreen() {
     timer.current = setInterval(() => {
       const field = heard[index];
       if (field === 'category') categoryTouched.current = true;
+      // field comes from `heard`, itself filtered from ATTRIBUTE_FIELDS above
+      // — same closed AttributeField union, not external input.
+      // nosemgrep
       setValues((current) => ({ ...current, ...FIELD_SOURCES[field](next) }));
       setPending((current) => new Set(current).add(field));
 
