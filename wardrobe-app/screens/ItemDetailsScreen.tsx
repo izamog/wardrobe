@@ -209,6 +209,148 @@ function ReadOnlyDetails({ item }: { item: ClothingItem }) {
   );
 }
 
+/** Photo header: the stored image plus, while editing, the button to replace it. */
+function PhotoHeader({
+  item,
+  editing,
+  capturing,
+  choosePhoto,
+  windowHeight,
+}: {
+  item: ClothingItem;
+  editing: boolean;
+  capturing: boolean;
+  choosePhoto: () => void;
+  windowHeight: number;
+}) {
+  return (
+    <>
+      {/* Deliberately not pressable: the photo fills most of the screen, so
+          tapping it by accident used to launch the picker and lose the user's
+          place. Replacing a photo goes through the button below and nothing
+          else. */}
+      {/* Capped at a third of the screen. At 3:4 full width the photo was most
+          of a phone screen, so the attributes the user opened the item to read
+          began below the fold. */}
+      <View
+        className="bg-white items-center justify-center border-b border-slate-200"
+        style={{ height: windowHeight / 3 }}
+      >
+        {capturing ? (
+          <ActivityIndicator />
+        ) : (
+          <StoredImage
+            path={item.imagePath}
+            placeholder="No photo"
+            placeholderClassName="text-slate-500"
+          />
+        )}
+      </View>
+
+      {editing ? (
+        <View className="px-4 pt-3 bg-white">
+          <PrimaryButton
+            label={capturing ? 'Working…' : 'Replace image'}
+            tone="secondary"
+            onPress={choosePhoto}
+            disabled={capturing}
+          />
+        </View>
+      ) : null}
+    </>
+  );
+}
+
+/** Wear count on the left, cost-per-wear (or running cost) on the right. */
+function WearStatsRow({ item }: { item: ClothingItem }) {
+  const perWear = costPerWear(item.costMinorUnits, item.wearCount);
+  return (
+    <View className="flex-row justify-between px-4 py-3 bg-white border-b border-slate-200">
+      <View>
+        <Text className="text-xs uppercase tracking-wide text-slate-500">Worn</Text>
+        <Text className="text-base font-semibold text-slate-900">
+          {item.wearCount === 0 ? 'Not yet worn' : `${item.wearCount}×`}
+        </Text>
+      </View>
+      <View className="items-end">
+        <Text className="text-xs uppercase tracking-wide text-slate-500">Cost per wear</Text>
+        <Text className="text-base font-semibold text-slate-900">
+          {perWear ?? `${formatCost(item.costMinorUnits)} so far`}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+/** The warmth/windproof estimate fields — always editable, regardless of edit mode. */
+function EstimatesEditor({
+  draft,
+  set,
+}: {
+  draft: Draft;
+  set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
+}) {
+  return (
+    <View className="mt-2 mb-4 p-3 rounded-xl bg-slate-100 border border-slate-200">
+      <Text className="text-xs text-slate-500 mb-3">
+        Generated from Phase 3 onwards. Editable now so a wrong value can be corrected while that
+        is built.
+      </Text>
+      <View className="flex-row">
+        <View className="flex-1 mr-2">
+          <TextField
+            label={`Warmth (0-${SCALE_MAX})`}
+            value={draft.inferredWarmth}
+            onChangeText={(v) => set('inferredWarmth', v)}
+            keyboardType="number-pad"
+            placeholder="0"
+          />
+        </View>
+        <View className="flex-1 ml-2">
+          <TextField
+            label={`Windproof (0-${SCALE_MAX})`}
+            value={draft.inferredWind}
+            onChangeText={(v) => set('inferredWind', v)}
+            keyboardType="number-pad"
+            placeholder="0"
+          />
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/** Save (while editing), Matches and Delete — the screen's bottom actions. */
+function ActionButtons({
+  itemId,
+  editing,
+  onSave,
+  onDelete,
+  navigateToMatches,
+}: {
+  itemId: string;
+  editing: boolean;
+  onSave: () => void;
+  onDelete: () => void;
+  navigateToMatches: (itemId: string) => void;
+}) {
+  return (
+    <>
+      {editing ? (
+        <View className="mt-2">
+          <PrimaryButton label="Save changes" onPress={onSave} />
+        </View>
+      ) : null}
+      <View className="mt-3">
+        <PrimaryButton label="Matches" onPress={() => navigateToMatches(itemId)} />
+      </View>
+      <View className="mt-3">
+        <PrimaryButton label="Delete item" tone="danger" onPress={onDelete} />
+      </View>
+    </>
+  );
+}
+
 export function ItemDetailsScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { itemId } = useRoute<RouteProp<RootStackParamList, 'ItemDetails'>>().params;
@@ -327,108 +469,30 @@ export function ItemDetailsScreen() {
     ]);
   }
 
-  const perWear = costPerWear(item.costMinorUnits, item.wearCount);
-
   return (
     <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="pb-10">
-      {/* Deliberately not pressable: the photo fills most of the screen, so
-          tapping it by accident used to launch the picker and lose the user's
-          place. Replacing a photo goes through the button below and nothing
-          else. */}
-      {/* Capped at a third of the screen. At 3:4 full width the photo was most
-          of a phone screen, so the attributes the user opened the item to read
-          began below the fold. */}
-      <View
-        className="bg-white items-center justify-center border-b border-slate-200"
-        style={{ height: windowHeight / 3 }}
-      >
-        {capturing ? (
-          <ActivityIndicator />
-        ) : (
-          <StoredImage
-            path={item.imagePath}
-            placeholder="No photo"
-            placeholderClassName="text-slate-500"
-          />
-        )}
-      </View>
-
-      {editing ? (
-        <View className="px-4 pt-3 bg-white">
-          <PrimaryButton
-            label={capturing ? 'Working…' : 'Replace image'}
-            tone="secondary"
-            onPress={choosePhoto}
-            disabled={capturing}
-          />
-        </View>
-      ) : null}
-
-      <View className="flex-row justify-between px-4 py-3 bg-white border-b border-slate-200">
-        <View>
-          <Text className="text-xs uppercase tracking-wide text-slate-500">Worn</Text>
-          <Text className="text-base font-semibold text-slate-900">
-            {item.wearCount === 0 ? 'Not yet worn' : `${item.wearCount}×`}
-          </Text>
-        </View>
-        <View className="items-end">
-          <Text className="text-xs uppercase tracking-wide text-slate-500">Cost per wear</Text>
-          <Text className="text-base font-semibold text-slate-900">
-            {perWear ?? `${formatCost(item.costMinorUnits)} so far`}
-          </Text>
-        </View>
-      </View>
+      <PhotoHeader
+        item={item}
+        editing={editing}
+        capturing={capturing}
+        choosePhoto={choosePhoto}
+        windowHeight={windowHeight}
+      />
+      <WearStatsRow item={item} />
 
       <View className="p-4">
         {editing ? <EditForm draft={draft} set={set} /> : <ReadOnlyDetails item={item} />}
-
-        <View className="mt-2 mb-4 p-3 rounded-xl bg-slate-100 border border-slate-200">
-          <Text className="text-xs text-slate-500 mb-3">
-            Generated from Phase 3 onwards. Editable now so a wrong value can be
-            corrected while that is built.
-          </Text>
-          <View className="flex-row">
-            <View className="flex-1 mr-2">
-              <TextField
-                label={`Warmth (0-${SCALE_MAX})`}
-                value={draft.inferredWarmth}
-                onChangeText={(v) => set('inferredWarmth', v)}
-                keyboardType="number-pad"
-                placeholder="0"
-              />
-            </View>
-            <View className="flex-1 ml-2">
-              <TextField
-                label={`Windproof (0-${SCALE_MAX})`}
-                value={draft.inferredWind}
-                onChangeText={(v) => set('inferredWind', v)}
-                keyboardType="number-pad"
-                placeholder="0"
-              />
-            </View>
-          </View>
-        </View>
-
-        {editing ? (
-          <View className="mt-2">
-            <PrimaryButton
-              label="Save changes"
-              onPress={() => {
-                void save();
-                setEditing(false);
-              }}
-            />
-          </View>
-        ) : null}
-        <View className="mt-3">
-          <PrimaryButton
-            label="Matches"
-            onPress={() => navigation.navigate('MatchesBrowser', { itemId })}
-          />
-        </View>
-        <View className="mt-3">
-          <PrimaryButton label="Delete item" tone="danger" onPress={confirmDelete} />
-        </View>
+        <EstimatesEditor draft={draft} set={set} />
+        <ActionButtons
+          itemId={itemId}
+          editing={editing}
+          onSave={() => {
+            void save();
+            setEditing(false);
+          }}
+          onDelete={confirmDelete}
+          navigateToMatches={(id) => navigation.navigate('MatchesBrowser', { itemId: id })}
+        />
       </View>
     </ScrollView>
   );

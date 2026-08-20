@@ -22,6 +22,84 @@ function PairFace({ item }: { item: ClothingItem }) {
   );
 }
 
+/** Shown when there is no pair left to rate — either the deck is empty or every pair has a verdict. */
+function EmptyDeck({ isEmpty, onRefresh }: { isEmpty: boolean; onRefresh: () => void }) {
+  return (
+    <View className="flex-1 bg-slate-50">
+      <EmptyState
+        title={isEmpty ? 'No pairs to rate' : 'All caught up'}
+        detail={
+          isEmpty
+            ? 'Add items in two different categories to start matching.'
+            : 'Every pair in your closet has a verdict.'
+        }
+      />
+      <View className="p-4">
+        <Pressable
+          onPress={onRefresh}
+          accessibilityRole="button"
+          className="rounded-xl py-3.5 items-center bg-slate-900"
+        >
+          <Text className="text-white font-semibold">Refresh</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+/** The pair on screen plus the Dismatch/Match buttons. */
+function RatingView({
+  pair,
+  remaining,
+  saving,
+  onRate,
+}: {
+  pair: ItemPair;
+  remaining: number;
+  saving: boolean;
+  onRate: (status: CompatibilityStatus) => void;
+}) {
+  return (
+    <View className="flex-1 bg-slate-50 p-4">
+      <Text className="text-center text-sm text-slate-500 mb-4">
+        {remaining} {remaining === 1 ? 'pair' : 'pairs'} left
+      </Text>
+
+      <View className="flex-row items-center justify-center">
+        <PairFace item={pair.a} />
+        <PairFace item={pair.b} />
+      </View>
+
+      <View className="flex-row mt-8">
+        <Pressable
+          onPress={() => onRate('DISMATCH')}
+          disabled={saving}
+          accessibilityRole="button"
+          accessibilityLabel="Dismatch"
+          className="flex-1 mr-2 rounded-2xl py-6 items-center bg-rose-600"
+        >
+          <Text className="text-white text-3xl font-bold">✕</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => onRate('MATCH')}
+          disabled={saving}
+          accessibilityRole="button"
+          accessibilityLabel="Match"
+          className="flex-1 ml-2 rounded-2xl py-6 items-center bg-emerald-600"
+        >
+          <Text className="text-white text-3xl font-bold">✓</Text>
+        </Pressable>
+      </View>
+
+      <View className="mt-auto">
+        <Text className="text-center text-xs text-slate-400">
+          Outfit photo auto-match arrives in Phase 4.
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 export function MatchScreen() {
   const { data, error, loading, reload } = useDbQuery(async (db) => {
     const items = await listItems(db);
@@ -67,68 +145,22 @@ export function MatchScreen() {
 
   if (!pair) {
     return (
-      <View className="flex-1 bg-slate-50">
-        <EmptyState
-          title={deck.length === 0 ? 'No pairs to rate' : 'All caught up'}
-          detail={
-            deck.length === 0
-              ? 'Add items in two different categories to start matching.'
-              : 'Every pair in your closet has a verdict.'
-          }
-        />
-        <View className="p-4">
-          <Pressable
-            onPress={() => {
-              setCursor(0);
-              void reload();
-            }}
-            accessibilityRole="button"
-            className="rounded-xl py-3.5 items-center bg-slate-900"
-          >
-            <Text className="text-white font-semibold">Refresh</Text>
-          </Pressable>
-        </View>
-      </View>
+      <EmptyDeck
+        isEmpty={deck.length === 0}
+        onRefresh={() => {
+          setCursor(0);
+          void reload();
+        }}
+      />
     );
   }
 
   return (
-    <View className="flex-1 bg-slate-50 p-4">
-      <Text className="text-center text-sm text-slate-500 mb-4">
-        {deck.length - cursor} {deck.length - cursor === 1 ? 'pair' : 'pairs'} left
-      </Text>
-
-      <View className="flex-row items-center justify-center">
-        <PairFace item={pair.a} />
-        <PairFace item={pair.b} />
-      </View>
-
-      <View className="flex-row mt-8">
-        <Pressable
-          onPress={() => void rate('DISMATCH')}
-          disabled={saving}
-          accessibilityRole="button"
-          accessibilityLabel="Dismatch"
-          className="flex-1 mr-2 rounded-2xl py-6 items-center bg-rose-600"
-        >
-          <Text className="text-white text-3xl font-bold">✕</Text>
-        </Pressable>
-        <Pressable
-          onPress={() => void rate('MATCH')}
-          disabled={saving}
-          accessibilityRole="button"
-          accessibilityLabel="Match"
-          className="flex-1 ml-2 rounded-2xl py-6 items-center bg-emerald-600"
-        >
-          <Text className="text-white text-3xl font-bold">✓</Text>
-        </Pressable>
-      </View>
-
-      <View className="mt-auto">
-        <Text className="text-center text-xs text-slate-400">
-          Outfit photo auto-match arrives in Phase 4.
-        </Text>
-      </View>
-    </View>
+    <RatingView
+      pair={pair}
+      remaining={deck.length - cursor}
+      saving={saving}
+      onRate={(status) => void rate(status)}
+    />
   );
 }

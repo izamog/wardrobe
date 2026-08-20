@@ -12,7 +12,7 @@ import {
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { PhotoSourceChooser } from '../components/PhotoPicker';
-import { refineCapturedImage, type PickedImage } from '../services/images';
+import { refineCapturedImage, type PickedImage, type PreparedImage } from '../services/images';
 import {
   ATTRIBUTE_FIELDS,
   AttributeList,
@@ -89,6 +89,119 @@ function withDefaults(
     inferredWarmth: silent.inferredWarmth ?? 0,
     inferredWind: silent.inferredWind ?? 0,
   };
+}
+
+/** The capture step: a prompt and the photo-source chooser, nothing else yet exists to show. */
+function CapturePrompt({ onPicked }: { onPicked: (image: PreparedImage) => void }) {
+  return (
+    <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4">
+      <Text className="text-base font-semibold text-slate-900 mb-1">Add a photo</Text>
+      <Text className="text-sm text-slate-500 mb-5">
+        Every item needs a picture. Photos are stored on this phone only.
+      </Text>
+      <PhotoSourceChooser onPicked={onPicked} />
+    </ScrollView>
+  );
+}
+
+/** The photo, its replace button and the last transcript, above the attribute list. */
+function ComposeHeader({
+  imageUri,
+  refining,
+  transcript,
+  onReplaceImage,
+}: {
+  imageUri: string;
+  refining: boolean;
+  transcript: string | null;
+  onReplaceImage: () => void;
+}) {
+  return (
+    <View className="flex-row mb-4">
+      {/* A third of the width, matching a closet tile. Full width here was
+          most of a screen given to a photo the user has just looked at,
+          pushing the attributes they came to check below the fold. */}
+      <View className="w-1/3 aspect-[3/4] rounded-xl overflow-hidden bg-white border border-slate-200">
+        <Image source={{ uri: imageUri }} className="w-full h-full" resizeMode="contain" />
+        {/* Quiet, and in the corner: the picture is already usable, so this
+            says "still improving", not "still loading". */}
+        {refining ? (
+          <View className="absolute bottom-1 right-1 bg-white/90 rounded-full px-2 py-1">
+            <BouncingDots color="#64748b" />
+          </View>
+        ) : null}
+      </View>
+
+      <View className="flex-1 ml-4 justify-center">
+        <Pressable
+          onPress={onReplaceImage}
+          accessibilityRole="button"
+          className="self-start rounded-lg border border-slate-300 bg-white px-3 py-2"
+        >
+          <Text className="text-sm font-medium text-slate-700">Replace image</Text>
+        </Pressable>
+        {transcript ? (
+          <Text className="text-xs text-slate-500 italic mt-3" numberOfLines={4}>
+            “{transcript}”
+          </Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+/** The compose step: photo header, the attribute list, and the voice bar. */
+function ComposeView({
+  imageUri,
+  refining,
+  transcript,
+  onReplaceImage,
+  values,
+  pending,
+  loadingFields,
+  onValuesChange,
+  onResolve,
+  onProposal,
+  onTranscript,
+}: {
+  imageUri: string;
+  refining: boolean;
+  transcript: string | null;
+  onReplaceImage: () => void;
+  values: AttributeValues;
+  pending: ReadonlySet<AttributeField>;
+  loadingFields: ReadonlySet<AttributeField>;
+  onValuesChange: (patch: Partial<AttributeValues>) => void;
+  onResolve: (field: AttributeField) => void;
+  onProposal: (proposal: ItemProposal) => void;
+  onTranscript: (transcript: string) => void;
+}) {
+  return (
+    <KeyboardAvoidingView
+      className="flex-1 bg-slate-50"
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView contentContainerClassName="p-4" keyboardShouldPersistTaps="handled">
+        <ComposeHeader
+          imageUri={imageUri}
+          refining={refining}
+          transcript={transcript}
+          onReplaceImage={onReplaceImage}
+        />
+        <AttributeList
+          values={values}
+          pending={pending}
+          loading={loadingFields}
+          onChange={onValuesChange}
+          onResolve={onResolve}
+        />
+      </ScrollView>
+
+      {isVoiceConfigured() ? (
+        <VoiceBar pipeline={openAIVoicePipeline} onProposal={onProposal} onTranscript={onTranscript} />
+      ) : null}
+    </KeyboardAvoidingView>
+  );
 }
 
 export function AddItemScreen() {
@@ -234,89 +347,43 @@ export function AddItemScreen() {
 
   if (stage.step === 'capture') {
     return (
-      <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4">
-        <Text className="text-base font-semibold text-slate-900 mb-1">Add a photo</Text>
-        <Text className="text-sm text-slate-500 mb-5">
-          Every item needs a picture. Photos are stored on this phone only.
-        </Text>
-        <PhotoSourceChooser
-          onPicked={(image) => {
-            // Straight to the details with a centred crop. Finding the garment
-            // takes a round trip to a vision model, and making that the first
-            // thing after picking a photo put a multi-second wait in front of
-            // every item added. It runs behind this screen instead.
-            setStage({ step: 'compose', imageUri: image.uri });
-            startRefinement(image.source);
-          }}
-        />
-      </ScrollView>
+      <CapturePrompt
+        onPicked={(image) => {
+          // Straight to the details with a centred crop. Finding the garment
+          // takes a round trip to a vision model, and making that the first
+          // thing after picking a photo put a multi-second wait in front of
+          // every item added. It runs behind this screen instead.
+          setStage({ step: 'compose', imageUri: image.uri });
+          startRefinement(image.source);
+        }}
+      />
     );
   }
 
   return (
-    <KeyboardAvoidingView
-      className="flex-1 bg-slate-50"
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView contentContainerClassName="p-4" keyboardShouldPersistTaps="handled">
-        <View className="flex-row mb-4">
-          {/* A third of the width, matching a closet tile. Full width here was
-              most of a screen given to a photo the user has just looked at,
-              pushing the attributes they came to check below the fold. */}
-          <View className="w-1/3 aspect-[3/4] rounded-xl overflow-hidden bg-white border border-slate-200">
-            <Image source={{ uri: stage.imageUri }} className="w-full h-full" resizeMode="contain" />
-            {/* Quiet, and in the corner: the picture is already usable, so this
-                says "still improving", not "still loading". */}
-            {refining ? (
-              <View className="absolute bottom-1 right-1 bg-white/90 rounded-full px-2 py-1">
-                <BouncingDots color="#64748b" />
-              </View>
-            ) : null}
-          </View>
-
-          <View className="flex-1 ml-4 justify-center">
-            <Pressable
-              onPress={() => setStage({ step: 'capture' })}
-              accessibilityRole="button"
-              className="self-start rounded-lg border border-slate-300 bg-white px-3 py-2"
-            >
-              <Text className="text-sm font-medium text-slate-700">Replace image</Text>
-            </Pressable>
-            {transcript ? (
-              <Text className="text-xs text-slate-500 italic mt-3" numberOfLines={4}>
-                “{transcript}”
-              </Text>
-            ) : null}
-          </View>
-        </View>
-
-        <AttributeList
-          values={values}
-          pending={pending}
-          // Detection is still deciding what this is, so the row says so
-          // rather than showing a default the user might take for an answer.
-          loading={refining && !categoryTouched.current ? CATEGORY_LOADING : EMPTY_FIELDS}
-          onChange={(patch) => {
-            if (patch.category !== undefined) categoryTouched.current = true;
-            setValues((current) => ({ ...current, ...patch }));
-          }}
-          onResolve={(field) =>
-            setPending((current) => {
-              const next = new Set(current);
-              next.delete(field);
-              return next;
-            })
-          }
-        />
-      </ScrollView>
-
-      {isVoiceConfigured() ? (
-        <VoiceBar
-          pipeline={openAIVoicePipeline}
-          onProposal={applyProposal}
-          onTranscript={setTranscript}
-        />
-      ) : null}
-    </KeyboardAvoidingView>
+    <ComposeView
+      imageUri={stage.imageUri}
+      refining={refining}
+      transcript={transcript}
+      onReplaceImage={() => setStage({ step: 'capture' })}
+      values={values}
+      pending={pending}
+      // Detection is still deciding what this is, so the row says so
+      // rather than showing a default the user might take for an answer.
+      loadingFields={refining && !categoryTouched.current ? CATEGORY_LOADING : EMPTY_FIELDS}
+      onValuesChange={(patch) => {
+        if (patch.category !== undefined) categoryTouched.current = true;
+        setValues((current) => ({ ...current, ...patch }));
+      }}
+      onResolve={(field) =>
+        setPending((current) => {
+          const next = new Set(current);
+          next.delete(field);
+          return next;
+        })
+      }
+      onProposal={applyProposal}
+      onTranscript={setTranscript}
+    />
   );
 }
