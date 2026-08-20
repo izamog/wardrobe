@@ -1,4 +1,5 @@
 /** @jest-environment node */
+/* global describe, it, expect */
 import { costPerWear, formatCost, parseCost, parseScale, SCALE_MAX } from '../format';
 
 describe('formatCost', () => {

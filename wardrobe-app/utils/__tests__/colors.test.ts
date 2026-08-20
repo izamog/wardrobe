@@ -1,4 +1,5 @@
 /** @jest-environment node */
+/* global describe, it, expect */
 import { ALL_COLORS, canCombineColors, toColorPair, toItemColor } from '../colors';
 
 describe('ALL_COLORS', () => {

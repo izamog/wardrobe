@@ -6,6 +6,7 @@
  * for: structured output guarantees the shape of a reply and nothing at all
  * about the values inside it.
  */
+/* global describe, it, expect */
 import { parseExtraction } from '../proposals';
 import { SCALE_MAX } from '../format';
 

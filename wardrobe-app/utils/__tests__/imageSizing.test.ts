@@ -1,4 +1,5 @@
 /** @jest-environment node */
+/* global describe, it, expect */
 import { MAX_IMAGE_DIMENSION, resizeTargetFor } from '../imageSizing';
 
 const MAX = MAX_IMAGE_DIMENSION;

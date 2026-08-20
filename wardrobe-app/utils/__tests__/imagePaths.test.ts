@@ -1,4 +1,5 @@
 /** @jest-environment node */
+/* global describe, it, expect */
 import {
   ITEM_IMAGE_DIRECTORY,
   itemImageRelativePath,

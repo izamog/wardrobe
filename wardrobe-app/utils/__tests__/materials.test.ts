@@ -1,4 +1,5 @@
 /** @jest-environment node */
+/* global describe, it, expect */
 import { ALL_MATERIALS } from '../materials';
 
 describe('ALL_MATERIALS', () => {

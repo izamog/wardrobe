@@ -6,6 +6,7 @@
  * OpenAI — the error mapping they rely on is tested in
  * utils/__tests__/voiceErrors.test.ts instead.
  */
+/* global describe, it, expect */
 import { readApiKey } from '../openai';
 
 describe('readApiKey', () => {
