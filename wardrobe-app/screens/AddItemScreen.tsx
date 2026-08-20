@@ -1,4 +1,12 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type MutableRefObject,
+  type SetStateAction,
+} from 'react';
 import {
   Alert,
   Image,
@@ -150,31 +158,41 @@ function ComposeHeader({
   );
 }
 
-/** The compose step: photo header, the attribute list, and the voice bar. */
-function ComposeView({
-  imageUri,
-  refining,
-  transcript,
-  onReplaceImage,
-  values,
-  pending,
-  loadingFields,
-  onValuesChange,
-  onResolve,
-  onProposal,
-  onTranscript,
-}: {
+interface PhotoProps {
   imageUri: string;
   refining: boolean;
   transcript: string | null;
   onReplaceImage: () => void;
+}
+
+interface AttributesProps {
   values: AttributeValues;
   pending: ReadonlySet<AttributeField>;
   loadingFields: ReadonlySet<AttributeField>;
   onValuesChange: (patch: Partial<AttributeValues>) => void;
   onResolve: (field: AttributeField) => void;
+}
+
+interface VoiceProps {
   onProposal: (proposal: ItemProposal) => void;
   onTranscript: (transcript: string) => void;
+}
+
+/**
+ * The compose step: photo header, the attribute list, and the voice bar.
+ *
+ * Grouped into three prop bundles rather than one flat list — Codacy's
+ * parameter-count check treats each destructured key as its own parameter,
+ * and this screen genuinely has that many independent inputs.
+ */
+function ComposeView({
+  photo,
+  attributes,
+  voice,
+}: {
+  photo: PhotoProps;
+  attributes: AttributesProps;
+  voice: VoiceProps;
 }) {
   return (
     <KeyboardAvoidingView
@@ -183,25 +201,137 @@ function ComposeView({
     >
       <ScrollView contentContainerClassName="p-4" keyboardShouldPersistTaps="handled">
         <ComposeHeader
-          imageUri={imageUri}
-          refining={refining}
-          transcript={transcript}
-          onReplaceImage={onReplaceImage}
+          imageUri={photo.imageUri}
+          refining={photo.refining}
+          transcript={photo.transcript}
+          onReplaceImage={photo.onReplaceImage}
         />
         <AttributeList
-          values={values}
-          pending={pending}
-          loading={loadingFields}
-          onChange={onValuesChange}
-          onResolve={onResolve}
+          values={attributes.values}
+          pending={attributes.pending}
+          loading={attributes.loadingFields}
+          onChange={attributes.onValuesChange}
+          onResolve={attributes.onResolve}
         />
       </ScrollView>
 
       {isVoiceConfigured() ? (
-        <VoiceBar pipeline={openAIVoicePipeline} onProposal={onProposal} onTranscript={onTranscript} />
+        <VoiceBar
+          pipeline={openAIVoicePipeline}
+          onProposal={voice.onProposal}
+          onTranscript={voice.onTranscript}
+        />
       ) : null}
     </KeyboardAvoidingView>
   );
+}
+
+/**
+ * Applies a heard voice proposal to the form, one attribute at a time.
+ *
+ * Pulled out of AddItemScreen because the timer bookkeeping is the single
+ * largest thing that screen was doing, not because it is reused anywhere.
+ */
+function useProposalApplier({
+  setValues,
+  setPending,
+  setSilent,
+  categoryTouched,
+}: {
+  setValues: Dispatch<SetStateAction<AttributeValues>>;
+  setPending: Dispatch<SetStateAction<ReadonlySet<AttributeField>>>;
+  setSilent: Dispatch<
+    SetStateAction<
+      Pick<ItemProposal, 'inferredWarmth' | 'inferredWind' | 'hardwareColor' | 'hasBeltLoops'>
+    >
+  >;
+  categoryTouched: MutableRefObject<boolean>;
+}) {
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current) clearInterval(timer.current);
+    },
+    [],
+  );
+
+  return useCallback(
+    (next: ItemProposal) => {
+      setSilent({
+        inferredWarmth: next.inferredWarmth,
+        inferredWind: next.inferredWind,
+        hardwareColor: next.hardwareColor,
+        hasBeltLoops: next.hasBeltLoops,
+      });
+
+      // field is AttributeField, a closed union checked against FIELD_SOURCES's
+      // keys — not external input, so this isn't a dynamic-dispatch risk.
+      // nosemgrep
+      const heard = ATTRIBUTE_FIELDS.filter((field) => FIELD_SOURCES[field](next) !== null);
+      if (heard.length === 0) return;
+
+      if (timer.current) clearInterval(timer.current);
+      // A fresh recording supersedes the previous one, so old confirmations no
+      // longer refer to anything.
+      setPending(new Set());
+
+      let index = 0;
+      timer.current = setInterval(() => {
+        const field = heard[index];
+        if (field === 'category') categoryTouched.current = true;
+        // field comes from `heard`, itself filtered from ATTRIBUTE_FIELDS above
+        // — same closed AttributeField union, not external input.
+        // nosemgrep
+        setValues((current) => ({ ...current, ...FIELD_SOURCES[field](next) }));
+        setPending((current) => new Set(current).add(field));
+
+        index += 1;
+        if (index >= heard.length && timer.current) clearInterval(timer.current);
+      }, APPLY_INTERVAL_MS);
+    },
+    [setValues, setPending, setSilent, categoryTouched],
+  );
+}
+
+/**
+ * Runs the background crop/detection for a captured photo.
+ *
+ * Returns the in-flight promise as well as the starter, so save() can await
+ * whichever refinement is running without owning the ref itself.
+ */
+function useImageRefiner({
+  alive,
+  categoryTouched,
+  setStage,
+  setValues,
+  setRefining,
+}: {
+  alive: MutableRefObject<boolean>;
+  categoryTouched: MutableRefObject<boolean>;
+  setStage: Dispatch<SetStateAction<Stage>>;
+  setValues: Dispatch<SetStateAction<AttributeValues>>;
+  setRefining: Dispatch<SetStateAction<boolean>>;
+}) {
+  const refinement = useRef<Refinement>(null);
+
+  const startRefinement = useCallback(
+    (source: PickedImage) => {
+      setRefining(true);
+      refinement.current = (async () => {
+        const refined = await refineCapturedImage(source);
+        if (!alive.current) return;
+
+        if (refined.uri) setStage({ step: 'compose', imageUri: refined.uri });
+        if (refined.detectedCategory && !categoryTouched.current) {
+          setValues((current) => ({ ...current, category: refined.detectedCategory! }));
+        }
+        setRefining(false);
+      })();
+    },
+    [alive, categoryTouched, setStage, setValues, setRefining],
+  );
+
+  return { refinement, startRefinement };
 }
 
 export function AddItemScreen() {
@@ -213,7 +343,6 @@ export function AddItemScreen() {
   const [pending, setPending] = useState<ReadonlySet<AttributeField>>(new Set());
   const [saving, setSaving] = useState(false);
   const [refining, setRefining] = useState(false);
-  const refinement = useRef<Refinement>(null);
   // Detection must not overwrite a category the user picked or the recording
   // heard; it only fills a blank. It usually arrives first, but never reliably.
   const categoryTouched = useRef(false);
@@ -240,61 +369,14 @@ export function AddItemScreen() {
     Pick<ItemProposal, 'inferredWarmth' | 'inferredWind' | 'hardwareColor' | 'hasBeltLoops'>
   >({});
 
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
-  useEffect(
-    () => () => {
-      if (timer.current) clearInterval(timer.current);
-    },
-    [],
-  );
-
-  const applyProposal = useCallback((next: ItemProposal) => {
-    setSilent({
-      inferredWarmth: next.inferredWarmth,
-      inferredWind: next.inferredWind,
-      hardwareColor: next.hardwareColor,
-      hasBeltLoops: next.hasBeltLoops,
-    });
-
-    // field is AttributeField, a closed union checked against FIELD_SOURCES's
-    // keys — not external input, so this isn't a dynamic-dispatch risk.
-    // nosemgrep
-    const heard = ATTRIBUTE_FIELDS.filter((field) => FIELD_SOURCES[field](next) !== null);
-    if (heard.length === 0) return;
-
-    if (timer.current) clearInterval(timer.current);
-    // A fresh recording supersedes the previous one, so old confirmations no
-    // longer refer to anything.
-    setPending(new Set());
-
-    let index = 0;
-    timer.current = setInterval(() => {
-      const field = heard[index];
-      if (field === 'category') categoryTouched.current = true;
-      // field comes from `heard`, itself filtered from ATTRIBUTE_FIELDS above
-      // — same closed AttributeField union, not external input.
-      // nosemgrep
-      setValues((current) => ({ ...current, ...FIELD_SOURCES[field](next) }));
-      setPending((current) => new Set(current).add(field));
-
-      index += 1;
-      if (index >= heard.length && timer.current) clearInterval(timer.current);
-    }, APPLY_INTERVAL_MS);
-  }, []);
-
-  const startRefinement = useCallback((source: PickedImage) => {
-    setRefining(true);
-    refinement.current = (async () => {
-      const refined = await refineCapturedImage(source);
-      if (!alive.current) return;
-
-      if (refined.uri) setStage({ step: 'compose', imageUri: refined.uri });
-      if (refined.detectedCategory && !categoryTouched.current) {
-        setValues((current) => ({ ...current, category: refined.detectedCategory! }));
-      }
-      setRefining(false);
-    })();
-  }, []);
+  const applyProposal = useProposalApplier({ setValues, setPending, setSilent, categoryTouched });
+  const { refinement, startRefinement } = useImageRefiner({
+    alive,
+    categoryTouched,
+    setStage,
+    setValues,
+    setRefining,
+  });
 
   const save = useCallback(async () => {
     setSaving(true);
@@ -313,7 +395,7 @@ export function AddItemScreen() {
       Alert.alert('Could not save', 'The item was not added. Please try again.');
       setSaving(false);
     }
-  }, [navigation, silent, values]);
+  }, [navigation, silent, values, refinement]);
 
   // Save lives in the header rather than the bottom bar, which belongs to the
   // microphone. Two large targets side by side at the bottom edge left neither
@@ -362,28 +444,30 @@ export function AddItemScreen() {
 
   return (
     <ComposeView
-      imageUri={stage.imageUri}
-      refining={refining}
-      transcript={transcript}
-      onReplaceImage={() => setStage({ step: 'capture' })}
-      values={values}
-      pending={pending}
-      // Detection is still deciding what this is, so the row says so
-      // rather than showing a default the user might take for an answer.
-      loadingFields={refining && !categoryTouched.current ? CATEGORY_LOADING : EMPTY_FIELDS}
-      onValuesChange={(patch) => {
-        if (patch.category !== undefined) categoryTouched.current = true;
-        setValues((current) => ({ ...current, ...patch }));
+      photo={{
+        imageUri: stage.imageUri,
+        refining,
+        transcript,
+        onReplaceImage: () => setStage({ step: 'capture' }),
       }}
-      onResolve={(field) =>
-        setPending((current) => {
-          const next = new Set(current);
-          next.delete(field);
-          return next;
-        })
-      }
-      onProposal={applyProposal}
-      onTranscript={setTranscript}
+      attributes={{
+        values,
+        pending,
+        // Detection is still deciding what this is, so the row says so
+        // rather than showing a default the user might take for an answer.
+        loadingFields: refining && !categoryTouched.current ? CATEGORY_LOADING : EMPTY_FIELDS,
+        onValuesChange: (patch) => {
+          if (patch.category !== undefined) categoryTouched.current = true;
+          setValues((current) => ({ ...current, ...patch }));
+        },
+        onResolve: (field) =>
+          setPending((current) => {
+            const next = new Set(current);
+            next.delete(field);
+            return next;
+          }),
+      }}
+      voice={{ onProposal: applyProposal, onTranscript: setTranscript }}
     />
   );
 }
