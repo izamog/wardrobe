@@ -13,11 +13,15 @@ import type { Category } from '../types/wardrobe';
  *  - Those three, plus Sweaters and Cardigans, all go under Jackets and Coats.
  *  - Shirts go over T-Shirts and Tops.
  *  - Cardigans go over T-Shirts and Tops, but not over Shirts.
+ *  - A Dress goes over a T-Shirt or Shirt, and under a Cardigan, Sweater,
+ *    Jacket or Coat — but has no relationship with a plain Top, which is what
+ *    keeps utils/categories.ts's Dress-vs-Top conflict a hard exclusion
+ *    rather than one this table quietly reopens.
  *
  * Everything absent from this list is disallowed, which covers the rules
  * stated as prohibitions: Jacket under Coat and the reverse, Sweater under any
  * base layer, Sweater over a Jacket or Coat, Cardigan over a Jacket or Coat,
- * and Cardigan and Sweater in either order.
+ * Cardigan and Sweater in either order, and a Dress with a plain Top.
  *
  * The one rule that cannot be expressed here is the Shirt exception — a Shirt
  * worn over a T-Shirt or Top may not then go under a Sweater. That depends on
@@ -45,6 +49,13 @@ const LAYER_PAIRS: readonly (readonly [Category, Category])[] = [
   ['Shirt', 'Coat'],
   ['Cardigan', 'Coat'],
   ['Sweater', 'Coat'],
+
+  ['T-Shirt', 'Dress'],
+  ['Shirt', 'Dress'],
+  ['Dress', 'Cardigan'],
+  ['Dress', 'Sweater'],
+  ['Dress', 'Jacket'],
+  ['Dress', 'Coat'],
 ];
 
 /** inner -> the set of categories it may be worn under. */

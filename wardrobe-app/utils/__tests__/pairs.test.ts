@@ -1,8 +1,12 @@
 /** @jest-environment node */
-import { buildUnratedPairs, pairKey } from '../pairs';
-import type { Category, ClothingItem } from '../../types/wardrobe';
+import { buildUnratedPairs, isCompatibleCandidate, pairKey } from '../pairs';
+import type { Category, ClothingItem, HardwareColor } from '../../types/wardrobe';
 
-const item = (id: string, category: Category): ClothingItem => ({
+const item = (
+  id: string,
+  category: Category,
+  overrides: Partial<Pick<ClothingItem, 'hasBeltLoops' | 'hardwareColor'>> = {},
+): ClothingItem => ({
   id,
   imagePath: '',
   originalImagePath: '',
@@ -15,15 +19,18 @@ const item = (id: string, category: Category): ClothingItem => ({
   materials: [],
   hardwareColor: 'None',
   hasBeltLoops: false,
+  sleeveLength: 'Short',
+  length: '',
   inferredWarmth: 0,
   inferredWind: 0,
   wearCount: 0,
   createdAt: 'now',
+  ...overrides,
 });
 
 describe('buildUnratedPairs', () => {
   it('pairs complementary categories', () => {
-    const pairs = buildUnratedPairs([item('a', 'Top'), item('b', 'Bottom')], new Set());
+    const pairs = buildUnratedPairs([item('a', 'Top'), item('b', 'Pants')], new Set());
     expect(pairs.map((p) => p.key)).toEqual(['a|b']);
   });
 
@@ -59,27 +66,85 @@ describe('buildUnratedPairs', () => {
 
   it('offers each unordered pair once', () => {
     const pairs = buildUnratedPairs(
-      [item('a', 'Top'), item('b', 'Bottom'), item('c', 'Shoes')],
+      [item('a', 'Top'), item('b', 'Pants'), item('c', 'Shoes')],
       new Set(),
     );
     expect(pairs.map((p) => p.key).sort()).toEqual(['a|b', 'a|c', 'b|c']);
   });
 
   it('skips pairs that already have a verdict, so the deck empties', () => {
-    const items = [item('a', 'Top'), item('b', 'Bottom')];
+    const items = [item('a', 'Top'), item('b', 'Pants')];
     expect(buildUnratedPairs(items, new Set(['a|b']))).toEqual([]);
   });
 
   it('matches the stored key regardless of the order the pair was seen in', () => {
     // Items arrive newest-first, so the higher id can come first.
-    const pairs = buildUnratedPairs([item('z', 'Top'), item('a', 'Bottom')], new Set());
+    const pairs = buildUnratedPairs([item('z', 'Top'), item('a', 'Pants')], new Set());
     expect(pairs[0].key).toBe('a|z');
-    expect(buildUnratedPairs([item('z', 'Top'), item('a', 'Bottom')], new Set(['a|z']))).toEqual([]);
+    expect(buildUnratedPairs([item('z', 'Top'), item('a', 'Pants')], new Set(['a|z']))).toEqual([]);
   });
 });
 
 describe('pairKey', () => {
   it('is order-independent', () => {
     expect(pairKey('b', 'a')).toBe(pairKey('a', 'b'));
+  });
+});
+
+describe('isCompatibleCandidate', () => {
+  const belt = (hw: HardwareColor) => item('belt', 'Belt', { hardwareColor: hw });
+  const bag = (hw: HardwareColor) => item('bag', 'Bag', { hardwareColor: hw });
+  const bottom = (hasBeltLoops: boolean) => item('bottom', 'Pants', { hasBeltLoops });
+
+  it('rejects a belt against a bottom with no belt loops', () => {
+    expect(isCompatibleCandidate(bottom(false), belt('None'))).toBe(false);
+    expect(isCompatibleCandidate(belt('None'), bottom(false))).toBe(false);
+  });
+
+  it('allows a belt against a bottom that has belt loops', () => {
+    expect(isCompatibleCandidate(bottom(true), belt('None'))).toBe(true);
+  });
+
+  it('does not apply the belt-loop rule to non-belt, non-bottom pairs', () => {
+    expect(isCompatibleCandidate(bottom(false), item('shoes', 'Shoes'))).toBe(true);
+  });
+
+  it('rejects a belt and bag with clashing hardware finishes', () => {
+    expect(isCompatibleCandidate(belt('Gold'), bag('Silver'))).toBe(false);
+  });
+
+  it('allows a belt and bag whose hardware finishes read as the same family', () => {
+    expect(isCompatibleCandidate(belt('Gold'), bag('Brass'))).toBe(true);
+    expect(isCompatibleCandidate(belt('Silver'), bag('Black'))).toBe(true);
+  });
+
+  it('ignores hardware finish once either side has none', () => {
+    expect(isCompatibleCandidate(belt('None'), bag('Silver'))).toBe(true);
+  });
+
+  it('does not apply the hardware rule outside Belt/Bag pairs', () => {
+    // hardwareColor is only meaningful on Belt and Bag; a Top's default 'None'
+    // must never be read as a clash against a belt's actual finish.
+    expect(isCompatibleCandidate(belt('Gold'), item('top', 'Top'))).toBe(true);
+  });
+});
+
+describe('buildUnratedPairs: belt loops and hardware finish', () => {
+  it('excludes a belt from a bottom with no belt loops', () => {
+    const pairs = buildUnratedPairs([item('a', 'Pants', { hasBeltLoops: false }), item('b', 'Belt')], new Set());
+    expect(pairs).toEqual([]);
+  });
+
+  it('offers a belt against a bottom that has belt loops', () => {
+    const pairs = buildUnratedPairs([item('a', 'Pants', { hasBeltLoops: true }), item('b', 'Belt')], new Set());
+    expect(pairs.map((p) => p.key)).toEqual(['a|b']);
+  });
+
+  it('excludes a belt and bag with clashing hardware finishes', () => {
+    const pairs = buildUnratedPairs(
+      [item('a', 'Belt', { hardwareColor: 'Gold' }), item('b', 'Bag', { hardwareColor: 'Silver' })],
+      new Set(),
+    );
+    expect(pairs).toEqual([]);
   });
 });

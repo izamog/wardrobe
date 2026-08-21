@@ -1,5 +1,5 @@
 import React from 'react';
-import { Text } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -10,18 +10,17 @@ import { CalendarScreen } from '../screens/CalendarScreen';
 import { AddItemScreen } from '../screens/AddItemScreen';
 import { ItemDetailsScreen } from '../screens/ItemDetailsScreen';
 import { MatchesBrowserScreen } from '../screens/MatchesBrowserScreen';
+import { OutfitMatchScreen } from '../screens/OutfitMatchScreen';
 import type { RootStackParamList, TabParamList } from './types';
 
 const Tab = createBottomTabNavigator<TabParamList>();
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
-// No icon font is installed, and pulling one in is a visual-design decision
-// this phase defers. Emoji keep the tab bar readable in the meantime.
-const TAB_ICONS: Record<keyof TabParamList, string> = {
-  Closet: '👕',
-  Match: '✓✕',
-  Today: '☀️',
-  Calendar: '🗓',
+const TAB_ICONS: Record<keyof TabParamList, keyof typeof Ionicons.glyphMap> = {
+  Closet: 'shirt-outline',
+  Match: 'checkmark-circle-outline',
+  Today: 'sunny-outline',
+  Calendar: 'calendar-outline',
 };
 
 // White header on a light app. Declared once and applied to both navigators so
@@ -49,8 +48,8 @@ function Tabs() {
         headerShown: true,
         ...HEADER_STYLE,
         tabBarActiveTintColor: '#0f172a',
-        tabBarIcon: ({ color }) => (
-          <Text style={{ color, fontSize: 16 }}>{TAB_ICONS[route.name]}</Text>
+        tabBarIcon: ({ color, size }) => (
+          <Ionicons name={TAB_ICONS[route.name]} color={color} size={size} />
         ),
       })}
     >
@@ -88,6 +87,11 @@ export function RootNavigator() {
           name="MatchesBrowser"
           component={MatchesBrowserScreen}
           options={{ title: 'Matches' }}
+        />
+        <Stack.Screen
+          name="OutfitMatch"
+          component={OutfitMatchScreen}
+          options={{ presentation: 'modal', title: 'Match from a photo' }}
         />
       </Stack.Navigator>
     </NavigationContainer>

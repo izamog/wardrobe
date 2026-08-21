@@ -3,6 +3,7 @@ import { ActivityIndicator, Alert, Image, Linking, Pressable, Text, View } from 
 import {
   pickImage,
   prepareCapturedImage,
+  type PickedImage,
   type PickSource,
   type PreparedImage,
 } from '../services/images';
@@ -58,6 +59,42 @@ export function usePhotoCapture(onPicked: (image: PreparedImage) => void) {
   return { capture, busy };
 }
 
+/**
+ * Captures a photo without the single-garment centred crop prepareCapturedImage
+ * applies.
+ *
+ * An outfit photo is a full-body mirror selfie: cropping it to a 3:4 frame
+ * centred as if on one garment risks cutting off feet or head, which is
+ * exactly the part of the image the shoes or a scarf would be identified
+ * from. The raw picked image is what identifyOutfitItems is sent instead;
+ * resizing for the vision call happens separately, in services/outfitVision.ts.
+ */
+export function useRawPhotoCapture(onPicked: (image: PickedImage) => void) {
+  const [busy, setBusy] = React.useState(false);
+
+  const capture = React.useCallback(
+    async (source: PickSource) => {
+      setBusy(true);
+      try {
+        const picked = await pickImage(source);
+        if (!picked.ok) {
+          if (picked.reason === 'permission-denied') explainPermissionDenied(source);
+          return;
+        }
+        onPicked(picked.image);
+      } catch (e) {
+        console.error('Photo capture failed:', e);
+        Alert.alert('Could not use that photo', 'Please try another one.');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [onPicked],
+  );
+
+  return { capture, busy };
+}
+
 function ChoiceButton({ label, onPress }: { label: string; onPress: () => void }) {
   return (
     <Pressable
@@ -80,6 +117,27 @@ function ChoiceButton({ label, onPress }: { label: string; onPress: () => void }
  */
 export function PhotoSourceChooser({ onPicked }: { onPicked: (image: PreparedImage) => void }) {
   const { capture, busy } = usePhotoCapture(onPicked);
+
+  if (busy) {
+    return (
+      <View className="items-center py-10">
+        <ActivityIndicator />
+        <Text className="text-slate-500 mt-3">Preparing…</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View>
+      <ChoiceButton label="Take a photo" onPress={() => void capture('camera')} />
+      <ChoiceButton label="Choose from library" onPress={() => void capture('library')} />
+    </View>
+  );
+}
+
+/** Same as PhotoSourceChooser, but for a photo that must not be cropped — see useRawPhotoCapture. */
+export function RawPhotoSourceChooser({ onPicked }: { onPicked: (image: PickedImage) => void }) {
+  const { capture, busy } = useRawPhotoCapture(onPicked);
 
   if (busy) {
     return (

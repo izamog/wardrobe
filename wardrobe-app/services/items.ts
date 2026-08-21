@@ -3,8 +3,10 @@ import {
   ClothingItem,
   Category,
   CompatibilityStatus,
+  GarmentLength,
   HardwareColor,
   ItemColor,
+  SleeveLength,
 } from '../types/wardrobe';
 
 /**
@@ -20,6 +22,8 @@ export interface ItemsDatabase {
   runAsync(sql: string, params: BindValue[]): Promise<unknown>;
   getAllAsync<T>(sql: string, params: BindValue[]): Promise<T[]>;
   getFirstAsync<T>(sql: string, params: BindValue[]): Promise<T | null>;
+  /** Same contract as MigratableDatabase's — see services/migrations.ts. */
+  withTransactionAsync(task: () => Promise<void>): Promise<void>;
 }
 
 /**
@@ -43,6 +47,8 @@ interface ClothingItemRow {
   secondaryColor: string;
   hardwareColor: string;
   hasBeltLoops: number;
+  sleeveLength: string;
+  length: string;
   inferredWarmth: number;
   inferredWind: number;
   wearCount: number;
@@ -50,13 +56,14 @@ interface ClothingItemRow {
 }
 
 /**
- * Parses a materials column, tolerating anything that isn't a JSON string array.
+ * Parses a JSON-string-array column (materials, Outfit_Logs.itemIds),
+ * tolerating anything that isn't actually one.
  *
- * The column is only constrained to be TEXT, so a bad write (or a future
- * migration) could leave something else there. An unreadable materials list is
- * not a reason to fail the whole closet screen.
+ * Both columns are only constrained to be TEXT, so a bad write (or a future
+ * migration) could leave something else there. An unreadable list is not a
+ * reason to fail the whole closet screen.
  */
-function parseMaterials(raw: string): string[] {
+function parseStringArrayColumn(raw: string): string[] {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -77,13 +84,15 @@ export function rowToItem(row: ClothingItemRow): ClothingItem {
     brand: row.brand,
     costMinorUnits: row.costMinorUnits,
     isSecondHand: row.isSecondHand === 1,
-    materials: parseMaterials(row.materials),
+    materials: parseStringArrayColumn(row.materials),
     // Safe casts for the same reason as category: the CHECK constraints mean
     // no other value can reach these columns.
     primaryColor: row.primaryColor as ItemColor | '',
     secondaryColor: row.secondaryColor as ItemColor | '',
     hardwareColor: row.hardwareColor as HardwareColor,
     hasBeltLoops: row.hasBeltLoops === 1,
+    sleeveLength: row.sleeveLength as SleeveLength,
+    length: row.length as GarmentLength | '',
     inferredWarmth: row.inferredWarmth,
     inferredWind: row.inferredWind,
     wearCount: row.wearCount,
@@ -98,7 +107,7 @@ export type NewClothingItem = Omit<ClothingItem, 'id' | 'wearCount' | 'createdAt
 export type ItemUpdate = Partial<Omit<ClothingItem, 'id' | 'wearCount' | 'createdAt'>>;
 
 const ITEM_COLUMNS = `id, imagePath, originalImagePath, category, brand, costMinorUnits, isSecondHand,
-  materials, primaryColor, secondaryColor, hardwareColor, hasBeltLoops,
+  materials, primaryColor, secondaryColor, hardwareColor, hasBeltLoops, sleeveLength, length,
   inferredWarmth, inferredWind, wearCount, createdAt`;
 
 /**
@@ -116,7 +125,7 @@ export async function insertItem(
 ): Promise<ClothingItem> {
   await db.runAsync(
     `INSERT INTO ClothingItems (${ITEM_COLUMNS})
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       item.imagePath,
@@ -130,6 +139,8 @@ export async function insertItem(
       item.secondaryColor,
       item.hardwareColor,
       item.hasBeltLoops ? 1 : 0,
+      item.sleeveLength,
+      item.length,
       item.inferredWarmth,
       item.inferredWind,
       0,
@@ -204,6 +215,8 @@ const UPDATE_ENCODERS: {
   secondaryColor: (v) => v,
   hardwareColor: (v) => v,
   hasBeltLoops: (v) => (v ? 1 : 0),
+  sleeveLength: (v) => v,
+  length: (v) => v,
   inferredWarmth: (v) => v,
   inferredWind: (v) => v,
 };
@@ -324,4 +337,110 @@ export async function listRatedPairKeys(db: ItemsDatabase): Promise<Set<string>>
     [],
   );
   return new Set(rows.map((row) => `${row.item_a_id}|${row.item_b_id}`));
+}
+
+/**
+ * Every pair explicitly marked DISMATCH, as "a|b" canonical keys.
+ *
+ * The outfit generator's cold-start rule is the mirror image of the Speed
+ * Matcher's: an unrated pair is *allowed*, so only this — not
+ * listRatedPairKeys — is what excludes a pairing. A fresh wardrobe with zero
+ * rows here must still be able to generate outfits.
+ */
+export async function getDismatchedPairKeys(db: ItemsDatabase): Promise<Set<string>> {
+  const rows = await db.getAllAsync<{ item_a_id: string; item_b_id: string }>(
+    "SELECT item_a_id, item_b_id FROM Item_Compatibility WHERE status = 'DISMATCH'",
+    [],
+  );
+  return new Set(rows.map((row) => `${row.item_a_id}|${row.item_b_id}`));
+}
+
+/**
+ * The ids of every item worn on `date` (YYYY-MM-DD), across every outfit
+ * logged that day.
+ *
+ * itemIds is stored as JSON text (see OutfitLog), so this parses every
+ * matching row rather than querying inside the column — the same choice
+ * services/items.ts already makes for the materials column.
+ */
+export async function listItemsWornOn(db: ItemsDatabase, date: string): Promise<Set<string>> {
+  const rows = await db.getAllAsync<{ itemIds: string }>(
+    'SELECT itemIds FROM Outfit_Logs WHERE date = ?',
+    [date],
+  );
+  const worn = new Set<string>();
+  for (const row of rows) {
+    for (const id of parseStringArrayColumn(row.itemIds)) worn.add(id);
+  }
+  return worn;
+}
+
+/**
+ * Records an outfit as worn on `date`, and credits each of its items with one
+ * more wear.
+ *
+ * The two writes share a transaction so a crash between them can never leave
+ * a logged outfit whose items' wearCount didn't move, or vice versa — the
+ * exact shape sketched (but never wired up) in services/database.ts's
+ * pre-Phase-5 TODO comment. wearCount is intentionally not a SQL trigger; see
+ * that comment for why.
+ */
+export async function logOutfitWorn(
+  db: ItemsDatabase,
+  itemIds: readonly string[],
+  date: string,
+  id: string = Crypto.randomUUID(),
+  createdAt: string = new Date().toISOString(),
+): Promise<void> {
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      'INSERT INTO Outfit_Logs (id, date, itemIds, collageImageUri, createdAt) VALUES (?, ?, ?, ?, ?)',
+      [id, date, JSON.stringify(itemIds), '', createdAt],
+    );
+    for (const itemId of itemIds) {
+      await db.runAsync('UPDATE ClothingItems SET wearCount = wearCount + 1 WHERE id = ?', [itemId]);
+    }
+  });
+}
+
+/**
+ * Looks up items by id, in no particular order — a bulk equivalent of
+ * getItem for when the caller already has a list of ids (an Outfit_Logs row's
+ * itemIds) rather than a category to query by.
+ *
+ * An empty list returns nothing rather than everything, same reasoning as
+ * listItemsInCategories: `IN ()` is not valid SQLite.
+ */
+export async function listItemsByIds(
+  db: ItemsDatabase,
+  ids: readonly string[],
+): Promise<ClothingItem[]> {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(', ');
+  const rows = await db.getAllAsync<ClothingItemRow>(
+    `SELECT ${ITEM_COLUMNS} FROM ClothingItems WHERE id IN (${placeholders})`,
+    [...ids],
+  );
+  return rows.map(rowToItem);
+}
+
+/**
+ * The most recently logged outfit for `date`, resolved to items — or an
+ * empty list if nothing has been logged that day yet.
+ *
+ * "Most recent" matters when more than one outfit was logged the same day
+ * (an outfit changed partway through the day, say): this is what TodayScreen
+ * shows pinned at the top as "what you're wearing today", so it should
+ * reflect the latest decision, not the first.
+ */
+export async function getLatestLoggedOutfit(
+  db: ItemsDatabase,
+  date: string,
+): Promise<ClothingItem[]> {
+  const row = await db.getFirstAsync<{ itemIds: string }>(
+    'SELECT itemIds FROM Outfit_Logs WHERE date = ? ORDER BY createdAt DESC LIMIT 1',
+    [date],
+  );
+  if (!row) return [];
+  return listItemsByIds(db, parseStringArrayColumn(row.itemIds));
 }

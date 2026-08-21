@@ -1,5 +1,6 @@
 import React from 'react';
 import { Pressable, Text, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { StoredImage } from './StoredImage';
 import type { ClothingItem } from '../types/wardrobe';
 
@@ -14,10 +15,13 @@ export type Badge = 'match' | 'dismatch' | 'unrated' | null;
  */
 export const GRID_COLUMNS = 3;
 
-const BADGE_STYLE: Record<Exclude<Badge, null>, { label: string; className: string }> = {
-  match: { label: '✓', className: 'bg-emerald-600' },
-  dismatch: { label: '✕', className: 'bg-rose-600' },
-  unrated: { label: '?', className: 'bg-slate-400' },
+const BADGE_STYLE: Record<
+  Exclude<Badge, null>,
+  { icon: React.ComponentProps<typeof Ionicons>['name']; className: string; label: string }
+> = {
+  match: { icon: 'checkmark', className: 'bg-emerald-600', label: 'Match' },
+  dismatch: { icon: 'close', className: 'bg-rose-600', label: 'Dismatch' },
+  unrated: { icon: 'help', className: 'bg-slate-400', label: 'Unrated' },
 };
 
 /**
@@ -51,16 +55,17 @@ export function ItemTile({
         />
         {badgeStyle && (
           <View
+            accessibilityLabel={badgeStyle.label}
             className={`absolute top-1.5 right-1.5 w-7 h-7 rounded-full items-center justify-center ${badgeStyle.className}`}
           >
-            <Text className="text-white text-sm font-bold">{badgeStyle.label}</Text>
+            <Ionicons name={badgeStyle.icon} size={16} color="#ffffff" />
           </View>
         )}
       </View>
       <Text className="text-xs font-semibold text-slate-900 mt-1.5" numberOfLines={1}>
         {item.brand}
       </Text>
-      <Text className="text-[11px] text-slate-500" numberOfLines={1}>
+      <Text className="text-xs text-slate-500" numberOfLines={1}>
         {item.category}
       </Text>
     </Pressable>

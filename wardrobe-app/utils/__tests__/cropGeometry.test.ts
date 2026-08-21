@@ -1,10 +1,5 @@
 /** @jest-environment node */
-import {
-  cropRectFor,
-  parseDetectedBox,
-  TARGET_ASPECT,
-  type NormalizedBox,
-} from '../cropGeometry';
+import { cropRectFor, parseDetectedBox, TARGET_ASPECT, type NormalizedBox } from '../cropGeometry';
 
 /** How far a rectangle's shape may drift from 3:4 after integer rounding. */
 const ASPECT_TOLERANCE = 0.02;
@@ -66,6 +61,9 @@ describe('cropRectFor: the shape it produces', () => {
     ['nothing detected', null, 3000, 4000],
     ['nothing detected, landscape', null, 4000, 3000],
     ['a square photo', { x0: 0.2, y0: 0.2, x1: 0.8, y1: 0.8 }, 2000, 2000],
+    // A box that stops well short of the real edge -- the case that used to
+    // crop the waistband off a pair of shorts entirely.
+    ['an under-detected box', { x0: 0.15, y0: 0.4, x1: 0.85, y1: 0.75 }, 3000, 4000],
   ];
 
   it.each(cases)('stays inside the image for %s', (_name, box, width, height) => {
@@ -78,7 +76,7 @@ describe('cropRectFor: the shape it produces', () => {
 
   it.each(cases)('never ends up narrower than 3:4 for %s', (_name, box, width, height) => {
     // It may be wider, to keep a wide garment whole, but never taller and
-    // thinner than the tile — that would letterbox on the sides for no reason.
+    // thinner than the tile -- that would letterbox on the sides for no reason.
     const rect = cropRectFor(box, width, height);
     expect(aspectOf(rect)).toBeGreaterThanOrEqual(TARGET_ASPECT - ASPECT_TOLERANCE);
   });
@@ -103,8 +101,11 @@ describe('cropRectFor: the shape it produces', () => {
 
 describe('cropRectFor: what it centres on', () => {
   it('centres on the garment, not on the photo', () => {
-    // A piece in the top-left should not produce a crop of the middle.
-    const box = { x0: 0.05, y0: 0.05, x1: 0.35, y1: 0.45 };
+    // A piece off toward the top-left, but with enough room around it that
+    // sliding the padded box into bounds (see the 'stays inside the image'
+    // cases above) never has to kick in -- that shifts the crop's centre away
+    // from the garment's own, a different, already-tested property.
+    const box = { x0: 0.15, y0: 0.15, x1: 0.45, y1: 0.55 };
     const rect = cropRectFor(box, 4000, 4000);
 
     const cropCenterX = rect.originX + rect.width / 2;
@@ -113,7 +114,7 @@ describe('cropRectFor: what it centres on', () => {
     expect(cropCenterY).toBeCloseTo(((box.y0 + box.y1) / 2) * 4000, -2);
   });
 
-  it('includes the whole detected garment plus leeway', () => {
+  it('includes the whole detected garment plus a safety margin', () => {
     const box = { x0: 0.3, y0: 0.3, x1: 0.6, y1: 0.7 };
     const rect = cropRectFor(box, 3000, 4000);
 
@@ -125,7 +126,8 @@ describe('cropRectFor: what it centres on', () => {
 
   it('keeps a wide garment whole even though 3:4 will not fit it', () => {
     // A scarf laid flat cannot fit a portrait frame without losing its ends.
-    // The ratio gives way, not the garment; the tile letterboxes it instead.
+    // The ratio gives way, not the garment; the display layer letterboxes it
+    // instead (see components/FramedImage.tsx).
     const box = { x0: 0.1, y0: 0.45, x1: 0.9, y1: 0.55 };
     const rect = cropRectFor(box, 4000, 4000);
 
@@ -134,25 +136,40 @@ describe('cropRectFor: what it centres on', () => {
     expect(aspectOf(rect)).toBeGreaterThan(TARGET_ASPECT);
   });
 
+  it('grows an under-detected box towards a portrait shape rather than cropping to it exactly', () => {
+    // The regression this guards: a box that stops short of the real hem or
+    // waistband (here, a short, wide box for what is actually a portrait-ish
+    // garment) must not produce an equally short, wide crop -- that crops the
+    // missed edge away for good.
+    const box = { x0: 0.15, y0: 0.4, x1: 0.85, y1: 0.75 };
+    const rect = cropRectFor(box, 3000, 4000);
+
+    expect(aspectOf(rect)).toBeCloseTo(TARGET_ASPECT, 1);
+    // The extra height came from growing past the box, not just the safety pad.
+    const boxHeightPx = (box.y1 - box.y0) * 4000;
+    expect(rect.height).toBeGreaterThan(boxHeightPx * 1.5);
+  });
+
   it('hits 3:4 exactly when the image has room', () => {
     const rect = cropRectFor({ x0: 0.3, y0: 0.2, x1: 0.7, y1: 0.8 }, 3000, 4000);
     expect(Math.abs(aspectOf(rect) - TARGET_ASPECT)).toBeLessThan(ASPECT_TOLERANCE);
   });
 
-  it('falls back to the largest centred 3:4 rectangle when nothing was found', () => {
-    // A 3:4 photo is already the target shape, so nothing is trimmed.
+  it('returns the whole photo, untouched, when nothing was detected', () => {
+    // With no information about where the garment is, cropping to some
+    // assumed shape would just as likely cut into it as not -- the display
+    // layer letterboxes any aspect ratio equally well.
     expect(cropRectFor(null, 3000, 4000)).toEqual({
       originX: 0,
       originY: 0,
       width: 3000,
       height: 4000,
     });
-    // A square one loses the sides.
-    expect(cropRectFor(null, 4000, 4000)).toEqual({
-      originX: 500,
+    expect(cropRectFor(null, 4000, 3000)).toEqual({
+      originX: 0,
       originY: 0,
-      width: 3000,
-      height: 4000,
+      width: 4000,
+      height: 3000,
     });
   });
 });

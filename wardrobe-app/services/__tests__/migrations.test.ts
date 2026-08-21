@@ -95,7 +95,7 @@ describe('v1 -> v2: widening the category constraint', () => {
     ]);
   });
 
-  it('carries every item column across the rebuild unchanged', async () => {
+  it('carries every item column across the rebuild unchanged, except category renamed by v11 -> v12', async () => {
     const db = v1Db();
     db.prepare(
       `INSERT INTO ClothingItems (id, imageUri, category, brand, costMinorUnits, isSecondHand,
@@ -105,13 +105,16 @@ describe('v1 -> v2: widening the category constraint', () => {
 
     await runMigrations(adapt(db));
 
+    // category is the one deliberate exception: v11 -> v12 renames 'Bottom'
+    // to 'Pants' (see that migration's own describe block for the dedicated
+    // rename test) -- every other column really is unchanged.
     expect(db.prepare('SELECT * FROM ClothingItems').get()).toEqual({
       id: 'x',
       imagePath: 'items/a.png',
       originalImagePath: 'items/a.png',
       primaryColor: '',
       secondaryColor: '',
-      category: 'Bottom',
+      category: 'Pants',
       brand: 'Levis',
       costMinorUnits: 4599,
       isSecondHand: 1,
@@ -122,6 +125,8 @@ describe('v1 -> v2: widening the category constraint', () => {
       inferredWind: 2,
       wearCount: 7,
       createdAt: 'then',
+      sleeveLength: 'Short',
+      length: '',
     });
   });
 

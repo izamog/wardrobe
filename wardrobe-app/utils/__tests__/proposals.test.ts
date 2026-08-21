@@ -153,8 +153,40 @@ describe('parseExtraction: category, materials and hardware', () => {
 
   it('reads hardware colour only from its own smaller vocabulary', () => {
     expect(parseExtraction({ hardwareColor: 'gold' }).hardwareColor).toBe('Gold');
-    // Brass is a garment colour candidate but not a hardware finish we store.
-    expect(parseExtraction({ hardwareColor: 'Brass' }).hardwareColor).toBeUndefined();
+    expect(parseExtraction({ hardwareColor: 'brass' }).hardwareColor).toBe('Brass');
+    // 'Rose Gold' is a garment colour candidate but not a hardware finish we store.
+    expect(parseExtraction({ hardwareColor: 'Rose Gold' }).hardwareColor).toBeUndefined();
+  });
+
+  it('reads sleeve length ignoring case', () => {
+    expect(parseExtraction({ category: 'Shirt', sleeveLength: 'long' }).sleeveLength).toBe('Long');
+  });
+});
+
+describe('parseExtraction: length', () => {
+  it('validates against the Pants vocabulary when category is Pants', () => {
+    const proposal = parseExtraction({ category: 'Pants', length: 'cropped' });
+    expect(proposal.length).toBe('Cropped');
+  });
+
+  it('validates against the Skirt vocabulary when category is Skirt', () => {
+    const proposal = parseExtraction({ category: 'Skirt', length: 'midi' });
+    expect(proposal.length).toBe('Midi');
+  });
+
+  it("rejects a length that belongs to the other category's vocabulary", () => {
+    // 'Midi' is a Skirt length, not a Pants one.
+    expect(parseExtraction({ category: 'Pants', length: 'Midi' }).length).toBeUndefined();
+    // 'Cropped' is a Pants length, not a Skirt one.
+    expect(parseExtraction({ category: 'Skirt', length: 'Cropped' }).length).toBeUndefined();
+  });
+
+  it('drops length entirely for a category it does not apply to', () => {
+    expect(parseExtraction({ category: 'Top', length: 'Long' }).length).toBeUndefined();
+  });
+
+  it('drops length when category was not understood at all', () => {
+    expect(parseExtraction({ category: 'Onesie', length: 'Long' }).length).toBeUndefined();
   });
 });
 

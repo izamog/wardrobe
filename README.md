@@ -3,7 +3,9 @@
 Local-first iOS app for organising clothing, recording which items go together,
 and building weather-appropriate outfits from those rules.
 
-The app lives in `wardrobe-app/`. Everything is on-device; there is no server.
+The app lives in `wardrobe-app/`. Everything is on-device by default; the only
+optional exceptions are voice transcription and background removal, each of
+which is skipped entirely if not configured — see below.
 
 ## Status
 
@@ -19,8 +21,9 @@ the edit icon in the header.
 Colour is now recorded — up to two per garment, enforced by the schema rather
 than by app code.
 
-Background removal is still deferred to the development build Phase 6
-requires; see below. Still stubs: **Today** (Phase 5) and **Calendar** (Phase 6).
+Background removal now runs against a self-hosted server rather than the
+development build a native on-device model would have needed; see below.
+Still stubs: **Today** (Phase 5) and **Calendar** (Phase 6).
 
 ### Voice setup
 
@@ -34,6 +37,50 @@ build and **not** fine for TestFlight — distribution needs the call moved
 behind a server.
 
 Roughly £0.002 per item, with no monthly cap.
+
+### Background removal setup
+
+Free and self-hosted, via [withoutBG's open-weights
+model](https://github.com/withoutbg/withoutbg-inference) — no API key, no
+per-image cost — fronted by `background-framer/` in this repo, which crops
+the cutout to the garment's real edges and frames it onto a margined 3:4
+canvas (see `background-framer/frame.py` and its README for why that's a
+separate step and not something the app itself can do). Run both somewhere
+reachable from your phone (a Mac Mini on the same LAN, for example):
+
+```bash
+docker run -d --restart unless-stopped -p 8091:8000 \
+  withoutbg/withoutbg-openweights-v3-service-cpu:latest
+
+cd background-framer
+docker build -t wardrobe-background-framer .
+docker run -d --restart unless-stopped -p 8092:8000 \
+  -e BG_REMOVAL_SELF_HOSTED_URL=http://host.docker.internal:8091 \
+  --name background-framer \
+  wardrobe-background-framer
+```
+
+Then set `EXPO_PUBLIC_BACKGROUND_REMOVAL_URL` in `.env` to an address the
+phone can actually reach that machine on, **port 8092** (the framer, not
+withoutBG's 8091 directly) — not `localhost`, since the phone and the server
+are different devices. A plain LAN IP (e.g. `http://192.168.1.142:8092`)
+only works while the phone is on the same wifi; if the phone instead reaches
+the server over Tailscale, use the host's Tailscale IP (`tailscale ip` on the
+host) instead, e.g. `http://100.124.222.20:8092`. Getting this wrong fails
+silently — the request just can't route, and the app quietly keeps the plain
+photo, same as the voice step without a key.
+
+After changing `.env`, restart the dev server (`npx expo start -c`) and
+reload the app — `EXPO_PUBLIC_` values are inlined into the bundle when Metro
+starts, so a running server won't pick up an edited `.env` on its own.
+
+Inference is CPU-only and takes a few seconds per photo; it runs once, when an
+item's photo is saved. `originalImagePath` always keeps the unprocessed photo,
+so a failed or skipped cutout is never worse than doing nothing.
+
+`background-framer/` also has a `cloud` backend mode for withoutBG's hosted
+Pro Model API, for when this moves off a self-hosted Mac Mini onto
+TestFlight/the App Store — see its README.
 
 ## Running it
 

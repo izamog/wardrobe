@@ -1,8 +1,8 @@
-import { ALL_CATEGORIES } from './categories';
+import { ALL_CATEGORIES, lengthOptionsFor } from './categories';
 import { ALL_COLORS, toColorPair } from './colors';
 import { ALL_MATERIALS } from './materials';
 import { SCALE_MAX } from './format';
-import type { Category, HardwareColor, ItemColor } from '../types/wardrobe';
+import type { Category, GarmentLength, HardwareColor, ItemColor, SleeveLength } from '../types/wardrobe';
 
 /**
  * What a spoken description was understood to say.
@@ -22,6 +22,8 @@ export interface ItemProposal {
   materials?: string[];
   hardwareColor?: HardwareColor;
   hasBeltLoops?: boolean;
+  sleeveLength?: SleeveLength;
+  length?: GarmentLength;
   inferredWarmth?: number;
   inferredWind?: number;
 }
@@ -37,7 +39,8 @@ const MAX_BRAND_LENGTH = 60;
 /** £100,000. Above this the model has misheard a year, a phone number or a size. */
 const MAX_COST_MINOR_UNITS = 10_000_000;
 
-const HARDWARE_COLORS: readonly HardwareColor[] = ['Gold', 'Silver', 'None'];
+const HARDWARE_COLORS: readonly HardwareColor[] = ['Gold', 'Silver', 'Brass', 'Black', 'None'];
+const SLEEVE_LENGTHS: readonly SleeveLength[] = ['Sleeveless', 'Short', 'Long'];
 
 /**
  * Finds `value` in a vocabulary, ignoring case and surrounding space.
@@ -150,6 +153,19 @@ function applyIdentityFields(source: Record<string, unknown>, proposal: ItemProp
 
   const hardwareColor = matchVocabulary(source.hardwareColor, HARDWARE_COLORS);
   if (hardwareColor !== null) proposal.hardwareColor = hardwareColor;
+
+  const sleeveLength = matchVocabulary(source.sleeveLength, SLEEVE_LENGTHS);
+  if (sleeveLength !== null) proposal.sleeveLength = sleeveLength;
+
+  // Pants and Skirt each have their own length vocabulary (see
+  // GarmentLength), so — unlike sleeveLength, one flat list — this can only
+  // be checked once category is known. category is required in the
+  // extraction schema (services/voice.ts), so it's present on every
+  // well-formed reply; a malformed one simply means length goes unheard too.
+  if (category !== null) {
+    const length = matchVocabulary(source.length, lengthOptionsFor(category));
+    if (length !== null) proposal.length = length;
+  }
 }
 
 /** Cost, condition and the warmth/wind estimates — the quantity fields. */

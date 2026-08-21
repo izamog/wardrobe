@@ -83,29 +83,59 @@ describe('the stated layering rules', () => {
     }
   });
 
-  it('gives every upper-body garment layering rules', () => {
-    for (const garment of ['T-Shirt', 'Top', 'Shirt', 'Cardigan', 'Sweater', 'Jacket', 'Coat'] as Category[]) {
+  it('gives every upper-body garment layering rules, including a dress', () => {
+    for (const garment of [
+      'T-Shirt',
+      'Top',
+      'Shirt',
+      'Cardigan',
+      'Sweater',
+      'Jacket',
+      'Coat',
+      'Dress',
+    ] as Category[]) {
       expect(isLayerableCategory(garment)).toBe(true);
     }
   });
 
   it('gives non-garment categories no layering permissions', () => {
-    for (const other of ['Bottom', 'Shoes', 'Belt', 'Bag', 'Scarf'] as Category[]) {
+    for (const other of ['Pants', 'Shoes', 'Sandals', 'Belt', 'Bag', 'Scarf'] as Category[]) {
       expect(isLayerableCategory(other)).toBe(false);
       expect(getLayersOver(other)).toEqual([]);
       expect(getLayersUnder(other)).toEqual([]);
     }
   });
+
+  it('lets a dress go over a t-shirt or shirt, and under a cardigan, sweater, jacket or coat', () => {
+    expect(canLayerUnder('T-Shirt', 'Dress')).toBe(true);
+    expect(canLayerUnder('Shirt', 'Dress')).toBe(true);
+    expect(canLayerUnder('Dress', 'Cardigan')).toBe(true);
+    expect(canLayerUnder('Dress', 'Sweater')).toBe(true);
+    expect(canLayerUnder('Dress', 'Jacket')).toBe(true);
+    expect(canLayerUnder('Dress', 'Coat')).toBe(true);
+  });
+
+  it('has no relationship between a dress and a plain top, in either direction', () => {
+    expect(canLayerEitherWay('Top', 'Dress')).toBe(false);
+  });
 });
 
 describe('getLayersOver / getLayersUnder', () => {
   it('lists exactly what a t-shirt goes under, innermost first', () => {
-    expect(getLayersOver('T-Shirt')).toEqual(['Shirt', 'Cardigan', 'Sweater', 'Jacket', 'Coat']);
+    expect(getLayersOver('T-Shirt')).toEqual([
+      'Shirt',
+      'Cardigan',
+      'Sweater',
+      'Jacket',
+      'Coat',
+      'Dress',
+    ]);
   });
 
   it('lists exactly what goes under a coat', () => {
     expect(getLayersUnder('Coat').sort()).toEqual([
       'Cardigan',
+      'Dress',
       'Shirt',
       'Sweater',
       'T-Shirt',
@@ -124,7 +154,7 @@ describe('getLayersOver / getLayersUnder', () => {
 
   it('returns a fresh array so callers cannot mutate the rule table', () => {
     getLayersOver('T-Shirt').pop();
-    expect(getLayersOver('T-Shirt')).toHaveLength(5);
+    expect(getLayersOver('T-Shirt')).toHaveLength(6);
   });
 });
 
@@ -186,8 +216,8 @@ describe('isValidLayerStack', () => {
   });
 
   it('rejects anything with no layering rules rather than assuming it is fine', () => {
-    expect(isValidLayerStack(['T-Shirt', 'Bottom'])).toBe(false);
+    expect(isValidLayerStack(['T-Shirt', 'Pants'])).toBe(false);
     expect(isValidLayerStack(['Shoes'])).toBe(false);
-    expect(isValidLayerStack(['Bottom', 'Coat'])).toBe(false);
+    expect(isValidLayerStack(['Pants', 'Coat'])).toBe(false);
   });
 });

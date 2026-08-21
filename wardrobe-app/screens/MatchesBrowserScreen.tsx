@@ -14,6 +14,7 @@ import {
 } from '../services/items';
 import { withDb } from '../services/database';
 import { getComplementaryCategories } from '../utils/categories';
+import { isCompatibleCandidate } from '../utils/pairs';
 import type { RootStackParamList } from '../navigation/types';
 import type { ClothingItem, CompatibilityStatus } from '../types/wardrobe';
 
@@ -46,11 +47,13 @@ export function MatchesBrowserScreen() {
   const { data, error, loading, reload } = useDbQuery<BrowserData>(async (db) => {
     const item = await getItem(db, itemId);
     if (!item) return { item: null, candidates: [], verdicts: new Map() };
+    // Same-category items are never candidates — a top does not pair with
+    // another top — which is exactly what getComplementaryCategories encodes.
+    // isCompatibleCandidate narrows further: belt loops and hardware finish.
+    const byCategory = await listItemsInCategories(db, getComplementaryCategories(item.category));
     return {
       item,
-      // Same-category items are never candidates — a top does not pair with
-      // another top — which is exactly what getComplementaryCategories encodes.
-      candidates: await listItemsInCategories(db, getComplementaryCategories(item.category)),
+      candidates: byCategory.filter((candidate) => isCompatibleCandidate(item, candidate)),
       verdicts: await getVerdictsFor(db, itemId),
     };
   }, [itemId]);

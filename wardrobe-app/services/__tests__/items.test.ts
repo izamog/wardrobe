@@ -13,11 +13,17 @@ import {
   clearCompatibility,
   deleteItem,
   getCompatibility,
+  getDismatchedPairKeys,
   getItem,
+  getLatestLoggedOutfit,
   getVerdictsFor,
   insertItem,
   listItems,
+  listItemsByIds,
   listItemsInCategories,
+  listItemsWornOn,
+  listRatedPairKeys,
+  logOutfitWorn,
   rowToItem,
   setCompatibility,
   updateItem,
@@ -55,6 +61,16 @@ function adapt(db: DatabaseSync): ItemsDatabase {
     async getFirstAsync<T>(sql: string, params: (string | number | null)[]): Promise<T | null> {
       return (db.prepare(sql).get(...params) ?? null) as T | null;
     },
+    async withTransactionAsync(fn) {
+      db.exec('BEGIN');
+      try {
+        await fn();
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+    },
   };
 }
 
@@ -77,6 +93,8 @@ const draft = (overrides: Partial<NewClothingItem> = {}): NewClothingItem => ({
   materials: [],
   hardwareColor: 'None',
   hasBeltLoops: false,
+  sleeveLength: 'Short',
+  length: '',
   inferredWarmth: 0,
   inferredWind: 0,
   ...overrides,
@@ -90,7 +108,7 @@ describe('insertItem / getItem', () => {
       draft({
         imagePath: 'items/shirt.jpg',
         originalImagePath: 'items/shirt-original.jpg',
-        category: 'Bottom',
+        category: 'Pants',
         brand: 'Levis',
         costMinorUnits: 4599,
         isSecondHand: true,
@@ -145,6 +163,8 @@ describe('rowToItem', () => {
       materials: '["wool"]',
       hardwareColor: 'Gold',
       hasBeltLoops: 0,
+      sleeveLength: 'Short',
+      length: '',
       inferredWarmth: 0,
       inferredWind: 0,
       wearCount: 0,
@@ -169,6 +189,8 @@ describe('rowToItem', () => {
       isSecondHand: 0,
       hardwareColor: 'None',
       hasBeltLoops: 0,
+      sleeveLength: 'Short',
+      length: '',
       inferredWarmth: 0,
       inferredWind: 0,
       wearCount: 0,
@@ -359,5 +381,126 @@ describe('canonicalPair', () => {
   it('orders a pair the same way regardless of argument order', () => {
     expect(canonicalPair('b', 'a')).toEqual(['a', 'b']);
     expect(canonicalPair('a', 'b')).toEqual(['a', 'b']);
+  });
+});
+
+describe('getDismatchedPairKeys', () => {
+  it('is empty for a fresh wardrobe with no ratings at all', async () => {
+    const db = await freshDb();
+    expect(await getDismatchedPairKeys(db)).toEqual(new Set());
+  });
+
+  it('includes only DISMATCH pairs, not MATCH ones', async () => {
+    const db = await freshDb();
+    const a = await insertItem(db, draft({ category: 'Top' }), 'aaa');
+    const b = await insertItem(db, draft({ category: 'Pants' }), 'bbb');
+    const c = await insertItem(db, draft({ category: 'Shoes' }), 'ccc');
+
+    await setVerdict(db, a.id, b.id, 'MATCH');
+    await setVerdict(db, a.id, c.id, 'DISMATCH');
+
+    expect(await getDismatchedPairKeys(db)).toEqual(new Set(['aaa|ccc']));
+    // A rated (but not dismatched) pair still counts as "rated" elsewhere —
+    // the two sets answer different questions.
+    expect(await listRatedPairKeys(db)).toEqual(new Set(['aaa|bbb', 'aaa|ccc']));
+  });
+});
+
+describe('listItemsWornOn / logOutfitWorn', () => {
+  it('reports nothing worn on a date with no logs', async () => {
+    const db = await freshDb();
+    expect(await listItemsWornOn(db, '2026-08-20')).toEqual(new Set());
+  });
+
+  it('records which items were worn on a date, and credits their wearCount', async () => {
+    const db = await freshDb();
+    const top = await insertItem(db, draft({ category: 'Top' }), 'top1');
+    const bottom = await insertItem(db, draft({ category: 'Pants' }), 'bottom1');
+
+    await logOutfitWorn(db, [top.id, bottom.id], '2026-08-20', 'log1', '2026-08-20T08:00:00Z');
+
+    expect(await listItemsWornOn(db, '2026-08-20')).toEqual(new Set(['top1', 'bottom1']));
+    expect(await listItemsWornOn(db, '2026-08-21')).toEqual(new Set());
+
+    expect((await getItem(db, 'top1'))?.wearCount).toBe(1);
+    expect((await getItem(db, 'bottom1'))?.wearCount).toBe(1);
+  });
+
+  it('unions items across multiple outfits logged the same day', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await insertItem(db, draft({ category: 'Pants' }), 'bottom1');
+    await insertItem(db, draft({ category: 'Shoes' }), 'shoes1');
+
+    await logOutfitWorn(db, ['top1', 'bottom1'], '2026-08-20', 'log1');
+    await logOutfitWorn(db, ['bottom1', 'shoes1'], '2026-08-20', 'log2');
+
+    expect(await listItemsWornOn(db, '2026-08-20')).toEqual(
+      new Set(['top1', 'bottom1', 'shoes1']),
+    );
+    expect((await getItem(db, 'bottom1'))?.wearCount).toBe(2);
+  });
+
+  it('rolls back the whole write if any part of it fails', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+
+    // 'missing' has no row, so its wearCount UPDATE affects zero rows but does
+    // not itself throw — the log insert is what should still land. This test
+    // instead forces a failure by reusing an id, which the PRIMARY KEY rejects.
+    await logOutfitWorn(db, ['top1'], '2026-08-20', 'dup-log');
+    await expect(logOutfitWorn(db, ['top1'], '2026-08-21', 'dup-log')).rejects.toThrow();
+
+    // The failed second call must not have logged 2026-08-21 or double-counted
+    // the wear it started to record.
+    expect(await listItemsWornOn(db, '2026-08-21')).toEqual(new Set());
+    expect((await getItem(db, 'top1'))?.wearCount).toBe(1);
+  });
+});
+
+describe('listItemsByIds', () => {
+  it('returns nothing for an empty id list', async () => {
+    const db = await freshDb();
+    expect(await listItemsByIds(db, [])).toEqual([]);
+  });
+
+  it('resolves the requested items and ignores an id that no longer exists', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await insertItem(db, draft({ category: 'Pants' }), 'bottom1');
+    await insertItem(db, draft({ category: 'Shoes' }), 'shoes1');
+
+    const found = await listItemsByIds(db, ['top1', 'bottom1', 'missing']);
+    expect(found.map((i) => i.id).sort()).toEqual(['bottom1', 'top1']);
+  });
+});
+
+describe('getLatestLoggedOutfit', () => {
+  it('returns nothing for a date with no logs', async () => {
+    const db = await freshDb();
+    expect(await getLatestLoggedOutfit(db, '2026-08-20')).toEqual([]);
+  });
+
+  it('resolves the logged outfit to full items', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await insertItem(db, draft({ category: 'Pants' }), 'bottom1');
+    await logOutfitWorn(db, ['top1', 'bottom1'], '2026-08-20', 'log1', '2026-08-20T08:00:00Z');
+
+    const outfit = await getLatestLoggedOutfit(db, '2026-08-20');
+    expect(outfit.map((i) => i.id).sort()).toEqual(['bottom1', 'top1']);
+  });
+
+  it('returns the most recently logged outfit when several were logged the same day', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await insertItem(db, draft({ category: 'Top' }), 'top2');
+    await insertItem(db, draft({ category: 'Pants' }), 'bottom1');
+
+    await logOutfitWorn(db, ['top1', 'bottom1'], '2026-08-20', 'log1', '2026-08-20T08:00:00Z');
+    await logOutfitWorn(db, ['top2', 'bottom1'], '2026-08-20', 'log2', '2026-08-20T18:00:00Z');
+
+    const outfit = await getLatestLoggedOutfit(db, '2026-08-20');
+    expect(outfit.map((i) => i.id).sort()).toEqual(['bottom1', 'top2']);
   });
 });
