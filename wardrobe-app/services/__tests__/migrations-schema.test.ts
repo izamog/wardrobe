@@ -203,6 +203,278 @@ describe('v6 -> v7: garment colour', () => {
   });
 });
 
+describe('v7 -> v8: hardware colour widened to Brass and Black', () => {
+  function v7Db(): DatabaseSync {
+    const db = freshDb();
+    for (const migration of MIGRATIONS.slice(0, 7)) db.exec(migration);
+    db.exec('PRAGMA user_version = 7;');
+    return db;
+  }
+
+  const addWithHardware = (db: DatabaseSync, id: string, hw: string) =>
+    db
+      .prepare(
+        `INSERT INTO ClothingItems (id, imagePath, category, hardwareColor, createdAt)
+         VALUES (?,?,?,?,?)`,
+      )
+      .run(id, '', 'Belt', hw, 'then');
+
+  it('rejects Brass and Black before the migration runs', () => {
+    const db = v7Db();
+    expect(() => addWithHardware(db, 'bad', 'Brass')).toThrow(/CHECK constraint failed/);
+  });
+
+  it('accepts Brass and Black afterwards, still rejects anything else', async () => {
+    const db = v7Db();
+    await runMigrations(adapt(db));
+
+    for (const hw of ['Gold', 'Silver', 'Brass', 'Black', 'None']) {
+      expect(() => addWithHardware(db, `hw-${hw}`, hw)).not.toThrow();
+    }
+    expect(() => addWithHardware(db, 'bad', 'Copper')).toThrow(/CHECK constraint failed/);
+  });
+
+  it('keeps every verdict across this rebuild too', async () => {
+    const db = v7Db();
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('aaa', '', 'Top', 'then');
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('bbb', '', 'Bottom', 'then');
+    db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
+      .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM Item_Compatibility').get()).toEqual({ n: 1 });
+  });
+});
+
+describe('v8 -> v9: Dress and Sandals categories', () => {
+  function v8Db(): DatabaseSync {
+    const db = freshDb();
+    for (const migration of MIGRATIONS.slice(0, 8)) db.exec(migration);
+    db.exec('PRAGMA user_version = 8;');
+    return db;
+  }
+
+  it('rejects Dress and Sandals before the migration runs', () => {
+    const db = v8Db();
+    expect(() => addItem(db, 'bad-dress', 'Dress')).toThrow(/CHECK constraint failed/);
+    expect(() => addItem(db, 'bad-sandals', 'Sandals')).toThrow(/CHECK constraint failed/);
+  });
+
+  it('accepts every current category afterwards, including the two new ones', async () => {
+    const db = v8Db();
+    await runMigrations(adapt(db));
+
+    for (const [i, category] of ALL_CATEGORIES.entries()) {
+      expect(() => addItem(db, `ok-${i}`, category)).not.toThrow();
+    }
+    expect(() => addItem(db, 'bad', 'Jumpsuit')).toThrow(/CHECK constraint failed/);
+  });
+
+  it('keeps every verdict across this rebuild too', async () => {
+    const db = v8Db();
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('aaa', '', 'Top', 'then');
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('bbb', '', 'Bottom', 'then');
+    db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
+      .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM Item_Compatibility').get()).toEqual({ n: 1 });
+  });
+});
+
+describe('v9 -> v10: sleeve length', () => {
+  function v9Db(): DatabaseSync {
+    const db = freshDb();
+    for (const migration of MIGRATIONS.slice(0, 9)) db.exec(migration);
+    db.exec('PRAGMA user_version = 9;');
+    return db;
+  }
+
+  it('has no sleeveLength column before the migration runs', () => {
+    const db = v9Db();
+    expect(() => db.prepare('SELECT sleeveLength FROM ClothingItems').all()).toThrow();
+  });
+
+  it('defaults existing rows to Short, the adjustment table\'s neutral value', async () => {
+    const db = v9Db();
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('old', '', 'Top', 'then');
+
+    await runMigrations(adapt(db));
+
+    expect(
+      db.prepare('SELECT sleeveLength AS s FROM ClothingItems WHERE id = ?').get('old'),
+    ).toEqual({ s: 'Short' });
+  });
+
+  it('accepts every sleeve length and rejects anything else', async () => {
+    const db = v9Db();
+    await runMigrations(adapt(db));
+
+    const insert = (id: string, sleeveLength: string) =>
+      db
+        .prepare(
+          'INSERT INTO ClothingItems (id, imagePath, category, sleeveLength, createdAt) VALUES (?,?,?,?,?)',
+        )
+        .run(id, '', 'Top', sleeveLength, 't');
+
+    for (const sleeveLength of ['Sleeveless', 'Short', 'Long']) {
+      expect(() => insert(`sl-${sleeveLength}`, sleeveLength)).not.toThrow();
+    }
+    expect(() => insert('bad', 'ThreeQuarter')).toThrow(/CHECK constraint failed/);
+  });
+
+  it('keeps every verdict across this migration too', async () => {
+    const db = v9Db();
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('aaa', '', 'Top', 'then');
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('bbb', '', 'Bottom', 'then');
+    db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
+      .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM Item_Compatibility').get()).toEqual({ n: 1 });
+  });
+});
+
+describe('v10 -> v11: Skirt category and length field', () => {
+  function v10Db(): DatabaseSync {
+    const db = freshDb();
+    for (const migration of MIGRATIONS.slice(0, 10)) db.exec(migration);
+    db.exec('PRAGMA user_version = 10;');
+    return db;
+  }
+
+  it('rejects Skirt before the migration runs', () => {
+    const db = v10Db();
+    expect(() => addItem(db, 'bad-skirt', 'Skirt')).toThrow(/CHECK constraint failed/);
+  });
+
+  it('accepts every current category afterwards, including Skirt', async () => {
+    const db = v10Db();
+    await runMigrations(adapt(db));
+
+    for (const [i, category] of ALL_CATEGORIES.entries()) {
+      expect(() => addItem(db, `ok-${i}`, category)).not.toThrow();
+    }
+  });
+
+  it('accepts each category\'s own length vocabulary and empty, rejects the other category\'s and junk', async () => {
+    const db = v10Db();
+    await runMigrations(adapt(db));
+
+    const insert = (id: string, category: string, length: string) =>
+      db
+        .prepare(
+          'INSERT INTO ClothingItems (id, imagePath, category, length, createdAt) VALUES (?,?,?,?,?)',
+        )
+        .run(id, '', category, length, 't');
+
+    // Inserted post-migration (runMigrations above already ran to the latest
+    // version, which by now includes v11 -> v12's rename), so the category
+    // vocabulary here is 'Pants', not the pre-rename 'Bottom' this block's
+    // own migration introduced — see the v11 -> v12 describe block below for
+    // a test of the rename itself.
+    for (const length of ['', 'Short', 'Mid-length', 'Capri', 'Cropped', 'Long']) {
+      expect(() => insert(`bottom-${length}`, 'Pants', length)).not.toThrow();
+    }
+    for (const length of ['', 'Mini', 'Knee-length', 'Midi', 'Maxi']) {
+      expect(() => insert(`skirt-${length}`, 'Skirt', length)).not.toThrow();
+    }
+
+    expect(() => insert('bad1', 'Pants', 'Mini')).toThrow(/CHECK constraint failed/);
+    expect(() => insert('bad2', 'Skirt', 'Long')).toThrow(/CHECK constraint failed/);
+    expect(() => insert('bad3', 'Top', 'Short')).toThrow(/CHECK constraint failed/);
+    expect(() => insert('bad4', 'Pants', 'Nonsense')).toThrow(/CHECK constraint failed/);
+  });
+
+  it('keeps every verdict across this rebuild too', async () => {
+    const db = v10Db();
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('aaa', '', 'Top', 'then');
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('bbb', '', 'Bottom', 'then');
+    db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
+      .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM Item_Compatibility').get()).toEqual({ n: 1 });
+  });
+});
+
+describe('v11 -> v12: renaming the Bottom category to Pants', () => {
+  function v11Db(): DatabaseSync {
+    const db = freshDb();
+    for (const migration of MIGRATIONS.slice(0, 11)) db.exec(migration);
+    db.exec('PRAGMA user_version = 11;');
+    return db;
+  }
+
+  it('accepts Bottom, not Pants, before the migration runs', () => {
+    const db = v11Db();
+    expect(() => addItem(db, 'ok', 'Bottom')).not.toThrow();
+    expect(() => addItem(db, 'bad', 'Pants')).toThrow(/CHECK constraint failed/);
+  });
+
+  it('rewrites an existing Bottom row to Pants', async () => {
+    const db = v11Db();
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('aaa', '', 'Bottom', 'then');
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT category AS c FROM ClothingItems WHERE id=?').get('aaa')).toEqual({
+      c: 'Pants',
+    });
+  });
+
+  it('accepts every current category afterwards, including Pants, and no longer accepts Bottom', async () => {
+    const db = v11Db();
+    await runMigrations(adapt(db));
+
+    for (const [i, category] of ALL_CATEGORIES.entries()) {
+      expect(() => addItem(db, `ok-${i}`, category)).not.toThrow();
+    }
+    expect(() => addItem(db, 'bad', 'Bottom')).toThrow(/CHECK constraint failed/);
+  });
+
+  it('rewrites a Bottom row so its Pants-vocabulary length is still valid, unchanged', async () => {
+    const db = v11Db();
+    db.prepare(
+      'INSERT INTO ClothingItems (id, imagePath, category, length, createdAt) VALUES (?,?,?,?,?)',
+    ).run('aaa', '', 'Bottom', 'Cropped', 'then');
+
+    await runMigrations(adapt(db));
+
+    expect(
+      db.prepare('SELECT category AS c, length AS l FROM ClothingItems WHERE id=?').get('aaa'),
+    ).toEqual({ c: 'Pants', l: 'Cropped' });
+  });
+
+  it('keeps every verdict across this rebuild too', async () => {
+    const db = v11Db();
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('aaa', '', 'Top', 'then');
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('bbb', '', 'Bottom', 'then');
+    db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
+      .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM Item_Compatibility').get()).toEqual({ n: 1 });
+  });
+});
+
 describe('schema constraints', () => {
   let db: DatabaseSync;
   beforeEach(async () => {
@@ -218,17 +490,17 @@ describe('schema constraints', () => {
     expect(() => addItem(db, 'bad', 'Spaceship')).toThrow(/CHECK constraint failed/);
   });
 
-  it('allows only Gold, Silver and None hardware', () => {
+  it('allows only Gold, Silver, Brass, Black and None hardware', () => {
     const insert = (id: string, hw: string) =>
       db
         .prepare(
           'INSERT INTO ClothingItems (id, imagePath, category, hardwareColor, createdAt) VALUES (?,?,?,?,?)',
         )
         .run(id, '', 'Belt', hw, 't');
-    for (const hw of ['Gold', 'Silver', 'None']) {
+    for (const hw of ['Gold', 'Silver', 'Brass', 'Black', 'None']) {
       expect(() => insert(`hw-${hw}`, hw)).not.toThrow();
     }
-    expect(() => insert('hw-brass', 'Brass')).toThrow(/CHECK constraint failed/);
+    expect(() => insert('hw-copper', 'Copper')).toThrow(/CHECK constraint failed/);
   });
 
   it('keeps warmth and windproof within 0 and the top of the scale', () => {
@@ -285,7 +557,7 @@ describe('compatibility pairing rules', () => {
     db = freshDb();
     await runMigrations(adapt(db));
     addItem(db, 'aaa');
-    addItem(db, 'bbb', 'Bottom');
+    addItem(db, 'bbb', 'Pants');
   });
 
   it('stores a pair given in canonical order', () => {

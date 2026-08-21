@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, Switch, Text, TextInput, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -199,7 +200,7 @@ export function MultiSelectField({
         >
           {selected.length ? selected.join(', ') : emptyLabel}
         </Text>
-        <Text className="text-slate-400 ml-2">▾</Text>
+        <Ionicons name="chevron-down" size={16} color="#94a3b8" style={{ marginLeft: 8 }} />
       </Pressable>
 
       <Modal visible={open} animationType="slide" presentationStyle="pageSheet">
@@ -231,7 +232,7 @@ export function MultiSelectField({
                   className="flex-row items-center justify-between px-4 py-3.5 bg-white border-b border-slate-100"
                 >
                   <Text className="text-base text-slate-900">{option}</Text>
-                  {isSelected ? <Text className="text-lg text-slate-900">✓</Text> : null}
+                  {isSelected ? <Ionicons name="checkmark" size={20} color="#0f172a" /> : null}
                 </Pressable>
               );
             })}

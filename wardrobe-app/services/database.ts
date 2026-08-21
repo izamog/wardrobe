@@ -54,21 +54,8 @@ export async function initDatabase(): Promise<void> {
   await runMigrations(db);
 }
 
-// TODO (Phase 2): wearCount is intentionally NOT auto-incremented via a SQL
-// trigger, to avoid depending on the JSON1 extension (json_each) being
-// compiled into Expo's bundled SQLite. Instead, when the "log an outfit"
-// service is built, wrap the insert and the per-item increment in one
-// transaction, e.g.:
-//
-//   await db.withTransactionAsync(async () => {
-//     await db.runAsync(
-//       'INSERT INTO Outfit_Logs (id, date, itemIds, collageImageUri, createdAt) VALUES (?, ?, ?, ?, ?)',
-//       [id, date, JSON.stringify(itemIds), collageImageUri, createdAt]
-//     );
-//     for (const itemId of itemIds) {
-//       await db.runAsync(
-//         'UPDATE ClothingItems SET wearCount = wearCount + 1 WHERE id = ?',
-//         [itemId]
-//       );
-//     }
-//   });
+// wearCount is intentionally NOT auto-incremented via a SQL trigger, to avoid
+// depending on the JSON1 extension (json_each) being compiled into Expo's
+// bundled SQLite. Instead, logging an outfit and crediting each of its
+// items' wearCount happen in one transaction — see logOutfitWorn in
+// services/items.ts.

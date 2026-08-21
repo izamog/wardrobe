@@ -6,7 +6,7 @@ export function EmptyState({ title, detail }: { title: string; detail?: string }
     <View className="flex-1 items-center justify-center p-10">
       <Text className="text-base font-semibold text-slate-600 text-center">{title}</Text>
       {detail ? (
-        <Text className="text-sm text-slate-400 text-center mt-2">{detail}</Text>
+        <Text className="text-sm text-slate-500 text-center mt-2">{detail}</Text>
       ) : null}
     </View>
   );

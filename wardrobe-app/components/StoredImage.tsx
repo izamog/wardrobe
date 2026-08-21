@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Image, Text } from 'react-native';
+import { Text } from 'react-native';
 import { imageUriFor } from '../services/images';
+import { FramedImage } from './FramedImage';
 
 /**
  * Renders a photo stored under the document directory, filling its parent.
@@ -38,12 +39,15 @@ export function StoredImage({
 
   if (!uri || failed) return <Text className={placeholderClassName}>{placeholder}</Text>;
 
-  return (
-    <Image
-      source={{ uri }}
-      className="w-full h-full"
-      resizeMode={resizeMode}
-      onError={() => setFailed(true)}
-    />
-  );
+  // A .png is a background-removal cutout, which background-framer already
+  // crops to the garment and frames onto a margined canvas server-side (see
+  // background-framer/frame.py) -- adding FramedImage's own margin on top
+  // would double it. A .jpg is the plain photo (no cutout produced, or
+  // background removal unset/failed), which still needs the display-time
+  // margin, since nothing has framed it. Items saved before this split
+  // existed may have an unframed .png from the old client-side crop; those
+  // show with no margin until the photo is replaced or the item re-saved.
+  const margin = path.endsWith('.png') ? 0 : undefined;
+
+  return <FramedImage uri={uri} resizeMode={resizeMode} margin={margin} onError={() => setFailed(true)} />;
 }

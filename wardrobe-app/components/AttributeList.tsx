@@ -3,15 +3,19 @@ import { Pressable, Switch, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { MultiSelectField, OptionRow } from './Form';
 import { BouncingDots } from './BouncingDots';
-import { ALL_CATEGORIES } from '../utils/categories';
+import { ALL_CATEGORIES, lengthApplies, lengthOptionsFor, sleeveLengthApplies } from '../utils/categories';
 import { ALL_COLORS, toColorPair } from '../utils/colors';
 import { ALL_MATERIALS } from '../utils/materials';
 import { formatCost, parseCost } from '../utils/format';
-import type { Category, ItemColor } from '../types/wardrobe';
+import type { Category, GarmentLength, ItemColor, SleeveLength } from '../types/wardrobe';
+
+const SLEEVE_LENGTHS: readonly SleeveLength[] = ['Sleeveless', 'Short', 'Long'];
 
 /** Every attribute this list shows, in the order it shows them. */
 export const ATTRIBUTE_FIELDS = [
   'category',
+  'sleeveLength',
+  'length',
   'brand',
   'cost',
   'colors',
@@ -28,6 +32,8 @@ export interface AttributeValues {
   primaryColor: ItemColor | '';
   secondaryColor: ItemColor | '';
   category: Category;
+  sleeveLength: SleeveLength;
+  length: GarmentLength | '';
   isSecondHand: boolean;
   materials: string[];
 }
@@ -94,7 +100,7 @@ function AttributeRow({
               onPress={onEdit}
               accessibilityRole="button"
               accessibilityLabel={`Reject ${label}`}
-              className="w-10 h-10 rounded-full bg-slate-100 border border-slate-300 items-center justify-center mr-2"
+              className="w-11 h-11 rounded-full bg-slate-100 border border-slate-300 items-center justify-center mr-2"
             >
               <Ionicons name="close" size={18} color="#334155" />
             </Pressable>
@@ -102,7 +108,7 @@ function AttributeRow({
               onPress={onAccept}
               accessibilityRole="button"
               accessibilityLabel={`Accept ${label}`}
-              className="w-10 h-10 rounded-full bg-emerald-600 items-center justify-center"
+              className="w-11 h-11 rounded-full bg-emerald-600 items-center justify-center"
             >
               <Ionicons name="checkmark" size={18} color="#ffffff" />
             </Pressable>
@@ -186,6 +192,40 @@ export function AttributeList({
           }}
         />,
       )}
+
+      {sleeveLengthApplies(values.category) &&
+        row(
+          'sleeveLength',
+          'Sleeves',
+          values.sleeveLength,
+          <OptionRow
+            label=""
+            options={SLEEVE_LENGTHS}
+            value={values.sleeveLength}
+            onChange={(sleeveLength) => {
+              onChange({ sleeveLength });
+              onResolve('sleeveLength');
+              setExpanded(null);
+            }}
+          />,
+        )}
+
+      {lengthApplies(values.category) &&
+        row(
+          'length',
+          'Length',
+          values.length,
+          <OptionRow
+            label=""
+            options={lengthOptionsFor(values.category)}
+            value={values.length}
+            onChange={(length) => {
+              onChange({ length });
+              onResolve('length');
+              setExpanded(null);
+            }}
+          />,
+        )}
 
       {row(
         'brand',

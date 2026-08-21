@@ -17,4 +17,5 @@ export type RootStackParamList = {
   AddItem: { category?: Category } | undefined;
   ItemDetails: { itemId: string };
   MatchesBrowser: { itemId: string };
+  OutfitMatch: undefined;
 };

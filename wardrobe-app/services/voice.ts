@@ -92,6 +92,8 @@ function extractionSchema() {
       'materials',
       'hardwareColor',
       'hasBeltLoops',
+      'sleeveLength',
+      'length',
       'inferredWarmth',
       'inferredWind',
     ],
@@ -104,8 +106,24 @@ function extractionSchema() {
       category: { type: 'string', enum: [...ALL_CATEGORIES] },
       isSecondHand: { type: ['boolean', 'null'] },
       materials: { type: 'array', items: { type: 'string', enum: [...ALL_MATERIALS] } },
-      hardwareColor: nullableEnum(['Gold', 'Silver', 'None']),
+      hardwareColor: nullableEnum(['Gold', 'Silver', 'Brass', 'Black', 'None']),
       hasBeltLoops: { type: ['boolean', 'null'] },
+      sleeveLength: nullableEnum(['Sleeveless', 'Short', 'Long']),
+      // Pants and Skirt each have their own vocabulary; the schema doesn't
+      // know which category applies yet, so it accepts either — parseExtraction
+      // (utils/proposals.ts) is what checks the value against the right one
+      // once category is resolved.
+      length: nullableEnum([
+        'Short',
+        'Mid-length',
+        'Capri',
+        'Cropped',
+        'Long',
+        'Mini',
+        'Knee-length',
+        'Midi',
+        'Maxi',
+      ]),
       inferredWarmth: { type: ['number', 'null'] },
       inferredWind: { type: ['number', 'null'] },
     },
@@ -119,8 +137,16 @@ const EXTRACTION_INSTRUCTIONS = [
   'category is the exception — always choose the closest one, inferring it from the',
   'garment described even when the speaker never names a category.',
   'costInPounds is the amount paid, in pounds, as a decimal number.',
-  'inferredWarmth and inferredWind are your own estimates from 0 to 10 of how warm',
-  'and how wind-resistant the garment is; estimate them even when unstated.',
+  'sleeveLength is Sleeveless, Short or Long, only for a garment with a bodice or an',
+  'arm hole — return null for anything else, and null if the description does not say.',
+  'length applies only to Pants or a Skirt. For Pants use Short, Mid-length, Capri,',
+  'Cropped or Long. For a Skirt use Mini, Knee-length, Midi or Maxi. Return null for',
+  'every other category, and null if the description does not say.',
+  'inferredWarmth and inferredWind are 0-to-10 estimates of how warm and how',
+  'wind-resistant the garment is. Only return a value when the description actually',
+  'implies one — "thick", "lightweight", "just a light jacket" — the same rule as every',
+  'other field. The app already estimates both from category and material on its own,',
+  'so leaving them null when nothing was said is the correct answer, not a missed one.',
 ].join(' ');
 
 /**

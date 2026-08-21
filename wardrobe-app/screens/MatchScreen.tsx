@@ -1,11 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, Text, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { EmptyState } from '../components/EmptyState';
 import { StoredImage } from '../components/StoredImage';
 import { useDbQuery } from '../hooks/useDbQuery';
 import { listItems, listRatedPairKeys, setCompatibility } from '../services/items';
 import { withDb } from '../services/database';
 import { buildUnratedPairs, type ItemPair } from '../utils/pairs';
+import type { RootStackParamList } from '../navigation/types';
 import type { ClothingItem, CompatibilityStatus } from '../types/wardrobe';
 
 function PairFace({ item }: { item: ClothingItem }) {
@@ -22,8 +26,27 @@ function PairFace({ item }: { item: ClothingItem }) {
   );
 }
 
+/** A text link to the outfit-photo flow, shared between the deck and the empty state. */
+function OutfitPhotoLink({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} accessibilityRole="button" className="py-2 items-center">
+      <Text className="text-center text-xs text-slate-500 underline">
+        Or match from an outfit photo
+      </Text>
+    </Pressable>
+  );
+}
+
 /** Shown when there is no pair left to rate — either the deck is empty or every pair has a verdict. */
-function EmptyDeck({ isEmpty, onRefresh }: { isEmpty: boolean; onRefresh: () => void }) {
+function EmptyDeck({
+  isEmpty,
+  onRefresh,
+  onOutfitPhoto,
+}: {
+  isEmpty: boolean;
+  onRefresh: () => void;
+  onOutfitPhoto: () => void;
+}) {
   return (
     <View className="flex-1 bg-slate-50">
       <EmptyState
@@ -42,6 +65,7 @@ function EmptyDeck({ isEmpty, onRefresh }: { isEmpty: boolean; onRefresh: () => 
         >
           <Text className="text-white font-semibold">Refresh</Text>
         </Pressable>
+        <OutfitPhotoLink onPress={onOutfitPhoto} />
       </View>
     </View>
   );
@@ -53,11 +77,13 @@ function RatingView({
   remaining,
   saving,
   onRate,
+  onOutfitPhoto,
 }: {
   pair: ItemPair;
   remaining: number;
   saving: boolean;
   onRate: (status: CompatibilityStatus) => void;
+  onOutfitPhoto: () => void;
 }) {
   return (
     <View className="flex-1 bg-slate-50 p-4">
@@ -78,7 +104,7 @@ function RatingView({
           accessibilityLabel="Dismatch"
           className="flex-1 mr-2 rounded-2xl py-6 items-center bg-rose-600"
         >
-          <Text className="text-white text-3xl font-bold">✕</Text>
+          <Ionicons name="close" size={32} color="#ffffff" />
         </Pressable>
         <Pressable
           onPress={() => onRate('MATCH')}
@@ -87,20 +113,19 @@ function RatingView({
           accessibilityLabel="Match"
           className="flex-1 ml-2 rounded-2xl py-6 items-center bg-emerald-600"
         >
-          <Text className="text-white text-3xl font-bold">✓</Text>
+          <Ionicons name="checkmark" size={32} color="#ffffff" />
         </Pressable>
       </View>
 
       <View className="mt-auto">
-        <Text className="text-center text-xs text-slate-400">
-          Outfit photo auto-match arrives in Phase 4.
-        </Text>
+        <OutfitPhotoLink onPress={onOutfitPhoto} />
       </View>
     </View>
   );
 }
 
 export function MatchScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { data, error, loading, reload } = useDbQuery(async (db) => {
     const items = await listItems(db);
     return buildUnratedPairs(items, await listRatedPairKeys(db));
@@ -143,6 +168,8 @@ export function MatchScreen() {
     );
   }
 
+  const goToOutfitPhoto = () => navigation.navigate('OutfitMatch');
+
   if (!pair) {
     return (
       <EmptyDeck
@@ -151,6 +178,7 @@ export function MatchScreen() {
           setCursor(0);
           void reload();
         }}
+        onOutfitPhoto={goToOutfitPhoto}
       />
     );
   }
@@ -161,6 +189,7 @@ export function MatchScreen() {
       remaining={deck.length - cursor}
       saving={saving}
       onRate={(status) => void rate(status)}
+      onOutfitPhoto={goToOutfitPhoto}
     />
   );
 }

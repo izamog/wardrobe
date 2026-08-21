@@ -5,6 +5,9 @@ import {
   CATEGORY_GROUP,
   getComplementaryCategories,
   hardwareColorApplies,
+  lengthApplies,
+  lengthOptionsFor,
+  sleeveLengthApplies,
 } from '../categories';
 import { canLayerEitherWay } from '../layering';
 import type { Category } from '../../types/wardrobe';
@@ -59,7 +62,7 @@ describe('getComplementaryCategories', () => {
     // A sweater and a jacket are different slots, so they pair whether or not
     // the layering table has anything to say.
     expect(getComplementaryCategories('Sweater')).toContain('Jacket');
-    expect(getComplementaryCategories('Sweater')).toContain('Bottom');
+    expect(getComplementaryCategories('Sweater')).toContain('Pants');
     expect(getComplementaryCategories('Coat')).toContain('Shoes');
   });
 
@@ -72,14 +75,17 @@ describe('getComplementaryCategories', () => {
     }
   });
 
-  it('gives a cardigan every category outside its group, plus the tops it layers with', () => {
+  it('gives a cardigan every category outside its group, plus the tops and dress it layers with', () => {
     expect(getComplementaryCategories('Cardigan')).toEqual([
       'T-Shirt',
       'Top',
       'Jacket',
       'Coat',
-      'Bottom',
+      'Dress',
+      'Pants',
+      'Skirt',
       'Shoes',
+      'Sandals',
       'Belt',
       'Bag',
       'Scarf',
@@ -95,9 +101,66 @@ describe('getComplementaryCategories', () => {
   });
 
   it('returns a fresh array so callers cannot mutate shared state', () => {
-    const before = getComplementaryCategories('Bottom').length;
-    getComplementaryCategories('Bottom').pop();
-    expect(getComplementaryCategories('Bottom')).toHaveLength(before);
+    const before = getComplementaryCategories('Pants').length;
+    getComplementaryCategories('Pants').pop();
+    expect(getComplementaryCategories('Pants')).toHaveLength(before);
+  });
+});
+
+describe('getComplementaryCategories: Dress', () => {
+  it('never pairs a dress with a plain top or with any bottom', () => {
+    expect(getComplementaryCategories('Dress')).not.toContain('Top');
+    expect(getComplementaryCategories('Dress')).not.toContain('Pants');
+    // Symmetric: from Top and Bottom's own side too.
+    expect(getComplementaryCategories('Top')).not.toContain('Dress');
+    expect(getComplementaryCategories('Pants')).not.toContain('Dress');
+  });
+
+  it('pairs a dress with a t-shirt or shirt worn underneath it', () => {
+    expect(getComplementaryCategories('Dress')).toContain('T-Shirt');
+    expect(getComplementaryCategories('Dress')).toContain('Shirt');
+  });
+
+  it('pairs a dress with a cardigan, sweater, jacket or coat worn over it', () => {
+    for (const outer of ['Cardigan', 'Sweater', 'Jacket', 'Coat'] as Category[]) {
+      expect(getComplementaryCategories('Dress')).toContain(outer);
+    }
+  });
+
+  it('still pairs a dress with accessories and footwear', () => {
+    for (const other of ['Shoes', 'Sandals', 'Bag', 'Scarf', 'Belt'] as Category[]) {
+      expect(getComplementaryCategories('Dress')).toContain(other);
+    }
+  });
+});
+
+describe('getComplementaryCategories: Sandals', () => {
+  it('competes with Shoes for the same slot, so the two never pair', () => {
+    expect(getComplementaryCategories('Sandals')).not.toContain('Shoes');
+    expect(getComplementaryCategories('Shoes')).not.toContain('Sandals');
+  });
+
+  it('otherwise pairs like any other footwear category', () => {
+    expect(getComplementaryCategories('Sandals')).toContain('Pants');
+    expect(getComplementaryCategories('Sandals')).toContain('T-Shirt');
+  });
+});
+
+describe('getComplementaryCategories: Skirt', () => {
+  it('competes with Bottom for the same slot, so the two never pair', () => {
+    expect(getComplementaryCategories('Skirt')).not.toContain('Pants');
+    expect(getComplementaryCategories('Pants')).not.toContain('Skirt');
+  });
+
+  it('conflicts with Dress, same as Bottom does', () => {
+    expect(getComplementaryCategories('Skirt')).not.toContain('Dress');
+    expect(getComplementaryCategories('Dress')).not.toContain('Skirt');
+  });
+
+  it('otherwise pairs like Bottom does', () => {
+    expect(getComplementaryCategories('Skirt')).toContain('T-Shirt');
+    expect(getComplementaryCategories('Skirt')).toContain('Shoes');
+    expect(getComplementaryCategories('Skirt')).toContain('Belt');
   });
 });
 
@@ -121,6 +184,37 @@ describe('attribute applicability', () => {
   });
 
   it('asks for belt loops on bottoms only', () => {
-    expect(ALL_CATEGORIES.filter(beltLoopsApply)).toEqual(['Bottom']);
+    expect(ALL_CATEGORIES.filter(beltLoopsApply)).toEqual(['Pants']);
+  });
+
+  it('asks for sleeve length on Top-group, Outerwear-group and Dress categories only', () => {
+    expect(ALL_CATEGORIES.filter(sleeveLengthApplies)).toEqual([
+      'T-Shirt',
+      'Top',
+      'Shirt',
+      'Cardigan',
+      'Sweater',
+      'Jacket',
+      'Coat',
+      'Dress',
+    ]);
+  });
+
+  it('asks for length on Bottom and Skirt only', () => {
+    expect(ALL_CATEGORIES.filter(lengthApplies)).toEqual(['Pants', 'Skirt']);
+  });
+
+  it('gives Bottom and Skirt their own, non-overlapping length vocabularies', () => {
+    const bottomLengths = lengthOptionsFor('Pants');
+    const skirtLengths = lengthOptionsFor('Skirt');
+
+    expect(bottomLengths).toEqual(['Short', 'Mid-length', 'Capri', 'Cropped', 'Long']);
+    expect(skirtLengths).toEqual(['Mini', 'Knee-length', 'Midi', 'Maxi']);
+    expect(bottomLengths.some((l) => (skirtLengths as readonly string[]).includes(l))).toBe(false);
+  });
+
+  it('returns no length options for a category length does not apply to', () => {
+    expect(lengthOptionsFor('Top')).toEqual([]);
+    expect(lengthApplies('Top')).toBe(false);
   });
 });

@@ -4,6 +4,11 @@
  * Distinct from Category because several garment types share a slot: a T-Shirt
  * and a Sweater are both Tops, which is why they are excluded from ordinary
  * pairing and admitted only through the layering rules in utils/layering.ts.
+ *
+ * 'Dress' is its own group rather than folded into 'Top' or 'Bottom': a dress
+ * fills both slots at once, so it has to conflict with both by default rather
+ * than compete only within one of them. See CONFLICTING_GROUPS in
+ * utils/categories.ts, which is what encodes that.
  */
 export type CategoryGroup =
   | 'Top'
@@ -12,7 +17,8 @@ export type CategoryGroup =
   | 'Shoes'
   | 'Belt'
   | 'Bag'
-  | 'Scarf';
+  | 'Scarf'
+  | 'Dress';
 
 /**
  * The garment type stored on an item.
@@ -20,6 +26,19 @@ export type CategoryGroup =
  * 'Top' covers basic upper-body garments that are not one of the more specific
  * types — vests, camisoles, tanks, plain jersey tops. It layers like a base
  * layer, which is what distinguishes it from 'T-Shirt' only by cut.
+ *
+ * 'Dress' replaces a Top and a Bottom at once rather than sitting in either
+ * slot: it may be layered under a Cardigan, Sweater, Jacket or Coat, and over
+ * a T-Shirt or Shirt, but never paired with a plain Top or any Bottom — see
+ * utils/layering.ts for the layer pairs and utils/categories.ts for the
+ * conflict rule.
+ *
+ * 'Pants' and 'Skirt' are the two Bottom-group categories — 'Pants' covers
+ * trousers, jeans and shorts (anything below the waist that isn't a skirt).
+ * They share the 'Bottom' CategoryGroup (see CATEGORY_GROUP in
+ * utils/categories.ts), which is the "Bottoms" umbrella: two sibling
+ * categories competing for the same outfit slot, the same relationship
+ * 'Shoes' and 'Sandals' already have.
  *
  * Each member here has a matching entry in the category CHECK constraint in
  * services/migrations.ts. Adding one means adding a migration.
@@ -32,8 +51,11 @@ export type Category =
   | 'Sweater'
   | 'Jacket'
   | 'Coat'
-  | 'Bottom'
+  | 'Dress'
+  | 'Pants'
+  | 'Skirt'
   | 'Shoes'
+  | 'Sandals'
   | 'Belt'
   | 'Bag'
   | 'Scarf';
@@ -47,7 +69,7 @@ export type Category =
  * Each member here has a matching entry in the hardwareColor CHECK constraint
  * in services/migrations.ts. Adding one means adding a migration.
  */
-export type HardwareColor = 'Gold' | 'Silver' | 'None';
+export type HardwareColor = 'Gold' | 'Silver' | 'Brass' | 'Black' | 'None';
 
 /**
  * The colour of the fabric itself.
@@ -81,6 +103,45 @@ export type ItemColor =
   | 'Silver'
   | 'Multi';
 
+/**
+ * How much of the arm a garment covers.
+ *
+ * A category alone conflates two very different coverage levels — 'Top' is
+ * documented to mean anything from a sleeveless tank to a loose long-sleeve
+ * jersey top, and those two are not close to equally warm or wind-resistant.
+ * This is what utils/warmth.ts actually needs and the category can't supply
+ * on its own. 'Short' is the neutral middle value: it contributes no
+ * adjustment, which is also why it's the migration default — existing items
+ * keep the estimate they already had rather than silently dropping when this
+ * column was added.
+ *
+ * Each member here has a matching entry in the sleeveLength CHECK constraint
+ * in services/migrations.ts. Adding one means adding a migration.
+ */
+export type SleeveLength = 'Sleeveless' | 'Short' | 'Long';
+
+/**
+ * How long a pair of trousers/shorts is. Skirt uses a different vocabulary
+ * entirely (SkirtLength) — the two categories don't share a "length" concept
+ * the way every Top-group category shares one "sleeve length" concept, so
+ * this isn't a single flat union the way SleeveLength is.
+ *
+ * Each member here has a matching entry in the length CHECK constraint in
+ * services/migrations.ts. Adding one means adding a migration.
+ */
+export type PantsLength = 'Short' | 'Mid-length' | 'Capri' | 'Cropped' | 'Long';
+
+/**
+ * How long a skirt is. See PantsLength for why this is a separate union
+ * rather than sharing one with it.
+ *
+ * Each member here has a matching entry in the length CHECK constraint in
+ * services/migrations.ts. Adding one means adding a migration.
+ */
+export type SkirtLength = 'Mini' | 'Knee-length' | 'Midi' | 'Maxi';
+
+export type GarmentLength = PantsLength | SkirtLength;
+
 export type CompatibilityStatus = 'MATCH' | 'DISMATCH';
 
 export interface ClothingItem {
@@ -98,9 +159,10 @@ export interface ClothingItem {
   /**
    * The unprocessed photo, same relative-path rules.
    *
-   * Equal to imagePath until background removal exists; kept separately so
-   * removal can later be applied to an already-populated wardrobe without
-   * re-photographing every item.
+   * Equal to imagePath when no background-removal server is configured, or
+   * when a cutout attempt failed; kept separately so a future re-run can be
+   * applied to an already-populated wardrobe without re-photographing every
+   * item. See services/backgroundRemoval.ts and services/itemActions.ts.
    */
   originalImagePath: string;
   category: Category;
@@ -126,6 +188,20 @@ export interface ClothingItem {
   secondaryColor: ItemColor | '';
   hardwareColor: HardwareColor;
   hasBeltLoops: boolean;
+  /**
+   * Only meaningful where sleeveLengthApplies(category) — see
+   * utils/categories.ts. 'Short' elsewhere, same as the migration default.
+   */
+  sleeveLength: SleeveLength;
+  /**
+   * How long a Pants or Skirt item is, or '' when not recorded or not
+   * applicable — see lengthApplies in utils/categories.ts. Unlike
+   * sleeveLength there's no shared neutral value across categories (Pants
+   * and Skirt use entirely different vocabularies), so this follows
+   * primaryColor's convention instead: an empty string is a real, honest
+   * "not yet known" rather than a guessed default.
+   */
+  length: GarmentLength | '';
   /**
    * How warm the garment is, 0-10.
    *

@@ -26,9 +26,10 @@ function fakeImages() {
   let failNextPersist = false;
 
   const store: ImageStore = {
-    persist(_temporaryUri, itemId) {
+    persist(_temporaryUri, itemId, extension = '.jpg') {
       if (failNextPersist) throw new Error('disk full');
-      const path = `items/${itemId}-${persisted.length}.jpg`;
+      const dot = extension.startsWith('.') ? extension : `.${extension}`;
+      const path = `items/${itemId}-${persisted.length}${dot}`;
       persisted.push(path);
       return path;
     },
@@ -45,6 +46,20 @@ function fakeImages() {
       failNextPersist = true;
     },
   };
+}
+
+/** Stands in for services/backgroundRemoval.ts's removeBackground, and counts calls. */
+function fakeRemoveBackground(cutoutUri: string | null) {
+  let calls = 0;
+  const fn = async () => {
+    calls += 1;
+    return cutoutUri;
+  };
+  return Object.assign(fn, {
+    get calls() {
+      return calls;
+    },
+  });
 }
 
 function adaptForMigrations(db: DatabaseSync): MigratableDatabase {
@@ -77,6 +92,16 @@ function adapt(db: DatabaseSync): ItemsDatabase {
     async getFirstAsync<T>(sql: string, params: (string | number | null)[]): Promise<T | null> {
       return (db.prepare(sql).get(...params) ?? null) as T | null;
     },
+    async withTransactionAsync(fn) {
+      db.exec('BEGIN');
+      try {
+        await fn();
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+    },
   };
 }
 
@@ -101,6 +126,8 @@ const draft: ItemDraft = {
   materials: [],
   hardwareColor: 'None',
   hasBeltLoops: false,
+  sleeveLength: 'Short',
+  length: '',
   inferredWarmth: 0,
   inferredWind: 0,
 };
@@ -121,9 +148,9 @@ describe('createItem', () => {
     const images = fakeImages();
 
     const item = await createItem(
-      { runQuery, images: images.store, newId: () => 'item-1' },
+      { runQuery, images: images.store, newId: () => 'item-1', removeBackground: fakeRemoveBackground(null) },
       draft,
-      'file:///tmp/pick.jpg',
+      { original: 'file:///tmp/pick.jpg' },
     );
 
     expect(images.persisted).toEqual(['items/item-1-0.jpg']);
@@ -131,16 +158,70 @@ describe('createItem', () => {
     expect((await getItem(db, 'item-1'))?.imagePath).toBe('items/item-1-0.jpg');
   });
 
-  it('points the original at the same file, so removal has a source later', async () => {
+  it('points the original at the same file when no cutout was produced', async () => {
     const { runQuery } = await freshRunQuery();
     const images = fakeImages();
 
     const item = await createItem(
-      { runQuery, images: images.store, newId: () => 'item-1' },
+      { runQuery, images: images.store, newId: () => 'item-1', removeBackground: fakeRemoveBackground(null) },
       draft,
-      'file:///tmp/pick.jpg',
+      { original: 'file:///tmp/pick.jpg' },
     );
 
+    expect(item.originalImagePath).toBe(item.imagePath);
+  });
+
+  it('stores a successful cutout as imagePath, keeping the plain photo as originalImagePath', async () => {
+    const { runQuery } = await freshRunQuery();
+    const images = fakeImages();
+
+    const item = await createItem(
+      {
+        runQuery,
+        images: images.store,
+        newId: () => 'item-1',
+        removeBackground: fakeRemoveBackground('file:///tmp/cutout.png'),
+      },
+      draft,
+      { original: 'file:///tmp/pick.jpg' },
+    );
+
+    expect(images.persisted).toEqual(['items/item-1-0.jpg', 'items/item-1-1.png']);
+    expect(item.originalImagePath).toBe('items/item-1-0.jpg');
+    expect(item.imagePath).toBe('items/item-1-1.png');
+  });
+
+  it('uses an already-known cutout without calling removeBackground again', async () => {
+    // The add-item flow runs background removal live during refinement, so by
+    // save time it already knows the outcome (see ItemPhoto) — paying for the
+    // network call again here would double the cost of every save.
+    const { runQuery } = await freshRunQuery();
+    const images = fakeImages();
+    const removeBackground = fakeRemoveBackground('file:///tmp/should-not-be-used.png');
+
+    const item = await createItem(
+      { runQuery, images: images.store, newId: () => 'item-1', removeBackground },
+      draft,
+      { original: 'file:///tmp/pick.jpg', processed: 'file:///tmp/cutout.png' },
+    );
+
+    expect(removeBackground.calls).toBe(0);
+    expect(images.persisted).toEqual(['items/item-1-0.jpg', 'items/item-1-1.png']);
+    expect(item.imagePath).toBe('items/item-1-1.png');
+  });
+
+  it('treats an already-known failed cutout the same as no cutout, without retrying', async () => {
+    const { runQuery } = await freshRunQuery();
+    const images = fakeImages();
+    const removeBackground = fakeRemoveBackground('file:///tmp/should-not-be-used.png');
+
+    const item = await createItem(
+      { runQuery, images: images.store, newId: () => 'item-1', removeBackground },
+      draft,
+      { original: 'file:///tmp/pick.jpg', processed: null },
+    );
+
+    expect(removeBackground.calls).toBe(0);
     expect(item.originalImagePath).toBe(item.imagePath);
   });
 
@@ -151,13 +232,37 @@ describe('createItem', () => {
 
     await expect(
       createItem(
-        { runQuery: failingRunQuery, images: images.store, newId: () => 'item-1' },
+        {
+          runQuery: failingRunQuery,
+          images: images.store,
+          newId: () => 'item-1',
+          removeBackground: fakeRemoveBackground(null),
+        },
         draft,
-        'file:///tmp/pick.jpg',
+        { original: 'file:///tmp/pick.jpg' },
       ),
     ).rejects.toThrow('database is locked');
 
     expect(images.removed).toEqual(['items/item-1-0.jpg']);
+  });
+
+  it('deletes both the original and the cutout when the row fails', async () => {
+    const images = fakeImages();
+
+    await expect(
+      createItem(
+        {
+          runQuery: failingRunQuery,
+          images: images.store,
+          newId: () => 'item-1',
+          removeBackground: fakeRemoveBackground('file:///tmp/cutout.png'),
+        },
+        draft,
+        { original: 'file:///tmp/pick.jpg' },
+      ),
+    ).rejects.toThrow('database is locked');
+
+    expect(images.removed.sort()).toEqual(['items/item-1-0.jpg', 'items/item-1-1.png']);
   });
 
   it('writes no row when the file cannot be written', async () => {
@@ -167,9 +272,9 @@ describe('createItem', () => {
 
     await expect(
       createItem(
-        { runQuery, images: images.store, newId: () => 'item-1' },
+        { runQuery, images: images.store, newId: () => 'item-1', removeBackground: fakeRemoveBackground(null) },
         draft,
-        'file:///tmp/pick.jpg',
+        { original: 'file:///tmp/pick.jpg' },
       ),
     ).rejects.toThrow('disk full');
 
@@ -240,9 +345,9 @@ describe('replaceItemImage', () => {
     await insertItem(db, { ...draft, imagePath: 'items/old.jpg', originalImagePath: 'items/old.jpg' }, 'item-1', 'then');
 
     await replaceItemImage(
-      { runQuery, images: images.store },
+      { runQuery, images: images.store, removeBackground: fakeRemoveBackground(null) },
       storedItem({ imagePath: 'items/old.jpg', originalImagePath: 'items/old.jpg' }),
-      'file:///tmp/new.jpg',
+      { original: 'file:///tmp/new.jpg' },
     );
 
     const stored = await getItem(db, 'item-1');
@@ -256,12 +361,32 @@ describe('replaceItemImage', () => {
     const images = fakeImages();
 
     await replaceItemImage(
-      { runQuery, images: images.store },
+      { runQuery, images: images.store, removeBackground: fakeRemoveBackground(null) },
       storedItem({ imagePath: 'items/old.jpg', originalImagePath: 'items/old.jpg' }),
-      'file:///tmp/new.jpg',
+      { original: 'file:///tmp/new.jpg' },
     );
 
     expect(images.persisted[0]).not.toBe('items/old.jpg');
+  });
+
+  it('stores a successful cutout as imagePath, keeping the plain photo as originalImagePath', async () => {
+    const { runQuery, db } = await freshRunQuery();
+    const images = fakeImages();
+    await insertItem(db, { ...draft, imagePath: 'items/old.jpg', originalImagePath: 'items/old.jpg' }, 'item-1', 'then');
+
+    await replaceItemImage(
+      {
+        runQuery,
+        images: images.store,
+        removeBackground: fakeRemoveBackground('file:///tmp/cutout.png'),
+      },
+      storedItem({ imagePath: 'items/old.jpg', originalImagePath: 'items/old.jpg' }),
+      { original: 'file:///tmp/new.jpg' },
+    );
+
+    const stored = await getItem(db, 'item-1');
+    expect(stored?.originalImagePath).toBe('items/item-1-0.jpg');
+    expect(stored?.imagePath).toBe('items/item-1-1.png');
   });
 
   it('discards the new file and keeps the old one when the update fails', async () => {
@@ -269,9 +394,9 @@ describe('replaceItemImage', () => {
 
     await expect(
       replaceItemImage(
-        { runQuery: failingRunQuery, images: images.store },
+        { runQuery: failingRunQuery, images: images.store, removeBackground: fakeRemoveBackground(null) },
         storedItem({ imagePath: 'items/old.jpg', originalImagePath: 'items/old.jpg' }),
-        'file:///tmp/new.jpg',
+        { original: 'file:///tmp/new.jpg' },
       ),
     ).rejects.toThrow('database is locked');
 

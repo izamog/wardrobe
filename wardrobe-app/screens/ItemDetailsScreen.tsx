@@ -25,14 +25,31 @@ import { useDbQuery } from '../hooks/useDbQuery';
 import { getItem, updateItem, type ItemUpdate } from '../services/items';
 import { removeItem, replaceItemImage } from '../services/itemActions';
 import { withDb } from '../services/database';
-import { ALL_CATEGORIES, beltLoopsApply, hardwareColorApplies } from '../utils/categories';
+import {
+  ALL_CATEGORIES,
+  beltLoopsApply,
+  hardwareColorApplies,
+  lengthApplies,
+  lengthOptionsFor,
+  sleeveLengthApplies,
+} from '../utils/categories';
 import { ALL_MATERIALS } from '../utils/materials';
 import { ALL_COLORS, toColorPair } from '../utils/colors';
 import { costPerWear, formatCost, parseCost, parseScale, SCALE_MAX } from '../utils/format';
+import { estimateWarmth, estimateWind } from '../utils/warmth';
 import type { RootStackParamList } from '../navigation/types';
-import type { Category, ClothingItem, HardwareColor, ItemColor } from '../types/wardrobe';
+import type {
+  Category,
+  ClothingItem,
+  GarmentLength,
+  HardwareColor,
+  ItemColor,
+  SleeveLength,
+} from '../types/wardrobe';
 
-const HARDWARE_COLORS: readonly HardwareColor[] = ['None', 'Gold', 'Silver'];
+const SLEEVE_LENGTHS: readonly SleeveLength[] = ['Sleeveless', 'Short', 'Long'];
+
+const HARDWARE_COLORS: readonly HardwareColor[] = ['None', 'Gold', 'Silver', 'Brass', 'Black'];
 
 /**
  * The edit form's own state, strings wherever the user types.
@@ -52,6 +69,8 @@ interface Draft {
   materials: string[];
   hardwareColor: HardwareColor;
   hasBeltLoops: boolean;
+  sleeveLength: SleeveLength;
+  length: GarmentLength | '';
   inferredWarmth: string;
   inferredWind: string;
 }
@@ -68,6 +87,8 @@ function toDraft(item: ClothingItem): Draft {
     materials: item.materials,
     hardwareColor: item.hardwareColor,
     hasBeltLoops: item.hasBeltLoops,
+    sleeveLength: item.sleeveLength,
+    length: item.length,
     inferredWarmth: String(item.inferredWarmth),
     inferredWind: String(item.inferredWind),
   };
@@ -111,12 +132,17 @@ function buildItemUpdate(draft: Draft): ItemUpdate | { errorTitle: string; error
     // toColorPair applies the same rules as the CHECK constraints, so the
     // form cannot submit a pair SQLite would reject.
     ...toColorPair(draft.colors),
-    // Both of these are only askable for some categories. Clearing them for
-    // the rest means recategorising a garment cannot leave an invisible
+    // These four are each only askable for some categories. Clearing them
+    // for the rest means recategorising a garment cannot leave an invisible
     // value behind -- Phase 4's belt rules read hasBeltLoops, and would
-    // otherwise act on a flag set while the item was still a Bottom.
+    // otherwise act on a flag set while the item was still Pants; the same
+    // applies to sleeveLength feeding utils/warmth.ts. length has no shared
+    // neutral value the way sleeveLength does, so it clears to '' rather than
+    // a guessed default -- see the GarmentLength doc comment.
     hardwareColor: hardwareColorApplies(draft.category) ? draft.hardwareColor : 'None',
     hasBeltLoops: beltLoopsApply(draft.category) ? draft.hasBeltLoops : false,
+    sleeveLength: sleeveLengthApplies(draft.category) ? draft.sleeveLength : 'Short',
+    length: lengthApplies(draft.category) ? draft.length : '',
     inferredWarmth,
     inferredWind,
   };
@@ -131,8 +157,8 @@ function EditForm({
 }) {
   return (
     <>
-      {/* Category is hidden in the read view but kept here: it is now
-          inferred rather than chosen, so a wrong one has to be fixable. */}
+      {/* Category is inferred rather than chosen, so a wrong one has to be
+          fixable — now visible in the read view too (see ReadOnlyDetails). */}
       <OptionRow
         label="Category"
         options={ALL_CATEGORIES}
@@ -174,6 +200,22 @@ function EditForm({
           onChange={(v) => set('hardwareColor', v)}
         />
       )}
+      {sleeveLengthApplies(draft.category) && (
+        <OptionRow
+          label="Sleeves"
+          options={SLEEVE_LENGTHS}
+          value={draft.sleeveLength}
+          onChange={(v) => set('sleeveLength', v)}
+        />
+      )}
+      {lengthApplies(draft.category) && (
+        <OptionRow
+          label="Length"
+          options={lengthOptionsFor(draft.category)}
+          value={draft.length}
+          onChange={(v) => set('length', v)}
+        />
+      )}
       <SwitchField
         label="Bought second-hand"
         value={draft.isSecondHand}
@@ -193,6 +235,10 @@ function EditForm({
 function ReadOnlyDetails({ item }: { item: ClothingItem }) {
   return (
     <View className="bg-white rounded-xl border border-slate-200 px-4 mb-4">
+      {/* Shown here, unlike before: with no confirmation anywhere on this
+          screen, a saved category change was indistinguishable from one that
+          silently failed to save. */}
+      <ReadRow label="Category" value={item.category} />
       <ReadRow label="Brand" value={item.brand === 'Unknown' ? '' : item.brand} />
       <ReadRow label="Cost" value={formatCost(item.costMinorUnits)} />
       <ReadRow
@@ -201,6 +247,10 @@ function ReadOnlyDetails({ item }: { item: ClothingItem }) {
       />
       <ReadRow label="Materials" value={item.materials.join(', ')} />
       {hardwareColorApplies(item.category) && <ReadRow label="Hardware" value={item.hardwareColor} />}
+      {sleeveLengthApplies(item.category) && (
+        <ReadRow label="Sleeves" value={item.sleeveLength} />
+      )}
+      {lengthApplies(item.category) && <ReadRow label="Length" value={item.length} />}
       <ReadRow label="Second-hand" value={item.isSecondHand ? 'Yes' : 'No'} />
       {beltLoopsApply(item.category) && (
         <ReadRow label="Belt loops" value={item.hasBeltLoops ? 'Yes' : 'No'} />
@@ -290,11 +340,22 @@ function EstimatesEditor({
   draft: Draft;
   set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
 }) {
+  const resetToEstimate = () => {
+    set(
+      'inferredWarmth',
+      String(estimateWarmth(draft.category, draft.materials, draft.sleeveLength, draft.length)),
+    );
+    set(
+      'inferredWind',
+      String(estimateWind(draft.category, draft.materials, draft.sleeveLength, draft.length)),
+    );
+  };
+
   return (
     <View className="mt-2 mb-4 p-3 rounded-xl bg-slate-100 border border-slate-200">
       <Text className="text-xs text-slate-500 mb-3">
-        Generated from Phase 3 onwards. Editable now so a wrong value can be corrected while that
-        is built.
+        Generated from category and materials when an item is added. Editable here so a wrong
+        value — including a stale one from before the estimate changed — can be corrected.
       </Text>
       <View className="flex-row">
         <View className="flex-1 mr-2">
@@ -316,6 +377,16 @@ function EstimatesEditor({
           />
         </View>
       </View>
+      {/* Fills the two fields above from the current category and materials;
+          does not save on its own. Save still applies (or Cancel discards)
+          the result, same as typing a value by hand. */}
+      <Pressable
+        onPress={resetToEstimate}
+        accessibilityRole="button"
+        className="mt-3 self-start rounded-lg border border-slate-300 bg-white px-3 py-2"
+      >
+        <Text className="text-sm font-medium text-slate-700">↻ Reset to estimate</Text>
+      </Pressable>
     </View>
   );
 }
@@ -376,7 +447,7 @@ export function ItemDetailsScreen() {
       void (async () => {
         if (!item) return;
         try {
-          await replaceItemImage({ runQuery: withDb }, item, image.uri);
+          await replaceItemImage({ runQuery: withDb }, item, { original: image.uri });
           await reload();
         } catch (e) {
           console.error('Failed to replace photo:', e);
@@ -396,39 +467,16 @@ export function ItemDetailsScreen() {
     ]);
   }, [capture]);
 
-  React.useLayoutEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <Pressable
-          onPress={() => setEditing((current) => !current)}
-          accessibilityRole="button"
-          accessibilityLabel={editing ? 'Stop editing' : 'Edit item'}
-          className="px-2 py-1"
-        >
-          {editing ? (
-            <Text className="text-base font-semibold text-slate-900">Done</Text>
-          ) : (
-            <Ionicons name="create-outline" size={22} color="#0f172a" />
-          )}
-        </Pressable>
-      ),
-    });
-  }, [navigation, editing]);
-
-  if (error) return <EmptyState title={error} />;
-  if (loading && !item) {
-    return (
-      <View className="flex-1 items-center justify-center bg-slate-50">
-        <ActivityIndicator />
-      </View>
-    );
-  }
-  if (!item || !draft) return <EmptyState title="This item no longer exists." />;
-
-  const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
-    setDraft((current) => (current ? { ...current, [key]: value } : current));
-
-  async function save() {
+  // A useCallback, not a plain function declared after the early returns
+  // below: the header's "Done" button is registered through
+  // navigation.setOptions in the layout effect that follows, and that
+  // registration only re-runs when its own dependency array changes. A
+  // plain closure referenced there would keep calling whatever `draft` was
+  // current the *last* time editing was toggled, not the latest one — this
+  // Save being memoized on [draft, itemId, navigation] is what keeps the
+  // header button (and the bottom "Save changes" button) both calling the
+  // version that actually has the user's edits.
+  const save = useCallback(async () => {
     if (!draft) return;
     const update = buildItemUpdate(draft);
     if ('error' in update) {
@@ -443,7 +491,49 @@ export function ItemDetailsScreen() {
       console.error('Failed to update item:', e);
       Alert.alert('Could not save', 'Your changes were not stored.');
     }
+  }, [draft, itemId, navigation]);
+
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <Pressable
+          // "Done" saves — it does not merely close the edit form. It used
+          // to just flip `editing` back to false, which left the draft's
+          // edits sitting unsaved in memory while the screen switched back
+          // to ReadOnlyDetails (which renders the untouched `item`, not the
+          // draft) — indistinguishable from the edit having been silently
+          // discarded. Entering edit mode is still a separate, cheap toggle;
+          // leaving it now goes through the same save() the bottom button
+          // uses, so there is one way to persist a change, not two
+          // half-implemented ones.
+          onPress={() => (editing ? void save() : setEditing(true))}
+          accessibilityRole="button"
+          accessibilityLabel={editing ? 'Save changes' : 'Edit item'}
+          hitSlop={12}
+          className="px-2 py-1"
+        >
+          {editing ? (
+            <Text className="text-base font-semibold text-slate-900">Done</Text>
+          ) : (
+            <Ionicons name="create-outline" size={22} color="#0f172a" />
+          )}
+        </Pressable>
+      ),
+    });
+  }, [navigation, editing, save]);
+
+  if (error) return <EmptyState title={error} />;
+  if (loading && !item) {
+    return (
+      <View className="flex-1 items-center justify-center bg-slate-50">
+        <ActivityIndicator />
+      </View>
+    );
   }
+  if (!item || !draft) return <EmptyState title="This item no longer exists." />;
+
+  const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
+    setDraft((current) => (current ? { ...current, [key]: value } : current));
 
   function confirmDelete() {
     Alert.alert('Delete this item?', 'Its match and dismatch records go with it.', [
@@ -486,10 +576,14 @@ export function ItemDetailsScreen() {
         <ActionButtons
           itemId={itemId}
           editing={editing}
-          onSave={() => {
-            void save();
-            setEditing(false);
-          }}
+          // Not `setEditing(false)` here: save() already navigates back on
+          // success, so closing edit mode from here too was a race — on a
+          // validation failure specifically, save() returns early (after
+          // showing its own Alert) *without* navigating, and this used to
+          // still flip the screen to read-only under that Alert regardless,
+          // silently dropping back to a view that doesn't even show category
+          // (see ReadOnlyDetails) with no visible sign anything was wrong.
+          onSave={() => void save()}
           onDelete={confirmDelete}
           navigateToMatches={(id) => navigation.navigate('MatchesBrowser', { itemId: id })}
         />

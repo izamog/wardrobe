@@ -11,7 +11,8 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Wardrobe uses the camera to photograph your clothes. Photos stay on this device.",
         "NSPhotoLibraryUsageDescription": "Wardrobe lets you choose existing photos of your clothes. Photos stay on this device.",
-        "NSMicrophoneUsageDescription": "Wardrobe uses the microphone so you can describe an item instead of typing. Recordings are deleted immediately after they are transcribed."
+        "NSMicrophoneUsageDescription": "Wardrobe uses the microphone so you can describe an item instead of typing. Recordings are deleted immediately after they are transcribed.",
+        "NSLocationWhenInUseUsageDescription": "Wardrobe uses your location to fetch today's weather forecast, so outfit suggestions match the actual temperature and wind outside."
       }
     },
     "android": {
@@ -29,7 +30,13 @@
     "plugins": [
       "expo-sqlite",
       "expo-image-picker",
-      "expo-audio"
+      "expo-audio",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Wardrobe uses your location to fetch today's weather forecast, so outfit suggestions match the actual temperature and wind outside."
+        }
+      ]
     ]
   }
 }
