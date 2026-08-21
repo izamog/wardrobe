@@ -38,6 +38,10 @@ def test_crops_to_the_exact_bounding_box_of_the_non_transparent_pixels():
     cutout = make_cutout((2000, 2000), (700, 900), (600, 300))
     result = framed(cutout)
     bbox = bbox_of(result)
+    # Safe: this is a pytest assertion, not runtime logic -- the rule flags
+    # `assert` as a no-op under `python -O`, which never applies to pytest
+    # (pytest imports test modules with assertion rewriting, not -O, and this
+    # file ships nowhere -- it only ever runs under `pytest`).
     # nosemgrep
     assert (bbox[2] - bbox[0], bbox[3] - bbox[1]) == (600, 300)
 
@@ -50,8 +54,10 @@ def test_gives_a_wide_garment_exactly_margin_on_its_sides():
 
     left = bbox[0] / w
     right = (w - bbox[2]) / w
+    # Safe: pytest assertion, same as above -- never runs under -O.
     # nosemgrep
     assert left == pytest.approx(MARGIN, abs=0.005)
+    # Safe: pytest assertion, same as above -- never runs under -O.
     # nosemgrep
     assert right == pytest.approx(MARGIN, abs=0.005)
 
@@ -63,6 +69,7 @@ def test_gives_a_wide_garment_more_than_margin_top_and_bottom():
     bbox = bbox_of(result)
 
     top = bbox[1] / h
+    # Safe: pytest assertion, same as above -- never runs under -O.
     # nosemgrep
     assert top > MARGIN
 
@@ -75,8 +82,10 @@ def test_gives_a_tall_garment_exactly_margin_top_and_bottom():
 
     top = bbox[1] / h
     bottom = (h - bbox[3]) / h
+    # Safe: pytest assertion, same as above -- never runs under -O.
     # nosemgrep
     assert top == pytest.approx(MARGIN, abs=0.005)
+    # Safe: pytest assertion, same as above -- never runs under -O.
     # nosemgrep
     assert bottom == pytest.approx(MARGIN, abs=0.005)
 
@@ -88,6 +97,7 @@ def test_gives_a_tall_garment_more_than_margin_on_the_sides():
     bbox = bbox_of(result)
 
     left = bbox[0] / w
+    # Safe: pytest assertion, same as above -- never runs under -O.
     # nosemgrep
     assert left > MARGIN
 
@@ -96,6 +106,7 @@ def test_output_is_target_aspect():
     cutout = make_cutout((1000, 1000), (200, 350), (600, 300))
     result = framed(cutout)
     w, h = result.size
+    # Safe: pytest assertion, same as above -- never runs under -O.
     # nosemgrep
     assert w / h == pytest.approx(TARGET_ASPECT, abs=0.005)
 
@@ -119,8 +130,10 @@ def test_centres_the_garment_on_the_new_canvas():
     right = w - bbox[2]
     top = bbox[1]
     bottom = h - bbox[3]
+    # Safe: pytest assertion, same as above -- never runs under -O.
     # nosemgrep
     assert left == pytest.approx(right, abs=1)
+    # Safe: pytest assertion, same as above -- never runs under -O.
     # nosemgrep
     assert top == pytest.approx(bottom, abs=1)
 
@@ -131,7 +144,6 @@ def test_passes_through_unchanged_when_nothing_is_opaque():
     fully_transparent.save(buf, format="PNG")
     original = buf.getvalue()
 
-    # Plain assert is the pytest idiom, not a stripped-in-production risk --
-    # this file only ever runs under pytest.
+    # Safe: pytest assertion, same as above -- never runs under -O.
     # nosemgrep
     assert frame_cutout(original, margin=MARGIN, target_aspect=TARGET_ASPECT) == original
