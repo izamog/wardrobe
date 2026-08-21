@@ -40,3 +40,10 @@ jobs:
         with:
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
           coverage-reports: wardrobe-app/coverage/lcov.info
+
+      - name: Codacy static analysis
+        uses: codacy/codacy-cli-v2-action@dcbfb2728cd491d4cbf8b207276509a135353a66 # main, 2026-08-21
+        with:
+          project_token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+          tool: eslint
+          upload_report: true
