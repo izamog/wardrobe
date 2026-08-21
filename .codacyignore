@@ -1,2 +1,6 @@
 # Generated lockfile — not something anyone edits for style or complexity.
 wardrobe-app/package-lock.json
+
+# Bare `assert` is the pytest idiom, not a stripped-in-production risk here —
+# this file never ships, it only runs under pytest.
+background-framer/test_frame.py
