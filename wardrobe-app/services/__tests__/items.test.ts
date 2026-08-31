@@ -8,7 +8,9 @@
  */
 import { DatabaseSync } from 'node:sqlite';
 import { runMigrations, type MigratableDatabase } from '../migrations';
+import type { MaterialEntry } from '../../types/wardrobe';
 import {
+  archiveItems,
   canonicalPair,
   clearCompatibility,
   deleteItem,
@@ -18,12 +20,17 @@ import {
   getLatestLoggedOutfit,
   getVerdictsFor,
   insertItem,
+  listArchivedItems,
+  listExpiredArchivedItems,
   listItems,
   listItemsByIds,
   listItemsInCategories,
   listItemsWornOn,
+  listLoggedOutfitsInRange,
   listRatedPairKeys,
   logOutfitWorn,
+  recentWearDays,
+  restoreItem,
   rowToItem,
   setCompatibility,
   updateItem,
@@ -84,17 +91,22 @@ async function freshDb(): Promise<ItemsDatabase> {
 const draft = (overrides: Partial<NewClothingItem> = {}): NewClothingItem => ({
   imagePath: '',
   originalImagePath: '',
+  imageMarginBaked: false,
   primaryColor: '',
   secondaryColor: '',
   category: 'Top',
   brand: 'Unbranded',
   costMinorUnits: 0,
   isSecondHand: false,
+  purchasedAt: '',
   materials: [],
   hardwareColor: 'None',
   hasBeltLoops: false,
   sleeveLength: 'Short',
   length: '',
+  thickness: 'Regular',
+  denier: 0,
+  backless: false,
   inferredWarmth: 0,
   inferredWind: 0,
   ...overrides,
@@ -112,7 +124,10 @@ describe('insertItem / getItem', () => {
         brand: 'Levis',
         costMinorUnits: 4599,
         isSecondHand: true,
-        materials: ['cotton', 'elastane'],
+        materials: [
+          { material: 'cotton', percent: 80 },
+          { material: 'elastane', percent: 20 },
+        ],
         primaryColor: 'Navy',
         secondaryColor: 'Cream',
         hardwareColor: 'Silver',
@@ -144,6 +159,19 @@ describe('insertItem / getItem', () => {
       insertItem(db, draft({ inferredWarmth: 99 }), 'id-1', '2026-01-01T00:00:00.000Z'),
     ).rejects.toThrow();
   });
+
+  it('truncates materials to MAX_MATERIALS on write, including in the returned item', async () => {
+    const db = await freshDb();
+    const materials = [
+      { material: 'cotton', percent: 50 },
+      { material: 'wool', percent: 30 },
+      { material: 'elastane', percent: 20 },
+    ];
+    const written = await insertItem(db, draft({ materials }), 'id-1', '2026-01-01T00:00:00.000Z');
+
+    expect(written.materials).toEqual(materials.slice(0, 2));
+    expect((await getItem(db, 'id-1'))?.materials).toEqual(materials.slice(0, 2));
+  });
 });
 
 describe('rowToItem', () => {
@@ -154,51 +182,106 @@ describe('rowToItem', () => {
       id: 'a',
       imagePath: '',
       originalImagePath: '',
+      imageMarginBaked: 0,
       primaryColor: 'Navy',
       secondaryColor: '',
       category: 'Top',
       brand: 'b',
       costMinorUnits: 0,
       isSecondHand: 1,
+      purchasedAt: '',
       materials: '["wool"]',
       hardwareColor: 'Gold',
       hasBeltLoops: 0,
       sleeveLength: 'Short',
       length: '',
+      thickness: 'Regular',
+      denier: 0,
+      backless: 0,
       inferredWarmth: 0,
       inferredWind: 0,
       wearCount: 0,
       createdAt: 'now',
+      archivedAt: '',
     });
 
     expect(item.isSecondHand).toBe(true);
     expect(item.hasBeltLoops).toBe(false);
-    expect(item.materials).toEqual(['wool']);
+    expect(item.materials).toEqual([{ material: 'wool', percent: 0 }]);
   });
 
-  it('falls back to an empty list rather than throwing on unreadable materials', () => {
+  it('falls back to an empty list rather than throwing on unreadable materials, and decodes a legacy plain-string entry as percent 0', () => {
     const base = {
       id: 'a',
       imagePath: '',
       originalImagePath: '',
+      imageMarginBaked: 0,
       primaryColor: '',
       secondaryColor: '',
       category: 'Top',
       brand: 'b',
       costMinorUnits: 0,
       isSecondHand: 0,
+      purchasedAt: '',
       hardwareColor: 'None',
       hasBeltLoops: 0,
       sleeveLength: 'Short',
       length: '',
+      thickness: 'Regular',
+      denier: 0,
+      backless: 0,
       inferredWarmth: 0,
       inferredWind: 0,
       wearCount: 0,
       createdAt: 'now',
+      archivedAt: '',
     };
     expect(rowToItem({ ...base, materials: 'not json' }).materials).toEqual([]);
     expect(rowToItem({ ...base, materials: '{"a":1}' }).materials).toEqual([]);
-    expect(rowToItem({ ...base, materials: '["ok", 7]' }).materials).toEqual(['ok']);
+    expect(rowToItem({ ...base, materials: '["ok", 7]' }).materials).toEqual([{ material: 'ok', percent: 0 }]);
+    expect(
+      rowToItem({ ...base, materials: '[{"material":"wool","percent":60}]' }).materials,
+    ).toEqual([{ material: 'wool', percent: 60 }]);
+  });
+
+  it('clamps a malformed stored percent rather than passing it through to warmth math', () => {
+    const base = {
+      id: 'a',
+      imagePath: '',
+      originalImagePath: '',
+      imageMarginBaked: 0,
+      primaryColor: '',
+      secondaryColor: '',
+      category: 'Top',
+      brand: 'b',
+      costMinorUnits: 0,
+      isSecondHand: 0,
+      purchasedAt: '',
+      hardwareColor: 'None',
+      hasBeltLoops: 0,
+      sleeveLength: 'Short',
+      length: '',
+      thickness: 'Regular',
+      denier: 0,
+      backless: 0,
+      inferredWarmth: 0,
+      inferredWind: 0,
+      wearCount: 0,
+      createdAt: 'now',
+      archivedAt: '',
+    };
+    expect(
+      rowToItem({ ...base, materials: '[{"material":"wool","percent":250}]' }).materials,
+    ).toEqual([{ material: 'wool', percent: 100 }]);
+    expect(
+      rowToItem({ ...base, materials: '[{"material":"wool","percent":-5}]' }).materials,
+    ).toEqual([{ material: 'wool', percent: 0 }]);
+    expect(
+      rowToItem({ ...base, materials: '[{"material":"wool","percent":"60"}]' }).materials,
+    ).toEqual([{ material: 'wool', percent: 0 }]);
+    expect(
+      rowToItem({ ...base, materials: '[{"material":"wool","percent":60.7}]' }).materials,
+    ).toEqual([{ material: 'wool', percent: 61 }]);
   });
 });
 
@@ -255,11 +338,82 @@ describe('updateItem', () => {
     const db = await freshDb();
     await insertItem(db, draft(), 'id-1', 'now');
 
-    await updateItem(db, 'id-1', { isSecondHand: true, materials: ['linen'] });
+    await updateItem(db, 'id-1', { isSecondHand: true, materials: [{ material: 'linen', percent: 0 }] });
 
     const item = await getItem(db, 'id-1');
     expect(item?.isSecondHand).toBe(true);
-    expect(item?.materials).toEqual(['linen']);
+    expect(item?.materials).toEqual([{ material: 'linen', percent: 0 }]);
+  });
+
+  it('truncates materials to MAX_MATERIALS on update too, not just insert', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft(), 'id-1', 'now');
+    const materials = [
+      { material: 'cotton', percent: 50 },
+      { material: 'wool', percent: 30 },
+      { material: 'silk', percent: 20 },
+    ];
+
+    await updateItem(db, 'id-1', { materials });
+
+    expect((await getItem(db, 'id-1'))?.materials).toEqual(materials.slice(0, 2));
+  });
+
+  it('clamps an out-of-range percent at write time too, not just on the way back out', async () => {
+    // A bypassed or future caller (a bulk import, a bug elsewhere in the
+    // form) isn't guaranteed to hand insertItem/updateItem a percent
+    // MaterialEntry's own type already rules out at compile time -- the
+    // `as` casts below simulate exactly that caller. Without normalizing on
+    // write, a bad value would sit in the database in an invalid shape until
+    // the next read's decodeMaterials clamp caught it.
+    const db = await freshDb();
+    await insertItem(
+      db,
+      draft({ materials: [{ material: 'wool', percent: 250 } as unknown as MaterialEntry] }),
+      'id-1',
+      'now',
+    );
+    expect((await getItem(db, 'id-1'))?.materials).toEqual([{ material: 'wool', percent: 100 }]);
+
+    await updateItem(db, 'id-1', {
+      materials: [{ material: 'wool', percent: -30 } as unknown as MaterialEntry],
+    });
+    expect((await getItem(db, 'id-1'))?.materials).toEqual([{ material: 'wool', percent: 0 }]);
+  });
+
+  it('persists denier, backless and a recomputed inferredWarmth together, and a fresh read reflects all three', async () => {
+    // Regression for a reported bug: editing a Tights item's denier (and a
+    // Top/Dress's backless flag) looked like it saved -- the edit screen
+    // showed the new value -- but reopening the item showed the old one
+    // again. The screen-level cause was EstimatesEditor being reachable
+    // outside an editing session with no save path; this covers the actual
+    // persistence layer underneath it, so a regression there would be caught
+    // even if the screen-level fix were ever undone.
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Tights', denier: 0, inferredWarmth: 1 }), 'id-1', 'now');
+
+    await updateItem(db, 'id-1', { denier: 150, inferredWarmth: 6 });
+
+    const reopened = await getItem(db, 'id-1');
+    expect(reopened?.denier).toBe(150);
+    expect(reopened?.inferredWarmth).toBe(6);
+  });
+
+  it('persists backless alongside its recomputed inferredWarmth and inferredWind', async () => {
+    const db = await freshDb();
+    await insertItem(
+      db,
+      draft({ category: 'Top', backless: false, inferredWarmth: 3, inferredWind: 2 }),
+      'id-1',
+      'now',
+    );
+
+    await updateItem(db, 'id-1', { backless: true, inferredWarmth: 2, inferredWind: 0 });
+
+    const reopened = await getItem(db, 'id-1');
+    expect(reopened?.backless).toBe(true);
+    expect(reopened?.inferredWarmth).toBe(2);
+    expect(reopened?.inferredWind).toBe(0);
   });
 
   it('is a no-op for an empty update rather than emitting invalid SQL', async () => {
@@ -502,5 +656,171 @@ describe('getLatestLoggedOutfit', () => {
 
     const outfit = await getLatestLoggedOutfit(db, '2026-08-20');
     expect(outfit.map((i) => i.id).sort()).toEqual(['bottom1', 'top2']);
+  });
+});
+
+describe('listLoggedOutfitsInRange', () => {
+  it('returns an empty map when nothing was logged in range', async () => {
+    const db = await freshDb();
+    expect(await listLoggedOutfitsInRange(db, '2026-08-01', '2026-08-28')).toEqual(new Map());
+  });
+
+  it('maps each logged day to its items, and excludes days outside the range', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await insertItem(db, draft({ category: 'Pants' }), 'bottom1');
+
+    await logOutfitWorn(db, ['top1', 'bottom1'], '2026-08-10', 'log1');
+    await logOutfitWorn(db, ['top1'], '2026-07-31', 'log-before'); // outside range
+    await logOutfitWorn(db, ['bottom1'], '2026-08-29', 'log-after'); // outside range
+
+    const result = await listLoggedOutfitsInRange(db, '2026-08-01', '2026-08-28');
+    expect([...result.keys()]).toEqual(['2026-08-10']);
+    expect(result.get('2026-08-10')?.map((i) => i.id).sort()).toEqual(['bottom1', 'top1']);
+  });
+
+  it('resolves each day to its most recently logged outfit when logged more than once', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await insertItem(db, draft({ category: 'Top' }), 'top2');
+
+    await logOutfitWorn(db, ['top1'], '2026-08-10', 'log1', '2026-08-10T08:00:00Z');
+    await logOutfitWorn(db, ['top2'], '2026-08-10', 'log2', '2026-08-10T18:00:00Z');
+
+    const result = await listLoggedOutfitsInRange(db, '2026-08-01', '2026-08-28');
+    expect(result.get('2026-08-10')?.map((i) => i.id)).toEqual(['top2']);
+  });
+});
+
+describe('archiveItems / restoreItem / listArchivedItems / listExpiredArchivedItems', () => {
+  it('excludes archived items from listItems and listItemsInCategories', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await insertItem(db, draft({ category: 'Top' }), 'top2');
+
+    await archiveItems(db, ['top1']);
+
+    expect((await listItems(db)).map((i) => i.id)).toEqual(['top2']);
+    expect((await listItemsInCategories(db, ['Top'])).map((i) => i.id)).toEqual(['top2']);
+  });
+
+  it('still resolves an archived item by id, since getItem is a direct lookup', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await archiveItems(db, ['top1']);
+
+    expect((await getItem(db, 'top1'))?.id).toBe('top1');
+  });
+
+  it('archives a batch in one call, stamping every id with the same timestamp', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await insertItem(db, draft({ category: 'Pants' }), 'bottom1');
+
+    await archiveItems(db, ['top1', 'bottom1'], '2026-08-01T00:00:00.000Z');
+
+    const archived = await listArchivedItems(db);
+    expect(archived.map((i) => i.id).sort()).toEqual(['bottom1', 'top1']);
+    expect(archived.every((i) => i.archivedAt === '2026-08-01T00:00:00.000Z')).toBe(true);
+  });
+
+  it('does nothing for an empty id list', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+
+    await archiveItems(db, []);
+
+    expect(await listArchivedItems(db)).toEqual([]);
+  });
+
+  it('restores an archived item back into the ordinary listings', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await archiveItems(db, ['top1']);
+
+    await restoreItem(db, 'top1');
+
+    expect((await listItems(db)).map((i) => i.id)).toEqual(['top1']);
+    expect(await listArchivedItems(db)).toEqual([]);
+  });
+
+  it('lists only items archived at or before the cutoff, oldest first', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'old');
+    await insertItem(db, draft({ category: 'Top' }), 'boundary');
+    await insertItem(db, draft({ category: 'Top' }), 'recent');
+    await archiveItems(db, ['old'], '2026-06-01T00:00:00.000Z');
+    await archiveItems(db, ['boundary'], '2026-07-01T00:00:00.000Z');
+    await archiveItems(db, ['recent'], '2026-08-01T00:00:00.000Z');
+
+    const expired = await listExpiredArchivedItems(db, '2026-07-01T00:00:00.000Z');
+
+    expect(expired.map((i) => i.id)).toEqual(['old', 'boundary']);
+  });
+});
+
+describe('recentWearDays', () => {
+  it('maps each item to days since its most recent log within the window', async () => {
+    const db = await freshDb();
+    await logOutfitWorn(db, ['item-a'], '2026-08-25', 'log-1', '2026-08-25T09:00:00.000Z');
+    await logOutfitWorn(db, ['item-b'], '2026-08-29', 'log-2', '2026-08-29T09:00:00.000Z');
+
+    const result = await recentWearDays(db, '2026-08-31');
+
+    expect(result.get('item-a')).toBe(6);
+    expect(result.get('item-b')).toBe(2);
+  });
+
+  it('keeps the smallest days-ago when an item appears in multiple logs', async () => {
+    const db = await freshDb();
+    await logOutfitWorn(db, ['item-a'], '2026-08-20', 'log-1', '2026-08-20T09:00:00.000Z');
+    await logOutfitWorn(db, ['item-a'], '2026-08-29', 'log-2', '2026-08-29T09:00:00.000Z');
+
+    const result = await recentWearDays(db, '2026-08-31');
+
+    expect(result.get('item-a')).toBe(2);
+  });
+
+  it('excludes items worn outside the window', async () => {
+    const db = await freshDb();
+    await logOutfitWorn(db, ['item-old'], '2026-07-01', 'log-1', '2026-07-01T09:00:00.000Z');
+
+    const result = await recentWearDays(db, '2026-08-31', 30);
+
+    expect(result.has('item-old')).toBe(false);
+  });
+
+  it('returns an empty map when nothing has been logged', async () => {
+    const db = await freshDb();
+    const result = await recentWearDays(db, '2026-08-31');
+    expect(result.size).toBe(0);
+  });
+
+  it('throws when today is malformed', async () => {
+    const db = await freshDb();
+    await expect(recentWearDays(db, 'not-a-date')).rejects.toThrow('Invalid recent-wear query');
+    await expect(recentWearDays(db, '2026-13-01')).rejects.toThrow('Invalid recent-wear query');
+  });
+
+  it('throws when windowDays is negative or non-finite', async () => {
+    const db = await freshDb();
+    await expect(recentWearDays(db, '2026-08-31', -1)).rejects.toThrow('Invalid recent-wear query');
+    await expect(recentWearDays(db, '2026-08-31', NaN)).rejects.toThrow('Invalid recent-wear query');
+    await expect(recentWearDays(db, '2026-08-31', Infinity)).rejects.toThrow('Invalid recent-wear query');
+  });
+
+  it('skips rows with future dates', async () => {
+    const db = await freshDb();
+    await logOutfitWorn(db, ['item-a'], '2026-08-25', 'log-past', '2026-08-25T09:00:00.000Z');
+    // Manually insert a future-dated row
+    await db.runAsync(
+      'INSERT INTO Outfit_Logs (id, date, itemIds, collageImageUri, createdAt) VALUES (?, ?, ?, ?, ?)',
+      ['log-future', '2026-09-01', '["item-c"]', '', '2026-08-31T09:00:00.000Z'],
+    );
+
+    const result = await recentWearDays(db, '2026-08-31');
+
+    expect(result.has('item-c')).toBe(false);
+    expect(result.get('item-a')).toBe(6);
   });
 });
