@@ -1,6 +1,17 @@
+import { sumWarmth, sumWind, meetsRegionFloors, distanceFromBounds } from './outfitScoring';
+import {
+  bottomCandidatesFor,
+  buildSlots,
+  floorAwareCandidates,
+  skipsBeforeCandidates,
+  tryEachCandidate,
+  SCARF_PREFERRED_WARMTH_FLOOR,
+  type OutfitCandidates,
+  type Slot,
+} from './outfitSlots';
+import { dropAccessoryFreeDuplicates, dropExactDuplicates, PREFERRED_ACCESSORY_GROUPS } from './outfitDedup';
 import { CATEGORY_GROUP } from './categories';
-import { isCompatibleCandidate, pairKey } from './pairs';
-import type { CategoryGroup, ClothingItem } from '../types/wardrobe';
+import type { ClothingItem } from '../types/wardrobe';
 
 /**
  * Building complete outfits that meet today's weather bounds, from
@@ -8,6 +19,12 @@ import type { CategoryGroup, ClothingItem } from '../types/wardrobe';
  *
  * Pure and synchronous — no DB here. services/outfitGenerator.ts owns
  * fetching each slot's candidates; this file only searches the combinations.
+ * The supporting pieces live alongside it: outfitSlots.ts turns a candidate
+ * pool and an anchor into the ordered list of slots a search walks,
+ * outfitScoring.ts turns a set of chosen items into warmth/wind totals and
+ * per-region checks, and outfitDedup.ts drops a bare outfit once its
+ * accessorized twin is present. This file is just the two searches
+ * themselves (generateOutfits, generateClosestOutfits) built on top of them.
  *
  * Bottom is a slot like any other, not a fixed input chosen ahead of time.
  * It used to be picked separately, by recency, before this search ever ran —
@@ -19,161 +36,21 @@ import type { CategoryGroup, ClothingItem } from '../types/wardrobe';
  * is stable), not as a rule that could override the weather.
  */
 
-/**
- * Candidates offered per slot in a call to generateOutfits, each already
- * filtered to its group's categories and capped by the caller if needed.
- */
-export interface OutfitCandidates {
-  bottoms: readonly ClothingItem[];
-  tops: readonly ClothingItem[];
-  shoes: readonly ClothingItem[];
-  outerwear: readonly ClothingItem[];
-  scarves: readonly ClothingItem[];
-  belts: readonly ClothingItem[];
-  bags: readonly ClothingItem[];
-}
-
-/**
- * How many candidates a single slot considers.
- *
- * The search is a DFS over every slot's candidates, so this bounds it: with
- * seven slots this caps the worst case at MAX_SLOT_CANDIDATES^7 leaves,
- * which stays fast on-device for a personal wardrobe — and the ceiling check
- * prunes most of that in practice (see search()). A closet large enough for
- * this to matter needs candidates ranked and trimmed before generateOutfits
- * is called, not this constant raised.
- */
-export const MAX_SLOT_CANDIDATES = 6;
-
-/**
- * warmthFloor at or above which a Scarf is a required slot, not merely an
- * available one. Below it, a scarf is never offered — Scarf's role here is
- * specifically "required accessory for cold weather", not general styling.
- */
-export const SCARF_REQUIRED_WARMTH_FLOOR = 7;
+export type { OutfitCandidates } from './outfitSlots';
+export { MAX_SLOT_CANDIDATES, SCARF_PREFERRED_WARMTH_FLOOR } from './outfitSlots';
+export { sumWarmth, sumWind } from './outfitScoring';
 
 /** How many outfits generateOutfits returns by default. */
 export const DEFAULT_MAX_OUTFITS = 3;
 
-interface Slot {
-  candidates: ClothingItem[];
-  required: boolean;
-}
-
-function insulation(item: ClothingItem): number {
-  return item.inferredWarmth + item.inferredWind;
-}
-
-/**
- * Ranks a slot's candidates lightest-first, then caps to MAX_SLOT_CANDIDATES.
- *
- * Without this, candidates arrive in "most recently added" order, which has
- * no relationship to the weather — a wool jumper bought last week sorts
- * before a t-shirt bought last year regardless of what today calls for. The
- * warmth floor is a floor, not a target to hit exactly, so trying the
- * lightest options first is the correct greedy direction: the search only
- * escalates to something warmer when the lean choice actually fails to
- * clear it. The sort is stable, so items with equal insulation keep their
- * incoming (newest-first) order — recency as a tie-break, not a rule.
- */
-function leanFirst(items: readonly ClothingItem[]): ClothingItem[] {
-  return [...items].sort((a, b) => insulation(a) - insulation(b)).slice(0, MAX_SLOT_CANDIDATES);
-}
-
-/**
- * Ranks a slot's candidates heaviest-first, then caps.
- *
- * Used only for Outerwear: it is the layer whose entire job in this search is
- * closing a warmth/wind gap the required slots didn't, so when it's needed at
- * all, the most effective piece is the one worth trying first rather than
- * last.
- */
-function layerFirst(items: readonly ClothingItem[]): ClothingItem[] {
-  return [...items].sort((a, b) => insulation(b) - insulation(a)).slice(0, MAX_SLOT_CANDIDATES);
-}
-
-function isDismatched(a: ClothingItem, b: ClothingItem, dismatchedKeys: ReadonlySet<string>): boolean {
-  return dismatchedKeys.has(pairKey(a.id, b.id));
-}
-
-/**
- * Whether `candidate` can join an outfit that already contains `chosen`.
- *
- * Cold-start safe by construction: dismatchedKeys is expected to hold only
- * explicit DISMATCH rows (see services/items.ts's getDismatchedPairKeys), so
- * an unrated pair is never excluded here — only an explicit DISMATCH is.
- */
-function isCompatibleWithAll(
-  candidate: ClothingItem,
-  chosen: readonly ClothingItem[],
-  dismatchedKeys: ReadonlySet<string>,
-): boolean {
-  return chosen.every(
-    (item) => isCompatibleCandidate(candidate, item) && !isDismatched(candidate, item, dismatchedKeys),
-  );
-}
-
-/**
- * How much a body region's own warmth/wind score counts toward the outfit's
- * total, on top of whatever that item individually scores.
- *
- * The torso is where the body loses (or keeps) the most heat, and where wind
- * chill is felt most, so a Top/Outerwear/Dress item's score matters far more
- * to how warm the outfit actually is than a Shoes item's does — a warm
- * jacket and cold feet reads as "dressed for the weather"; a warm pair of
- * boots and a t-shirt in a snowstorm does not, no matter what the raw sum
- * says. Without this, every item counted equally regardless of where it
- * sits, which let a single well-insulated pair of boots offset a torso that
- * was nowhere near warm enough.
- *
- * Belt and Bag are listed for completeness even though their category ceiling
- * in utils/warmth.ts is 0 either way, so their weight can never matter.
- */
-const REGION_WEIGHT: Record<CategoryGroup, number> = {
-  Top: 1,
-  Outerwear: 1,
-  Dress: 1,
-  Scarf: 0.8,
-  Bottom: 0.6,
-  Shoes: 0.25,
-  Belt: 0.1,
-  Bag: 0,
-};
-
-function weightOf(item: ClothingItem): number {
-  return REGION_WEIGHT[CATEGORY_GROUP[item.category]];
-}
-
-function weightedSum(items: readonly ClothingItem[], key: 'inferredWarmth' | 'inferredWind'): number {
-  return items.reduce((total, item) => total + item[key] * weightOf(item), 0);
-}
-
-/**
- * An outfit's total warmth, weighted by body region — exported for display
- * next to its target. Not a plain sum of inferredWarmth; see REGION_WEIGHT.
- */
-export function sumWarmth(items: readonly ClothingItem[]): number {
-  return weightedSum(items, 'inferredWarmth');
-}
-
-/** An outfit's total wind resistance, weighted by body region — see sumWarmth. */
-export function sumWind(items: readonly ClothingItem[]): number {
-  return weightedSum(items, 'inferredWind');
-}
-
-/**
- * The slots a search considers after the Bottom, in a fixed order, given
- * what this particular Bottom and today's weather need.
- */
-function buildSlots(candidates: OutfitCandidates, needsScarf: boolean, needsBelt: boolean): Slot[] {
-  return [
-    { candidates: leanFirst(candidates.tops), required: true },
-    { candidates: leanFirst(candidates.shoes), required: true },
-    ...(needsScarf ? [{ candidates: leanFirst(candidates.scarves), required: true }] : []),
-    ...(needsBelt ? [{ candidates: leanFirst(candidates.belts), required: true }] : []),
-    { candidates: layerFirst(candidates.outerwear), required: false },
-    { candidates: leanFirst(candidates.bags), required: false },
-  ];
+/** Dedupes generateOutfits' raw results (see outfitDedup.ts's dropAccessoryFreeDuplicates) and trims to maxResults. */
+function finalizeOutfits(results: readonly ClothingItem[][], maxResults: number): ClothingItem[][] {
+  return dropAccessoryFreeDuplicates(
+    dropExactDuplicates(results.map((items) => ({ items }))),
+    () => true,
+  )
+    .map((outfit) => outfit.items)
+    .slice(0, maxResults);
 }
 
 /**
@@ -203,48 +80,68 @@ export function generateOutfits(
   warmthCeiling: number,
   windFloor: number,
   maxResults: number = DEFAULT_MAX_OUTFITS,
+  wornDaysAgo: ReadonlyMap<string, number> = new Map(),
 ): ClothingItem[][] {
-  const needsScarf = warmthFloor >= SCARF_REQUIRED_WARMTH_FLOOR;
+  const needsScarf = warmthFloor >= SCARF_PREFERRED_WARMTH_FLOOR;
   const results: ClothingItem[][] = [];
   const chosen: ClothingItem[] = [];
+
+  // A generous multiple of maxResults, not maxResults itself: a preferred
+  // slot's bare and accessorized twins can land in either order depending on
+  // dismatches further down, so the search needs enough headroom for
+  // dropAccessoryFreeDuplicates to have real alternatives to dedupe from
+  // before the final slice down to maxResults.
+  const searchBudget = Math.max(maxResults * 4, 20);
 
   function exceedsCeiling(): boolean {
     return sumWarmth(chosen) > warmthCeiling;
   }
 
+  function meetsFloors(): boolean {
+    return (
+      sumWarmth(chosen) >= warmthFloor && sumWind(chosen) >= windFloor && meetsRegionFloors(chosen, warmthFloor)
+    );
+  }
+
+  // Explores slots depth-first, pushing each complete outfit that clears
+  // every floor into `results`, until the search budget above is spent.
   function searchSlots(slots: Slot[], slotIndex: number): void {
-    if (results.length >= maxResults) return;
+    if (results.length >= searchBudget) return;
 
     if (slotIndex === slots.length) {
-      if (sumWarmth(chosen) >= warmthFloor && sumWind(chosen) >= windFloor) {
-        results.push([...chosen]);
-      }
+      if (meetsFloors()) results.push([...chosen]);
       return;
     }
 
     const slot = slots[slotIndex];
-    if (!slot.required) searchSlots(slots, slotIndex + 1);
-
-    for (const candidate of slot.candidates) {
-      if (results.length >= maxResults) return;
-      if (!isCompatibleWithAll(candidate, chosen, dismatchedKeys)) continue;
-      chosen.push(candidate);
-      if (!exceedsCeiling()) searchSlots(slots, slotIndex + 1);
-      chosen.pop();
-    }
+    // A plain optional slot tries being skipped before any candidate (leanest
+    // outfit first); a preferred one tries every candidate before the skip
+    // branch, so an accessory is favoured over going without it — see the
+    // Slot.preferred doc comment (outfitSlots.ts) and dropAccessoryFreeDuplicates
+    // for how the bare twin this can also produce gets dropped afterward.
+    if (skipsBeforeCandidates(slot)) searchSlots(slots, slotIndex + 1);
+    tryEachCandidate(
+      slot,
+      chosen,
+      dismatchedKeys,
+      () => results.length >= searchBudget,
+      () => !exceedsCeiling(),
+      () => searchSlots(slots, slotIndex + 1),
+    );
+    if (slot.preferred) searchSlots(slots, slotIndex + 1);
   }
 
-  for (const bottom of leanFirst(candidates.bottoms)) {
-    if (results.length >= maxResults) return results;
+  for (const bottom of floorAwareCandidates(bottomCandidatesFor(candidates, warmthFloor), warmthFloor, wornDaysAgo)) {
+    if (results.length >= searchBudget) break;
 
     chosen.push(bottom);
     if (!exceedsCeiling()) {
-      searchSlots(buildSlots(candidates, needsScarf, bottom.hasBeltLoops), 0);
+      searchSlots(buildSlots(candidates, bottom, warmthFloor, needsScarf, bottom.hasBeltLoops, wornDaysAgo), 0);
     }
     chosen.pop();
   }
 
-  return results;
+  return finalizeOutfits(results, maxResults);
 }
 
 /** A complete outfit alongside its computed totals and how they compare to the bounds. */
@@ -256,22 +153,25 @@ export interface ScoredOutfit {
   meetsTarget: boolean;
 }
 
-/**
- * How far an outfit's totals sit from the bounds: 0 exactly at or inside
- * them, and rising with the worst single shortfall or overshoot. Used only to
- * rank candidates by closeness, so the exact scale doesn't matter — only the
- * ordering it produces.
- */
-function distanceFromBounds(
-  warmth: number,
-  wind: number,
+/** Scores one complete candidate outfit against the bounds — the leaf case of generateClosestOutfits' search. */
+function scoreOutfit(
+  chosen: readonly ClothingItem[],
   warmthFloor: number,
   warmthCeiling: number,
   windFloor: number,
-): number {
-  return (
-    Math.max(0, warmthFloor - warmth) + Math.max(0, warmth - warmthCeiling) + Math.max(0, windFloor - wind)
-  );
+): ScoredOutfit {
+  const warmth = sumWarmth(chosen);
+  const wind = sumWind(chosen);
+  return {
+    items: [...chosen],
+    warmth,
+    wind,
+    meetsTarget:
+      warmth >= warmthFloor &&
+      warmth <= warmthCeiling &&
+      wind >= windFloor &&
+      meetsRegionFloors(chosen, warmthFloor),
+  };
 }
 
 /**
@@ -281,7 +181,8 @@ function distanceFromBounds(
  * not prune on the ceiling or stop at the first `maxResults` matches: leaving
  * either in place would hide the very outfits a "why didn't anything work"
  * question needs to see, and MAX_SLOT_CANDIDATES already bounds the search
- * space to something that stays fast without it (see its own doc comment).
+ * space to something that stays fast without it (see its own doc comment in
+ * outfitSlots.ts).
  *
  * `meetsTarget` on a returned outfit means it actually clears every bound —
  * this can only happen when generateOutfits' own `maxResults` cap already cut
@@ -295,46 +196,85 @@ export function generateClosestOutfits(
   warmthCeiling: number,
   windFloor: number,
   maxResults: number = DEFAULT_MAX_OUTFITS,
+  wornDaysAgo: ReadonlyMap<string, number> = new Map(),
 ): ScoredOutfit[] {
-  const needsScarf = warmthFloor >= SCARF_REQUIRED_WARMTH_FLOOR;
+  const needsScarf = warmthFloor >= SCARF_PREFERRED_WARMTH_FLOOR;
   const all: ScoredOutfit[] = [];
   const chosen: ClothingItem[] = [];
 
+  // Every complete combination gets pushed to `all` — this view exists to
+  // show near-misses, not hide them (see this function's own doc comment).
+  // dropAccessoryFreeDuplicates, below, is what keeps a bare outfit from
+  // cluttering the ranked results once its accessorized twin is shown too.
   function searchSlots(slots: Slot[], slotIndex: number): void {
     if (slotIndex === slots.length) {
-      const warmth = sumWarmth(chosen);
-      const wind = sumWind(chosen);
-      all.push({
-        items: [...chosen],
-        warmth,
-        wind,
-        meetsTarget: warmth >= warmthFloor && warmth <= warmthCeiling && wind >= windFloor,
-      });
+      all.push(scoreOutfit(chosen, warmthFloor, warmthCeiling, windFloor));
       return;
     }
 
     const slot = slots[slotIndex];
-    if (!slot.required) searchSlots(slots, slotIndex + 1);
-
-    for (const candidate of slot.candidates) {
-      if (!isCompatibleWithAll(candidate, chosen, dismatchedKeys)) continue;
-      chosen.push(candidate);
-      searchSlots(slots, slotIndex + 1);
-      chosen.pop();
-    }
+    if (skipsBeforeCandidates(slot)) searchSlots(slots, slotIndex + 1);
+    // isViable stays `() => true`: nothing is pruned by the ceiling here,
+    // unlike generateOutfits — see this function's own doc comment.
+    tryEachCandidate(slot, chosen, dismatchedKeys, () => false, () => true, () => searchSlots(slots, slotIndex + 1));
+    if (slot.preferred) searchSlots(slots, slotIndex + 1);
   }
 
-  for (const bottom of leanFirst(candidates.bottoms)) {
+  for (const bottom of floorAwareCandidates(bottomCandidatesFor(candidates, warmthFloor), warmthFloor, wornDaysAgo)) {
     chosen.push(bottom);
-    searchSlots(buildSlots(candidates, needsScarf, bottom.hasBeltLoops), 0);
+    searchSlots(buildSlots(candidates, bottom, warmthFloor, needsScarf, bottom.hasBeltLoops, wornDaysAgo), 0);
     chosen.pop();
   }
 
-  return all
-    .sort(
-      (a, b) =>
-        distanceFromBounds(a.warmth, a.wind, warmthFloor, warmthCeiling, windFloor) -
-        distanceFromBounds(b.warmth, b.wind, warmthFloor, warmthCeiling, windFloor),
-    )
+  return dropAccessoryFreeDuplicates(dropExactDuplicates(all), (outfit) => outfit.meetsTarget)
+    .sort((a, b) => {
+      const distance =
+        distanceFromBounds(a.items, a.warmth, a.wind, warmthFloor, warmthCeiling, windFloor) -
+        distanceFromBounds(b.items, b.warmth, b.wind, warmthFloor, warmthCeiling, windFloor);
+      if (distance !== 0) return distance;
+      // Tie-break: prefer the outfit carrying more preferred accessories
+      // (Bag, Scarf, Tights — see PREFERRED_ACCESSORY_GROUPS) before falling
+      // through to warmth or search order below.
+      //
+      // dropAccessoryFreeDuplicates, above, only ever compares an outfit
+      // against its own literal superset — the same Belt plus a Bag added on
+      // top — so it already prefers an accessorized outfit over its bare
+      // twin. It has no way to compare across two outfits that differ in
+      // which *required* item they used to get there: a Gold-hardware Belt
+      // that has no compatible Bag versus a Silver-hardware Belt that does
+      // are two different, non-superset outfits by that check, tied on every
+      // weather measure since Belt and Bag both contribute 0 warmth (see
+      // outfitScoring.ts's WARMTH_BY_CATEGORY) — so without this, the one
+      // search happened to visit first (Belt pool order, see accessoryFirst
+      // in outfitCandidatePools.ts) won regardless of whether it could carry
+      // a bag at all. Reported bug: a Gold belt with no matching bag kept
+      // outranking a Silver belt with one, for exactly this reason, and
+      // selectDiverseOutfits (outfitDiversity.ts) treats same-Top/Bottom
+      // outfits differing only by Belt as one combo, keeping just the
+      // top-ranked one — so this tie-break is what actually decides which
+      // Belt/Bag pairing reaches the user.
+      const accessoryCount = (items: readonly ClothingItem[]): number =>
+        items.filter((item) => PREFERRED_ACCESSORY_GROUPS.has(CATEGORY_GROUP[item.category])).length;
+      const accessories = accessoryCount(b.items) - accessoryCount(a.items);
+      if (accessories !== 0) return accessories;
+      // Tie-break: when the weather calls for any real warmth at all,
+      // prefer the warmer of two outfits that are otherwise equally close to
+      // the bounds (both within them, or both short by the same amount) —
+      // see the reported bug this guards against, below. Left alone
+      // (returning 0, so JS's stable sort keeps search-encounter order —
+      // lean-first, see leanFirst in outfitCandidatePools.ts) whenever
+      // warmthFloor is 0: there is nothing to stay warm against, so
+      // preferring the leaner of two equally-valid options is still the
+      // right default on a mild or hot day.
+      //
+      // Reported bug: at -14°C, a sleeveless top (0 warmth) plus a Cardigan
+      // ties, at distance 0, with a T-Shirt or a wool Sweater the closet also
+      // had — both combinations clear every bound, so nothing about distance
+      // alone favoured the warmer choice, and lean-first search order (the
+      // sleeveless top sorts before either alternative — see leanFirst) meant
+      // the coldest still-technically-valid outfit won by default, every
+      // time, rather than the one with real margin above the floor.
+      return warmthFloor > 0 ? b.warmth - a.warmth : 0;
+    })
     .slice(0, maxResults);
 }

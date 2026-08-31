@@ -11,7 +11,19 @@ export function resetSeq() {
 export const item = (
   category: Category,
   overrides: Partial<
-    Pick<ClothingItem, 'hasBeltLoops' | 'hardwareColor' | 'inferredWarmth' | 'inferredWind'>
+    Pick<
+      ClothingItem,
+      | 'id'
+      | 'hasBeltLoops'
+      | 'hardwareColor'
+      | 'inferredWarmth'
+      | 'inferredWind'
+      | 'length'
+      | 'sleeveLength'
+      | 'thickness'
+      | 'denier'
+      | 'backless'
+    >
   > = {},
 ): ClothingItem => {
   seq += 1;
@@ -19,21 +31,27 @@ export const item = (
     id: `${category}-${seq}`,
     imagePath: '',
     originalImagePath: '',
+    imageMarginBaked: false,
     primaryColor: '',
     secondaryColor: '',
     category,
     brand: `brand${seq}`,
     costMinorUnits: 0,
     isSecondHand: false,
+    purchasedAt: '',
     materials: [],
     hardwareColor: 'None' as HardwareColor,
     hasBeltLoops: false,
     sleeveLength: 'Short',
     length: '',
+    thickness: 'Regular',
+    denier: 0,
+    backless: false,
     inferredWarmth: 0,
     inferredWind: 0,
     wearCount: 0,
     createdAt: 'now',
+    archivedAt: '',
     ...overrides,
   };
 };
@@ -47,6 +65,7 @@ export function emptyCandidates(overrides: Partial<OutfitCandidates> = {}): Outf
     scarves: [],
     belts: [],
     bags: [],
+    tights: [],
     ...overrides,
   };
 }
