@@ -379,7 +379,7 @@ git commit -m "Add recency-aware scoring and randomized tie-break to candidate p
 - Test: `wardrobe-app/utils/__tests__/outfitCandidatePools.test.ts`
 
 **Interfaces:**
-- Consumes: `compareByScore` from Task 2.
+- Consumes: `rankWithFairTiebreak` from Task 2 (superseded `compareByScore`-in-a-raw-sort during Task 2's fix round — Task 2's own review found that pattern unsound: `Array.prototype.sort` requires a comparator consistent across repeated calls for the same pair, and `compareByScore` is now a plain deterministic comparator; `rankWithFairTiebreak(items, wornDaysAgo, descending?)` sorts by it and then shuffles only genuinely-tied runs, which is what every function below should call instead of hand-rolling `.sort((a,b) => compareByScore(...))`).
 - Produces: `leanFirst(items, wornDaysAgo?)`, `layerFirst(items, wornDaysAgo?)`, `accessoryFirst(items, wornDaysAgo?)`, `floorAwareCandidates(items, warmthFloor, wornDaysAgo?)`, `floorAwareOuterwearCandidates(items, wornDaysAgo?)` — every existing exported pool function, each gaining a `wornDaysAgo: ReadonlyMap<string, number> = new Map()` parameter as the new last argument (after `warmthFloor` for `floorAwareCandidates`, since `warmthFloor` is that function's existing primary argument and moving it would break every current call site's argument order).
 
 - [ ] **Step 1: Write the failing tests**
@@ -457,28 +457,28 @@ Expected: FAIL — `leanFirst`/`accessoryFirst`/`floorAwareOuterwearCandidates`/
 
 - [ ] **Step 3: Update every pool function to accept and use `wornDaysAgo`**
 
-In `wardrobe-app/utils/outfitCandidatePools.ts`, replace each function's sort call with `compareByScore`, threading a new defaulted parameter:
+In `wardrobe-app/utils/outfitCandidatePools.ts`, replace each function's sort call with `rankWithFairTiebreak` (not a hand-rolled `.sort((a,b) => compareByScore(...))` — see the Interfaces note above for why), threading a new defaulted parameter:
 
 ```ts
 export function leanFirst(
   items: readonly ClothingItem[],
   wornDaysAgo: ReadonlyMap<string, number> = new Map(),
 ): ClothingItem[] {
-  return [...items].sort((a, b) => compareByScore(a, b, wornDaysAgo)).slice(0, MAX_SLOT_CANDIDATES);
+  return rankWithFairTiebreak(items, wornDaysAgo).slice(0, MAX_SLOT_CANDIDATES);
 }
 
 export function accessoryFirst(
   items: readonly ClothingItem[],
   wornDaysAgo: ReadonlyMap<string, number> = new Map(),
 ): ClothingItem[] {
-  return [...items].sort((a, b) => compareByScore(a, b, wornDaysAgo)).slice(0, MAX_ACCESSORY_CANDIDATES);
+  return rankWithFairTiebreak(items, wornDaysAgo).slice(0, MAX_ACCESSORY_CANDIDATES);
 }
 
 export function layerFirst(
   items: readonly ClothingItem[],
   wornDaysAgo: ReadonlyMap<string, number> = new Map(),
 ): ClothingItem[] {
-  return [...items].sort((a, b) => compareByScore(b, a, wornDaysAgo)).slice(0, MAX_ACCESSORY_CANDIDATES);
+  return rankWithFairTiebreak(items, wornDaysAgo, true).slice(0, MAX_ACCESSORY_CANDIDATES);
 }
 ```
 
@@ -494,9 +494,7 @@ export function floorAwareCandidates(
 
   const half = Math.ceil(MAX_SLOT_CANDIDATES / 2);
   const leanest = leanFirst(items, wornDaysAgo).slice(0, half);
-  const warmest = [...items]
-    .sort((a, b) => compareByScore(b, a, wornDaysAgo))
-    .slice(0, MAX_SLOT_CANDIDATES - half);
+  const warmest = rankWithFairTiebreak(items, wornDaysAgo, true).slice(0, MAX_SLOT_CANDIDATES - half);
 
   const merged = new Map<string, ClothingItem>();
   for (const item of [...leanest, ...warmest]) merged.set(item.id, item);
@@ -512,13 +510,15 @@ export function floorAwareOuterwearCandidates(
   wornDaysAgo: ReadonlyMap<string, number> = new Map(),
 ): ClothingItem[] {
   const heaviest = layerFirst(items, wornDaysAgo);
-  const leanest = [...items].sort((a, b) => compareByScore(a, b, wornDaysAgo)).slice(0, 1);
+  const leanest = rankWithFairTiebreak(items, wornDaysAgo).slice(0, 1);
 
   const merged = new Map<string, ClothingItem>();
   for (const item of [...heaviest, ...leanest]) merged.set(item.id, item);
   return [...merged.values()];
 }
 ```
+
+Note: `rankWithFairTiebreak`'s shuffle is per-call — calling it twice in the same function (e.g. `leanFirst` for the lean half, then again for the warm half in `floorAwareCandidates`) reshuffles independently each time, which is fine: both calls are still each individually a valid, consistent ordering, and the two slices get merged by id afterward regardless of shuffle order within each.
 
 - [ ] **Step 4: Run the full candidate-pool test file plus every existing consumer test to verify nothing broke**
 
