@@ -93,18 +93,41 @@ export function scoreFor(item: ClothingItem, wornDaysAgo: ReadonlyMap<string, nu
 
 /**
  * Sorts two candidates by scoreFor, ascending (lighter/less-recently-worn
- * first, matching insulation()'s existing sort direction). On an exact
- * score tie -- the confirmed gold-vs-silver case, where two zero-insulation
- * accessories are also equally (un)recent -- resolves it with a fresh
- * random draw instead of falling through to array order, so neither
- * permanently buries the other across repeated Today loads. Never
- * randomizes a real difference: the random comparison only runs when
- * scoreFor(a) === scoreFor(b) exactly.
+ * first, matching insulation()'s existing sort direction). A plain,
+ * deterministic comparator safe for use in Array.prototype.sort — ties
+ * keep input order (stable sort). Randomization for fair rotation across
+ * ties is handled separately by rankWithFairTiebreak.
  */
 export function compareByScore(a: ClothingItem, b: ClothingItem, wornDaysAgo: ReadonlyMap<string, number>): number {
-  const diff = scoreFor(a, wornDaysAgo) - scoreFor(b, wornDaysAgo);
-  if (diff !== 0) return diff;
-  return Math.random() - 0.5;
+  return scoreFor(a, wornDaysAgo) - scoreFor(b, wornDaysAgo);
+}
+
+/**
+ * Sorts by compareByScore (stable -- ties keep input order), then shuffles
+ * each contiguous run of exactly-tied items in place. compareByScore alone
+ * can't safely randomize -- Array.prototype.sort requires a comparator
+ * that's consistent across repeated calls for the same pair, and a fresh
+ * Math.random() result per call breaks that, risking an invalid ordering
+ * once 3+ items tie. Shuffling only within already-adjacent tied runs,
+ * after a valid stable sort, delivers the same fair-rotation goal without
+ * that hazard.
+ */
+export function rankWithFairTiebreak(
+  items: readonly ClothingItem[],
+  wornDaysAgo: ReadonlyMap<string, number>,
+): ClothingItem[] {
+  const sorted = [...items].sort((a, b) => compareByScore(a, b, wornDaysAgo));
+  let i = 0;
+  while (i < sorted.length) {
+    let j = i + 1;
+    while (j < sorted.length && scoreFor(sorted[j], wornDaysAgo) === scoreFor(sorted[i], wornDaysAgo)) j++;
+    for (let k = j - 1; k > i; k--) {
+      const r = i + Math.floor(Math.random() * (k - i + 1));
+      [sorted[k], sorted[r]] = [sorted[r], sorted[k]];
+    }
+    i = j;
+  }
+  return sorted;
 }
 
 /**

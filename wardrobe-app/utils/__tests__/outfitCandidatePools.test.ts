@@ -1,4 +1,4 @@
-import { recencyPenalty, scoreFor, compareByScore } from '../outfitCandidatePools';
+import { recencyPenalty, scoreFor, compareByScore, rankWithFairTiebreak } from '../outfitCandidatePools';
 import type { ClothingItem } from '../../types/wardrobe';
 
 function item(overrides: Partial<ClothingItem> = {}): ClothingItem {
@@ -75,26 +75,59 @@ describe('compareByScore', () => {
     expect(compareByScore(heavy, light, new Map())).toBeGreaterThan(0);
   });
 
+  it('is deterministic: always returns 0 for exact ties', () => {
+    const a = item({ id: 'a', inferredWarmth: 0, inferredWind: 0 });
+    const b = item({ id: 'b', inferredWarmth: 0, inferredWind: 0 });
+    for (let i = 0; i < 20; i++) {
+      expect(compareByScore(a, b, new Map())).toBe(0);
+    }
+  });
+
+  it('never returns a nonzero value for a genuine tie', () => {
+    const a = item({ id: 'a', inferredWarmth: 0, inferredWind: 0 });
+    const b = item({ id: 'b', inferredWarmth: 0, inferredWind: 0 });
+    expect(compareByScore(a, b, new Map())).toBe(0);
+  });
+});
+
+describe('rankWithFairTiebreak', () => {
   it('breaks an exact score tie randomly rather than by input order', () => {
     const a = item({ id: 'a', inferredWarmth: 0, inferredWind: 0 });
     const b = item({ id: 'b', inferredWarmth: 0, inferredWind: 0 });
 
-    const seen = new Set<number>();
+    const seenOrders = new Set<string>();
     for (let i = 0; i < 40; i++) {
-      seen.add(Math.sign(compareByScore(a, b, new Map())));
+      const ranked = rankWithFairTiebreak([a, b], new Map());
+      seenOrders.add(ranked[0].id);
     }
-    // Over 40 draws, a coin-flip tie-break should produce both -1 and 1 at
-    // least once; this would be flaky at 1 draw but not at 40 (p < 1e-11 for
-    // an unbiased coin to land the same way 40 times running).
-    expect(seen.has(-1)).toBe(true);
-    expect(seen.has(1)).toBe(true);
+    // Over 40 draws, a fair shuffle should produce both 'a' and 'b' at the
+    // first position at least once; this would be flaky at 1 draw but not at 40
+    // (p < 1e-11 for an unbiased shuffle to land the same way 40 times running).
+    expect(seenOrders.has('a')).toBe(true);
+    expect(seenOrders.has('b')).toBe(true);
   });
 
   it('never randomizes a real, non-tied difference', () => {
     const light = item({ id: 'a', inferredWarmth: 1, inferredWind: 0 });
     const heavy = item({ id: 'b', inferredWarmth: 5, inferredWind: 0 });
     for (let i = 0; i < 20; i++) {
-      expect(compareByScore(light, heavy, new Map())).toBeLessThan(0);
+      const ranked = rankWithFairTiebreak([heavy, light], new Map());
+      expect(ranked[0].id).toBe('a'); // light always comes first
+    }
+  });
+
+  it('preserves all items when shuffling tied runs with 3+ items', () => {
+    const a = item({ id: 'a', inferredWarmth: 0, inferredWind: 0 });
+    const b = item({ id: 'b', inferredWarmth: 0, inferredWind: 0 });
+    const c = item({ id: 'c', inferredWarmth: 0, inferredWind: 0 });
+
+    for (let i = 0; i < 20; i++) {
+      const ranked = rankWithFairTiebreak([a, b, c], new Map());
+      const ids = new Set(ranked.map((it) => it.id));
+      expect(ids.has('a')).toBe(true);
+      expect(ids.has('b')).toBe(true);
+      expect(ids.has('c')).toBe(true);
+      expect(ranked.length).toBe(3);
     }
   });
 });
