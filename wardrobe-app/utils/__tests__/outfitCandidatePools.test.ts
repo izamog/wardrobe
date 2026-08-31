@@ -1,4 +1,14 @@
-import { recencyPenalty, scoreFor, compareByScore, rankWithFairTiebreak } from '../outfitCandidatePools';
+import {
+  recencyPenalty,
+  scoreFor,
+  compareByScore,
+  rankWithFairTiebreak,
+  leanFirst,
+  layerFirst,
+  accessoryFirst,
+  floorAwareCandidates,
+  floorAwareOuterwearCandidates,
+} from '../outfitCandidatePools';
 import type { ClothingItem } from '../../types/wardrobe';
 
 function item(overrides: Partial<ClothingItem> = {}): ClothingItem {
@@ -129,5 +139,67 @@ describe('rankWithFairTiebreak', () => {
       expect(ids.has('c')).toBe(true);
       expect(ranked.length).toBe(3);
     }
+  });
+});
+
+describe('leanFirst with wornDaysAgo', () => {
+  it('still sorts lightest-first when nothing was recently worn', () => {
+    const light = item({ id: 'a', inferredWarmth: 1 });
+    const heavy = item({ id: 'b', inferredWarmth: 5 });
+    expect(leanFirst([heavy, light]).map((i) => i.id)).toEqual(['a', 'b']);
+  });
+
+  it('a recently-worn item sorts behind an equally-warm alternative', () => {
+    const wornRecently = item({ id: 'a', inferredWarmth: 3 });
+    const notWorn = item({ id: 'b', inferredWarmth: 3 });
+    const wornDaysAgo = new Map([['a', 1]]);
+    expect(leanFirst([wornRecently, notWorn], wornDaysAgo).map((i) => i.id)).toEqual(['b', 'a']);
+  });
+
+  it('recency never overrides a real warmth difference', () => {
+    const lightButRecent = item({ id: 'a', inferredWarmth: 1 });
+    const heavyNotWorn = item({ id: 'b', inferredWarmth: 8 });
+    const wornDaysAgo = new Map([['a', 0]]);
+    expect(leanFirst([heavyNotWorn, lightButRecent], wornDaysAgo).map((i) => i.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('accessoryFirst with wornDaysAgo: the confirmed gold-vs-silver case', () => {
+  it('a less-recently-worn zero-insulation accessory sorts ahead of a more-recently-worn one', () => {
+    const goldBelt = item({ id: 'gold', category: 'Belt', hardwareColor: 'Gold' });
+    const silverBelt = item({ id: 'silver', category: 'Belt', hardwareColor: 'Silver' });
+    const wornDaysAgo = new Map([['gold', 1]]);
+    expect(accessoryFirst([goldBelt, silverBelt], wornDaysAgo).map((i) => i.id)).toEqual(['silver', 'gold']);
+  });
+
+  it('with no wear history for either, both orderings occur across repeated calls', () => {
+    const goldBelt = item({ id: 'gold', category: 'Belt', hardwareColor: 'Gold' });
+    const silverBelt = item({ id: 'silver', category: 'Belt', hardwareColor: 'Silver' });
+
+    const firstIds = new Set<string>();
+    for (let i = 0; i < 40; i++) {
+      firstIds.add(accessoryFirst([goldBelt, silverBelt])[0].id);
+    }
+    expect(firstIds.has('gold')).toBe(true);
+    expect(firstIds.has('silver')).toBe(true);
+  });
+});
+
+describe('floorAwareOuterwearCandidates with wornDaysAgo', () => {
+  it('a recently-worn coat still enters the pool (recency nudges rank, not membership)', () => {
+    const wornCoat = item({ id: 'worn', category: 'Coat', inferredWarmth: 8, inferredWind: 8 });
+    const wornDaysAgo = new Map([['worn', 0]]);
+    const ids = floorAwareOuterwearCandidates([wornCoat], wornDaysAgo).map((i) => i.id);
+    expect(ids).toContain('worn');
+  });
+});
+
+describe('floorAwareCandidates with wornDaysAgo', () => {
+  it('passes wornDaysAgo through to its internal leanFirst call', () => {
+    const wornRecently = item({ id: 'a', category: 'Pants', inferredWarmth: 3 });
+    const notWorn = item({ id: 'b', category: 'Pants', inferredWarmth: 3 });
+    const wornDaysAgo = new Map([['a', 1]]);
+    // warmthFloor 0 -> floorAwareCandidates is exactly leanFirst (see its own doc comment)
+    expect(floorAwareCandidates([wornRecently, notWorn], 0, wornDaysAgo).map((i) => i.id)).toEqual(['b', 'a']);
   });
 });

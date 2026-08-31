@@ -115,8 +115,11 @@ export function compareByScore(a: ClothingItem, b: ClothingItem, wornDaysAgo: Re
 export function rankWithFairTiebreak(
   items: readonly ClothingItem[],
   wornDaysAgo: ReadonlyMap<string, number>,
+  descending?: boolean,
 ): ClothingItem[] {
-  const sorted = [...items].sort((a, b) => compareByScore(a, b, wornDaysAgo));
+  const sorted = [...items].sort((a, b) =>
+    descending ? compareByScore(b, a, wornDaysAgo) : compareByScore(a, b, wornDaysAgo),
+  );
   let i = 0;
   while (i < sorted.length) {
     let j = i + 1;
@@ -142,13 +145,19 @@ export function rankWithFairTiebreak(
  * clear it. The sort is stable, so items with equal insulation keep their
  * incoming (newest-first) order — recency as a tie-break, not a rule.
  */
-export function leanFirst(items: readonly ClothingItem[]): ClothingItem[] {
-  return [...items].sort((a, b) => insulation(a) - insulation(b)).slice(0, MAX_SLOT_CANDIDATES);
+export function leanFirst(
+  items: readonly ClothingItem[],
+  wornDaysAgo: ReadonlyMap<string, number> = new Map(),
+): ClothingItem[] {
+  return rankWithFairTiebreak(items, wornDaysAgo).slice(0, MAX_SLOT_CANDIDATES);
 }
 
 /** Ranks a purely-optional accessory slot's candidates lightest-first, capped at MAX_ACCESSORY_CANDIDATES — see its doc comment. */
-export function accessoryFirst(items: readonly ClothingItem[]): ClothingItem[] {
-  return [...items].sort((a, b) => insulation(a) - insulation(b)).slice(0, MAX_ACCESSORY_CANDIDATES);
+export function accessoryFirst(
+  items: readonly ClothingItem[],
+  wornDaysAgo: ReadonlyMap<string, number> = new Map(),
+): ClothingItem[] {
+  return rankWithFairTiebreak(items, wornDaysAgo).slice(0, MAX_ACCESSORY_CANDIDATES);
 }
 
 /**
@@ -159,8 +168,11 @@ export function accessoryFirst(items: readonly ClothingItem[]): ClothingItem[] {
  * which wraps this and adds the single leanest option on top, below — but
  * kept as the building block for it and exported for tests.
  */
-export function layerFirst(items: readonly ClothingItem[]): ClothingItem[] {
-  return [...items].sort((a, b) => insulation(b) - insulation(a)).slice(0, MAX_ACCESSORY_CANDIDATES);
+export function layerFirst(
+  items: readonly ClothingItem[],
+  wornDaysAgo: ReadonlyMap<string, number> = new Map(),
+): ClothingItem[] {
+  return rankWithFairTiebreak(items, wornDaysAgo, true).slice(0, MAX_ACCESSORY_CANDIDATES);
 }
 
 /**
@@ -198,14 +210,16 @@ export function layerFirst(items: readonly ClothingItem[]): ClothingItem[] {
  * At warmthFloor 0 there is nothing to stay warm against, so this is exactly
  * leanFirst.
  */
-export function floorAwareCandidates(items: readonly ClothingItem[], warmthFloor: number): ClothingItem[] {
-  if (warmthFloor <= 0) return leanFirst(items);
+export function floorAwareCandidates(
+  items: readonly ClothingItem[],
+  warmthFloor: number,
+  wornDaysAgo: ReadonlyMap<string, number> = new Map(),
+): ClothingItem[] {
+  if (warmthFloor <= 0) return leanFirst(items, wornDaysAgo);
 
   const half = Math.ceil(MAX_SLOT_CANDIDATES / 2);
-  const leanest = leanFirst(items).slice(0, half);
-  const warmest = [...items]
-    .sort((a, b) => insulation(b) - insulation(a))
-    .slice(0, MAX_SLOT_CANDIDATES - half);
+  const leanest = leanFirst(items, wornDaysAgo).slice(0, half);
+  const warmest = rankWithFairTiebreak(items, wornDaysAgo, true).slice(0, MAX_SLOT_CANDIDATES - half);
 
   const merged = new Map<string, ClothingItem>();
   for (const item of [...leanest, ...warmest]) merged.set(item.id, item);
@@ -246,9 +260,12 @@ export function floorAwareCandidates(items: readonly ClothingItem[], warmthFloor
  * slot, not a shared cap this search's own complexity budget depends on
  * staying small (see MAX_ACCESSORY_CANDIDATES's own doc comment).
  */
-export function floorAwareOuterwearCandidates(items: readonly ClothingItem[]): ClothingItem[] {
-  const heaviest = layerFirst(items);
-  const leanest = [...items].sort((a, b) => insulation(a) - insulation(b)).slice(0, 1);
+export function floorAwareOuterwearCandidates(
+  items: readonly ClothingItem[],
+  wornDaysAgo: ReadonlyMap<string, number> = new Map(),
+): ClothingItem[] {
+  const heaviest = layerFirst(items, wornDaysAgo);
+  const leanest = rankWithFairTiebreak(items, wornDaysAgo).slice(0, 1);
 
   const merged = new Map<string, ClothingItem>();
   for (const item of [...heaviest, ...leanest]) merged.set(item.id, item);
