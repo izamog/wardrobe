@@ -4,9 +4,9 @@
 
 User feedback (batch processed via `coding-feedback-intake`, Group E):
 
-1. Coats aren't being recommended — at -1°C, only one fur coat appears across all 6 recommended outfits.
+1. Coats aren't being recommended — at -1°C, the same fur coat appears across all 6 recommended outfits.
 2. The 6 recommended outfits should each be "anchored" on a different piece, generalizing the existing Bottom/Dress-only anchor cap.
-3. A specific silver bag + belt combination is rarely recommended.
+3. A specific silver hardware bag + silver hardware belt combination is rarely recommended, the algorithm prefers a gold hardware bag + gold hardware belt. These should be recommended in equal measure.
 4. The end goal is 6 distinctly unique outfit recommendations in Today.
 5. Recommendations should account for how often pieces were worn in the past 7/14/30 days, to encourage wardrobe rotation.
 
@@ -18,12 +18,15 @@ User feedback (batch processed via `coding-feedback-intake`, Group E):
 
 **No wear-recency signal exists anywhere in the pipeline**, but the raw data already does: `Outfit_Logs` (`services/items.ts`) stores `date` + `itemIds` (JSON array) per day the user logged an outfit, via `logOutfitWorn`. No schema change is needed — only a new read query.
 
+**The gold-over-silver bias has no structural cause — it's the same insertion-order tie-break.** `utils/hardware.ts`'s `HARDWARE_FAMILY` table is fully symmetric (Gold~Brass and Silver~Black are structurally equivalent; nothing favors one family over the other for compatibility purposes), which rules out a hardcoded preference. The bias is the same "search-encounter order" mechanism described above, playing out on this specific pair: whichever hardware family's belt/bag entered the candidate pool more recently (by creation date, today's tie-break) keeps winning. This exposes a gap the wear-recency fix alone doesn't close: if *neither* the gold nor silver piece has been worn recently, both sit at the same (zero) recency penalty, and the tie still falls through to creation-date order exactly as it does today. A genuinely fair outcome needs a further tie-break for the case where insulation and recency are both wash — see "Tie-break of last resort" below.
+
 ## Design decisions (confirmed with user during brainstorming)
 
 - **Rotation is a soft penalty, not a hard exclusion.** Weather-fitness stays the non-negotiable constraint; a recently-worn item should rank lower, never disappear outright, so an extreme day with limited valid options still produces a recommendation.
 - **Rotation is graduated across the 7/14/30-day windows**, not a single cutoff — worn yesterday is penalized more than worn 20 days ago.
 - **Diversity anchor set extends to Outerwear, Bag, and Belt**, alongside the existing Bottom/Dress anchor, using the same "cap at 1, escalate as a last resort" mechanism already in place for Bottom/Dress. Shoes, Scarf, and Tights stay unconstrained.
 - **Recency is injected at candidate-pool selection only** (`outfitCandidatePools.ts`), not into `generateClosestOutfits`'s ranking/scoring. For warmth-relevant categories it's a secondary factor blended alongside insulation; for zero-insulation categories (Bag, Belt) it fully replaces the current "newest-first" tie-break, since insulation carries no signal for them at all. This is deliberately the smaller of two viable approaches (the alternative — also injecting recency into `generateClosestOutfits`'s scoring — was discussed and set aside as a follow-up only if pool-level reshaping proves insufficient in practice, per YAGNI).
+- **When insulation and recency are both tied, break the tie by randomizing per Today load**, not by tracking a further signal. Confirmed with the user: no new "recommendation history" tracking — a fresh random ordering each time Today recomputes is enough to stop one family (e.g. gold hardware) from permanently dominating an equally-tied alternative, without adding a second kind of history alongside wear-recency.
 
 ## Design
 
@@ -67,7 +70,20 @@ For a normal warmth-relevant item, this nudges rank without overriding weather-f
 
 `MAX_SLOT_CANDIDATES`/`MAX_ACCESSORY_CANDIDATES` caps are unchanged — this changes *which* items make each cut, not how many.
 
-### 4. Diversity anchor extension
+### 4. Tie-break of last resort: randomize genuine ties
+
+`insulation(item) + recencyPenalty(item, wornDaysAgo)` can still tie two candidates exactly — the confirmed gold-vs-silver case, where neither has been worn recently. Today, a JS stable sort resolves this by falling through to array order (creation date). Instead, the comparator used by `leanFirst`/`layerFirst`/`accessoryFirst`/`floorAwareOuterwearCandidates` breaks an exact score tie with a per-call random value rather than array order:
+
+```ts
+function scoreFor(item: ClothingItem, wornDaysAgo: ReadonlyMap<string, number>): number {
+  return insulation(item) + recencyPenalty(item, wornDaysAgo);
+}
+// within each sort call: on a score tie, compare Math.random() instead of falling through to input order
+```
+
+This only fires on an exact tie — it doesn't add noise to any comparison that already has a real signal to go on (weather-fitness or recency). Practically: two items with a genuine warmth difference always sort the same way regardless of this; two that are identically insulated and identically (un)recent get shuffled fresh each time Today recomputes, so across enough days both get a fair share of recommendations instead of one permanently burying the other.
+
+### 5. Diversity anchor extension
 
 `utils/outfitDiversity.ts`: generalize the existing single-purpose `bottomId`/`MAX_OUTFITS_PER_BOTTOM` mechanism into a small set of tracked anchor categories:
 
@@ -82,14 +98,14 @@ const ANCHOR_GROUPS: ReadonlySet<CategoryGroup> = new Set(['Bottom', 'Dress', 'O
 
 `rankedDiverseOutfits`'s existing escalation loop (which currently raises `maxPerBottom` from 1 upward when too few outfits meet `minMeetsTarget`) escalates `maxPerAnchor` first, exactly as it does today. Only once `maxPerAnchor` has been raised to `count` (its own ceiling, per the existing loop condition) without producing enough matching outfits does a second escalation phase begin raising `maxPerAccessoryAnchor`. This ordering is the point: an outfit repeating its coat is a worse outcome than one repeating its bag, so the search exhausts every way to fix the former before it's ever allowed to relax the latter.
 
-### 5. Wiring
+### 6. Wiring
 
 `fetchTodayCandidates` (`services/outfitGenerator.ts`) — not yet read in full this session; will be read before implementation — is where `OutfitCandidates` is assembled once per Today load (per `TodayDataContext.tsx`'s doc comments on why this is fetched once, not per-render). This is the natural place to also fetch `recentWearDays` once and pass it down into whichever pool-selection calls it feeds, keeping the "one fetch per Today load" invariant `TodayDataContext.tsx` already documents intact — no new fetch triggered by re-renders or slider drags.
 
 ## Testing
 
 - `services/__tests__/items.test.ts`: `recentWearDays` — multiple log rows, same item logged twice (keeps the more recent), items outside the window excluded, empty log table.
-- `utils/__tests__/outfitCandidatePools.test.ts` (new, or added to existing materials/warmth-adjacent test file — check for an existing one before creating): `leanFirst`/`layerFirst`/`accessoryFirst` ordering shifts correctly given a `wornDaysAgo` map, including the zero-insulation (Bag/Belt) case where recency becomes the sole determinant.
+- `utils/__tests__/outfitCandidatePools.test.ts` (new, or added to existing materials/warmth-adjacent test file — check for an existing one before creating): `leanFirst`/`layerFirst`/`accessoryFirst` ordering shifts correctly given a `wornDaysAgo` map, including the zero-insulation (Bag/Belt) case where recency becomes the sole determinant. For the randomized tie-break specifically: mock `Math.random` (the standard way this codebase's other randomness, if any, would be tested — check for precedent before implementing) to assert both orderings are reachable for a genuine tie, and that a non-tied pair's order never varies regardless of the mocked value.
 - `utils/__tests__/outfitDiversity.test.ts`: extend existing coverage — an outfit set with repeated Outerwear/Bag/Belt across the 6 gets thinned the same way repeated Bottom/Dress already does; confirm Bag/Belt's independent, more-permissive escalation doesn't block on the Bottom/Dress/Outerwear cap.
 - `verifier` dispatch (real `npm test`/`lint`/`typecheck`) before considering this done, per this repo's standing workflow — no manual exception for this feature.
 
