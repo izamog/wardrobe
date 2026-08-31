@@ -334,11 +334,12 @@ describe('generateClosestOutfits threads wornDaysAgo through to buildSlots', () 
       0,
       NO_CEILING,
       0,
-      100,
+      1,
       wornDaysAgo,
     );
 
-    const withFreshBag = results.some((outfit) => outfit.items.some((i) => i.id === 'fresh-bag'));
-    expect(withFreshBag).toBe(true);
+    expect(results).toHaveLength(1);
+    expect(results[0].items.some((i) => i.id === 'fresh-bag')).toBe(true);
+    expect(results[0].items.some((i) => i.id === 'worn-bag')).toBe(false);
   });
 });
