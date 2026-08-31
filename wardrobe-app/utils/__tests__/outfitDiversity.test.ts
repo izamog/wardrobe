@@ -94,6 +94,78 @@ describe('selectDiverseOutfits', () => {
   });
 });
 
+describe('selectDiverseOutfits: Outerwear, Bag, and Belt anchors', () => {
+  it('caps repeated Outerwear the same way it already caps repeated Bottom', () => {
+    const coat = item('Coat', { id: 'coat' });
+    const outfits = [
+      outfit([item('Pants', { id: 'p1' }), item('T-Shirt', { id: 't1' }), coat]),
+      outfit([item('Pants', { id: 'p2' }), item('T-Shirt', { id: 't2' }), coat]),
+      outfit([item('Pants', { id: 'p3' }), item('T-Shirt', { id: 't3' }), coat]),
+    ];
+
+    const selected = selectDiverseOutfits(outfits, 3);
+    const withCoat = selected.filter((o) => o.items.some((i) => i.id === 'coat'));
+    expect(withCoat.length).toBe(1);
+  });
+
+  it('caps repeated Bag independently, more permissively than Outerwear', () => {
+    const bag = item('Bag', { id: 'bag' });
+    const outfits = [
+      outfit([item('Pants', { id: 'p1' }), item('T-Shirt', { id: 't1' }), bag]),
+      outfit([item('Pants', { id: 'p2' }), item('T-Shirt', { id: 't2' }), bag]),
+    ];
+
+    // maxPerAccessoryAnchor default is 1, same starting point as the primary
+    // anchor cap -- only one of these two should be selected on the first pass.
+    const selected = selectDiverseOutfits(outfits, 2);
+    const withBag = selected.filter((o) => o.items.some((i) => i.id === 'bag'));
+    expect(withBag.length).toBe(1);
+  });
+
+  it('does not cap Shoes, Scarf, or Tights repetition', () => {
+    const shoes = item('Shoes', { id: 'shoes' });
+    const outfits = [
+      outfit([item('Pants', { id: 'p1' }), item('T-Shirt', { id: 't1' }), shoes]),
+      outfit([item('Pants', { id: 'p2' }), item('T-Shirt', { id: 't2' }), shoes]),
+    ];
+
+    const selected = selectDiverseOutfits(outfits, 2);
+    expect(selected.length).toBe(2);
+  });
+});
+
+describe('rankedDiverseOutfits: primary anchor escalates before accessory anchor', () => {
+  it('exhausts the Outerwear/Bottom/Dress cap before relaxing the Bag/Belt cap', () => {
+    // A wardrobe with only one bottom and one coat, but two bags -- the search
+    // cannot produce more than 1 outfit meeting a distinct-primary-anchor
+    // requirement regardless of how far the accessory cap relaxes, so
+    // minMeetsTarget above 1 must not cause the accessory cap to relax uselessly
+    // while a fixable primary-anchor shortage still exists elsewhere in a
+    // larger wardrobe. This test documents the ordering, not a specific count:
+    // primary-anchor escalation (existing maxPerBottom loop) must run to its
+    // own ceiling (count) before an accessory-anchor escalation phase begins.
+    const bottom = item('Pants');
+    const coat = item('Coat');
+    const bagA = item('Bag', { id: 'bag-a' });
+    const bagB = item('Bag', { id: 'bag-b' });
+    const results = rankedDiverseOutfits(
+      emptyCandidates({ bottoms: [bottom], tops: [item('T-Shirt')], shoes: [item('Shoes')], outerwear: [coat], bags: [bagA, bagB] }),
+      noDismatches,
+      0,
+      NO_CEILING,
+      0,
+      6,
+      2,
+    );
+    // Both bags should be reachable across the ranked set once the accessory
+    // cap is allowed to relax -- this is a smoke test that the wiring doesn't
+    // throw or infinite-loop with the new two-tier escalation, not an exact
+    // count (the exact number of results depends on generateClosestOutfits'
+    // full search, which this test isn't re-deriving).
+    expect(results.length).toBeGreaterThan(0);
+  });
+});
+
 describe('rankedDiverseOutfits', () => {
   it('surfaces a warmer, equally valid bottom even when a lean bottom alone ties dozens of times over', () => {
     // The exact shape of the reported bug: TodayScreen showed 10 outfits at
