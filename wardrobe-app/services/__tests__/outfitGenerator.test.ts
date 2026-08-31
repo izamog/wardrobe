@@ -271,6 +271,30 @@ describe('generateOutfitsWithItem', () => {
     }
   });
 
+  it('offers more than one outfit for a pinned Outerwear/Bag/Belt item when other slots have variety', async () => {
+    const db = await freshDb();
+    // hasBeltLoops: true is required for the search to ever offer a Belt
+    // slot at all (see buildSlots' needsBelt = bottom.hasBeltLoops).
+    await insertItem(db, draft({ category: 'Pants', hasBeltLoops: true }), 'bottom1', '2026-08-01T00:00:00Z');
+    await insertItem(db, draft({ category: 'Skirt', hasBeltLoops: true }), 'bottom2', '2026-08-01T00:00:00Z');
+    await insertItem(db, draft({ category: 'T-Shirt' }), 'top1', '2026-08-01T00:00:00Z');
+    await insertItem(db, draft({ category: 'Shirt' }), 'top2', '2026-08-01T00:00:00Z');
+    await insertItem(db, draft({ category: 'Shoes' }), 'shoes1', '2026-08-01T00:00:00Z');
+    await insertItem(db, draft({ category: 'Belt' }), 'the-belt', '2026-08-01T00:00:00Z');
+    const belt = (await getItem(db, 'the-belt'))!;
+
+    // With Task 6's per-anchor caps, filtering to outfits containing `belt`
+    // before diversifying means every outfit shares the same Belt anchor --
+    // without passing count through as the anchor caps too, that alone would
+    // cap the whole function's output at 1 regardless of the variety below.
+    const outfits = await generateOutfitsWithItem(db, belt, bounds);
+
+    expect(outfits.length).toBeGreaterThan(1);
+    for (const outfit of outfits) {
+      expect(outfit.some((i) => i.id === 'the-belt')).toBe(true);
+    }
+  });
+
   it('does not require the item to have been logged unworn today, unlike generateTodayOutfits', async () => {
     const db = await freshDb();
     await insertItem(db, draft({ category: 'Pants' }), 'worn-bottom', '2026-08-10T00:00:00Z');

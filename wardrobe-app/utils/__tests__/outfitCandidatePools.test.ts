@@ -185,12 +185,36 @@ describe('accessoryFirst with wornDaysAgo: the confirmed gold-vs-silver case', (
   });
 });
 
+describe('layerFirst (descending) with wornDaysAgo', () => {
+  it('a real insulation difference is never overridden by recency, in descending order too', () => {
+    const heavierWorn = item({ id: 'a', category: 'Coat', inferredWarmth: 8, inferredWind: 0 });
+    const lighterUnworn = item({ id: 'b', category: 'Coat', inferredWarmth: 2, inferredWind: 0 });
+    const wornDaysAgo = new Map([['a', 0]]);
+    expect(layerFirst([lighterUnworn, heavierWorn], wornDaysAgo).map((i) => i.id)).toEqual(['a', 'b']);
+  });
+
+  it('among equal-insulation coats, the recently-worn one sorts after the unworn one', () => {
+    const wornCoat = item({ id: 'worn', category: 'Coat', inferredWarmth: 8, inferredWind: 0 });
+    const unwornCoat = item({ id: 'unworn', category: 'Coat', inferredWarmth: 8, inferredWind: 0 });
+    const wornDaysAgo = new Map([['worn', 0]]);
+    expect(layerFirst([wornCoat, unwornCoat], wornDaysAgo).map((i) => i.id)).toEqual(['unworn', 'worn']);
+  });
+});
+
 describe('floorAwareOuterwearCandidates with wornDaysAgo', () => {
   it('a recently-worn coat still enters the pool (recency nudges rank, not membership)', () => {
     const wornCoat = item({ id: 'worn', category: 'Coat', inferredWarmth: 8, inferredWind: 8 });
     const wornDaysAgo = new Map([['worn', 0]]);
     const ids = floorAwareOuterwearCandidates([wornCoat], wornDaysAgo).map((i) => i.id);
     expect(ids).toContain('worn');
+  });
+
+  it('among the heaviest-first half, a recently-worn coat still sorts after an equally-warm unworn one', () => {
+    const wornCoat = item({ id: 'worn', category: 'Coat', inferredWarmth: 8, inferredWind: 0 });
+    const unwornCoat = item({ id: 'unworn', category: 'Coat', inferredWarmth: 8, inferredWind: 0 });
+    const wornDaysAgo = new Map([['worn', 0]]);
+    const ids = floorAwareOuterwearCandidates([wornCoat, unwornCoat], wornDaysAgo).map((i) => i.id);
+    expect(ids.indexOf('unworn')).toBeLessThan(ids.indexOf('worn'));
   });
 });
 

@@ -219,5 +219,14 @@ export async function generateOutfitsWithItem(
     Infinity,
   ).filter((outfit) => outfit.items.some((i) => i.id === item.id));
 
-  return selectDiverseOutfits(ranked, count).map((outfit) => outfit.items);
+  // `ranked` is already filtered to outfits containing `item`, so every
+  // outfit shares the same anchor id for item's own category group -- an
+  // anchor cap at its MAX_OUTFITS_PER_ANCHOR/MAX_OUTFITS_PER_ACCESSORY_ANCHOR
+  // default of 1 would silently cap this function's output at 1 whenever
+  // item is itself a Bottom/Dress/Outerwear/Bag/Belt anchor, with nothing
+  // left for that cap to diversify against on that axis (this function
+  // already guarantees `item` is present). Passing `count` through as both
+  // anchor caps takes item's own anchor out of contention while leaving
+  // diversity fully in force for every other slot.
+  return selectDiverseOutfits(ranked, count, count, count).map((outfit) => outfit.items);
 }

@@ -72,8 +72,9 @@ function insulation(item: ClothingItem): number {
  * recently), graduated across the 7/14/30-day bands the user described --
  * see the design spec's "Recency penalty function" section. Added to
  * insulation() by scoreFor so a recently-worn item ranks slightly behind an
- * equally-warm alternative without ever overriding a real weather-fitness
- * difference (see compareByScore).
+ * equally-warm alternative -- it may reorder items whose insulation differs
+ * by up to RECENCY_PENALTY_MAX, but never crosses a larger real
+ * weather-fitness gap (see compareByScore).
  */
 const RECENCY_PENALTY_MAX = 3;
 
@@ -97,14 +98,35 @@ export function scoreFor(item: ClothingItem, wornDaysAgo: ReadonlyMap<string, nu
  * deterministic comparator safe for use in Array.prototype.sort — ties
  * keep input order (stable sort). Randomization for fair rotation across
  * ties is handled separately by rankWithFairTiebreak.
+ *
+ * The recency component may reorder items whose insulation differs by up to
+ * RECENCY_PENALTY_MAX, but never crosses a larger real weather-fitness gap.
  */
 export function compareByScore(a: ClothingItem, b: ClothingItem, wornDaysAgo: ReadonlyMap<string, number>): number {
   return scoreFor(a, wornDaysAgo) - scoreFor(b, wornDaysAgo);
 }
 
 /**
- * Sorts by compareByScore (stable -- ties keep input order), then shuffles
- * each contiguous run of exactly-tied items in place. compareByScore alone
+ * A direction-aware rank key: ascending by this always puts the desired
+ * ordering first, and — unlike flipping compareByScore's comparison order —
+ * always biases a recently-worn item *later*, regardless of direction.
+ *
+ * compareByScore can't be reused directly for descending mode: flipping its
+ * comparator argument order also flips the sign of recencyPenalty's
+ * contribution, which would make a recently-worn item rank *earlier* in a
+ * heaviest-first pool -- the opposite of the intended "recently-worn ranks
+ * slightly behind an equally-warm alternative." Negating only insulation()
+ * for descending mode, while always adding the (unnegated) penalty, keeps
+ * that bias correct in both directions.
+ */
+function rankKey(item: ClothingItem, wornDaysAgo: ReadonlyMap<string, number>, descending: boolean): number {
+  const penalty = recencyPenalty(item, wornDaysAgo);
+  return descending ? -insulation(item) + penalty : insulation(item) + penalty;
+}
+
+/**
+ * Sorts by rankKey (stable -- ties keep input order), then shuffles each
+ * contiguous run of exactly-tied items in place. A plain comparator alone
  * can't safely randomize -- Array.prototype.sort requires a comparator
  * that's consistent across repeated calls for the same pair, and a fresh
  * Math.random() result per call breaks that, risking an invalid ordering
@@ -117,13 +139,12 @@ export function rankWithFairTiebreak(
   wornDaysAgo: ReadonlyMap<string, number>,
   descending?: boolean,
 ): ClothingItem[] {
-  const sorted = [...items].sort((a, b) =>
-    descending ? compareByScore(b, a, wornDaysAgo) : compareByScore(a, b, wornDaysAgo),
-  );
+  const dir = descending ?? false;
+  const sorted = [...items].sort((a, b) => rankKey(a, wornDaysAgo, dir) - rankKey(b, wornDaysAgo, dir));
   let i = 0;
   while (i < sorted.length) {
     let j = i + 1;
-    while (j < sorted.length && scoreFor(sorted[j], wornDaysAgo) === scoreFor(sorted[i], wornDaysAgo)) j++;
+    while (j < sorted.length && rankKey(sorted[j], wornDaysAgo, dir) === rankKey(sorted[i], wornDaysAgo, dir)) j++;
     for (let k = j - 1; k > i; k--) {
       const r = i + Math.floor(Math.random() * (k - i + 1));
       [sorted[k], sorted[r]] = [sorted[r], sorted[k]];
