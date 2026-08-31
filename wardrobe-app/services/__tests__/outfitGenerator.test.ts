@@ -8,8 +8,20 @@
  */
 import { DatabaseSync } from 'node:sqlite';
 import { runMigrations, type MigratableDatabase } from '../migrations';
-import { insertItem, logOutfitWorn, setCompatibility, type ItemsDatabase, type NewClothingItem } from '../items';
-import { generateClosestTodayOutfits, generateTodayOutfits } from '../outfitGenerator';
+import {
+  getItem,
+  insertItem,
+  logOutfitWorn,
+  setCompatibility,
+  type ItemsDatabase,
+  type NewClothingItem,
+} from '../items';
+import {
+  fetchTodayCandidates,
+  generateClosestTodayOutfits,
+  generateOutfitsWithItem,
+  generateTodayOutfits,
+} from '../outfitGenerator';
 
 function adaptForMigrations(db: DatabaseSync): MigratableDatabase {
   return {
@@ -64,17 +76,22 @@ async function freshDb(): Promise<ItemsDatabase> {
 const draft = (overrides: Partial<NewClothingItem> = {}): NewClothingItem => ({
   imagePath: '',
   originalImagePath: '',
+  imageMarginBaked: false,
   primaryColor: '',
   secondaryColor: '',
   category: 'Top',
   brand: 'Unbranded',
   costMinorUnits: 0,
   isSecondHand: false,
+  purchasedAt: '',
   materials: [],
   hardwareColor: 'None',
   hasBeltLoops: false,
   sleeveLength: 'Short',
   length: '',
+  thickness: 'Regular',
+  denier: 0,
+  backless: false,
   inferredWarmth: 0,
   inferredWind: 0,
   ...overrides,
@@ -164,6 +181,29 @@ describe('generateTodayOutfits', () => {
 
     expect(outfits).toEqual([]);
   });
+
+  it('offers a dress as an anchor alongside pants and skirts, with no top required', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Dress' }), 'dress1', '2026-08-01T00:00:00Z');
+    await insertItem(db, draft({ category: 'Shoes' }), 'shoes1', '2026-08-01T00:00:00Z');
+
+    const outfits = await generateTodayOutfits(db, bounds);
+
+    expect(outfits).toHaveLength(1);
+    expect(outfits[0].map((i) => i.id).sort()).toEqual(['dress1', 'shoes1']);
+  });
+});
+
+describe('fetchTodayCandidates includes wornDaysAgo', () => {
+  it('populates wornDaysAgo from Outfit_Logs', async () => {
+    const db = await freshDb();
+    const item = await insertItem(db, draft({ category: 'Pants' }), 'pants1', '2026-08-01T00:00:00Z');
+    await logOutfitWorn(db, [item.id], '2026-08-29', 'log-1', '2026-08-29T09:00:00.000Z');
+
+    const result = await fetchTodayCandidates(db, '2026-08-31');
+
+    expect(result?.wornDaysAgo.get(item.id)).toBe(2);
+  });
 });
 
 describe('generateClosestTodayOutfits', () => {
@@ -193,5 +233,64 @@ describe('generateClosestTodayOutfits', () => {
     await logOutfitWorn(db, ['worn-bottom'], TODAY, 'log1');
 
     expect(await generateClosestTodayOutfits(db, bounds)).toEqual([]);
+  });
+});
+
+describe('generateOutfitsWithItem', () => {
+  it('every returned outfit genuinely contains the item, for a required-slot category (Top)', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Pants' }), 'bottom1', '2026-08-01T00:00:00Z');
+    await insertItem(db, draft({ category: 'T-Shirt' }), 'other-top', '2026-08-01T00:00:00Z');
+    await insertItem(db, draft({ category: 'Shoes' }), 'shoes1', '2026-08-01T00:00:00Z');
+    await insertItem(db, draft({ category: 'T-Shirt' }), 'the-item', '2026-08-01T00:00:00Z');
+    const item = (await getItem(db, 'the-item'))!;
+
+    const outfits = await generateOutfitsWithItem(db, item, bounds);
+
+    expect(outfits.length).toBeGreaterThan(0);
+    for (const outfit of outfits) {
+      expect(outfit.some((i) => i.id === 'the-item')).toBe(true);
+    }
+  });
+
+  it('every returned outfit genuinely contains the item, for an optional-slot category (Bag)', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Pants' }), 'bottom1', '2026-08-01T00:00:00Z');
+    await insertItem(db, draft({ category: 'T-Shirt' }), 'top1', '2026-08-01T00:00:00Z');
+    await insertItem(db, draft({ category: 'Shoes' }), 'shoes1', '2026-08-01T00:00:00Z');
+    await insertItem(db, draft({ category: 'Bag' }), 'the-bag', '2026-08-01T00:00:00Z');
+    const bag = (await getItem(db, 'the-bag'))!;
+
+    // Bag is an optional slot -- the search also explores skipping it
+    // entirely, which is exactly the branch this feature must filter out.
+    const outfits = await generateOutfitsWithItem(db, bag, bounds);
+
+    expect(outfits.length).toBeGreaterThan(0);
+    for (const outfit of outfits) {
+      expect(outfit.some((i) => i.id === 'the-bag')).toBe(true);
+    }
+  });
+
+  it('does not require the item to have been logged unworn today, unlike generateTodayOutfits', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Pants' }), 'worn-bottom', '2026-08-10T00:00:00Z');
+    await insertItem(db, draft({ category: 'T-Shirt' }), 'top1', '2026-08-01T00:00:00Z');
+    await insertItem(db, draft({ category: 'Shoes' }), 'shoes1', '2026-08-01T00:00:00Z');
+    await logOutfitWorn(db, ['worn-bottom'], TODAY, 'log1');
+    const wornBottom = (await getItem(db, 'worn-bottom'))!;
+
+    const outfits = await generateOutfitsWithItem(db, wornBottom, bounds);
+
+    expect(outfits.length).toBeGreaterThan(0);
+    expect(outfits[0].some((i) => i.id === 'worn-bottom')).toBe(true);
+  });
+
+  it('returns nothing when no weather-appropriate outfit can be built around the item', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'T-Shirt' }), 'the-item', '2026-08-01T00:00:00Z');
+    // No bottom or shoes exist at all, so no complete outfit is possible.
+    const item = (await getItem(db, 'the-item'))!;
+
+    expect(await generateOutfitsWithItem(db, item, bounds)).toEqual([]);
   });
 });
