@@ -12,53 +12,24 @@ import { todayDateString } from '../utils/date';
 import type { ClothingItem } from '../types/wardrobe';
 import type { OutfitCandidates } from '../utils/outfitGenerator';
 
-/** Whether outfitsFor found anything to build at all, vs. found candidates but none met today's target. */
+/** Whether outfitsFor found anything to build at all, vs. found candidates but no complete outfit exists. */
 export interface TodayOutfits {
   /**
-   * The outfits to actually show: every one that meets today's target, or —
-   * only once none do — the closest available instead, so a genuinely
-   * extreme day (nothing lean enough for a heatwave, nothing warm enough
-   * for a cold snap) still offers a real recommendation instead of an empty
-   * screen telling the user to go find one themselves. Each outfit's own
-   * meetsTarget still says which case this is; OutfitCard's "Best match" vs
-   * "Closest available (short of target)" label (TodayScreen.tsx) already
-   * reads directly off that per outfit, so nothing downstream needed to
-   * change to support this falling back.
+   * Every outfit selectBandedOutfits picked, shown as-is -- not filtered to
+   * only the ones that meet today's target. Each band deliberately steers
+   * toward its own edge of the valid range (see splitIntoWarmthBands), so a
+   * band's own pick legitimately not meeting target is expected and still
+   * worth showing, not a reason to hide it (a genuinely extreme day works
+   * the same way: nothing lean enough for a heatwave still shows the
+   * closest available option rather than an empty screen). Each outfit's
+   * own meetsTarget drives its own "Meets target" vs "Closest available
+   * (short of target)" label (see OutfitCard in TodayScreen.tsx).
    */
   shown: ScoredOutfit[];
   /** True once the search found at least one complete, valid outfit, whether or not it met target. */
   hasAnyOutfit: boolean;
 }
 
-/**
- * Up to 6 outfits split into three warmth bands (median, cooler, warmer —
- * 2 each; see utils/bandedOutfits.ts' selectBandedOutfits and
- * utils/warmthBands.ts' splitIntoWarmthBands), with no single item reused
- * more than twice across the whole set. hasAnyOutfit is kept separate from
- * shown.length so the empty state
- * can still tell "closest-available fallback" apart from "nothing could be
- * built at all" (see TodayScreen's NoOutfitState).
- *
- * Reported bug: extreme weather — a heatwave with nothing lean enough in the
- * closet, or a cold snap with nothing warm enough — showed "Nothing meets
- * today's target" and stopped there, even though the search had already
- * found real, complete outfits; the user's own request was that an extreme
- * day should "just prepare the warmest/coldest possible outfits" rather than
- * make them go find that fallback themselves via the troubleshoot sliders.
- * shown falls back to the full ranked set exactly when none of it meets
- * target — every member of that fallback set is, by construction, then a
- * genuine closest-available result, which is exactly what the existing
- * "Closest available (short of target)" / "Runner-up N (short of target)"
- * card styling already exists to present; the only change needed here is to
- * stop withholding that set from the screen's default render.
- *
- * loadToday calls this once, against the real forecast, so TodayScreen's
- * first render never has to run it — see loadToday's own doc comment for why
- * that matters. TodayScreen calls it again only when the troubleshooting
- * slider is actually dragged, against whatever feltTempC/windSpeedKph the
- * slider supplies; both are just different bounds over the same
- * already-fetched candidate pools, not two different features.
- */
 /** Narrows every slot's candidate pool to items marked work appropriate — see outfitsFor's workAppropriateOnly parameter. */
 function filterWorkAppropriate(candidates: OutfitCandidates): OutfitCandidates {
   const only = (items: readonly ClothingItem[]) => items.filter((item) => item.isWorkAppropriate);
@@ -74,6 +45,22 @@ function filterWorkAppropriate(candidates: OutfitCandidates): OutfitCandidates {
   };
 }
 
+/**
+ * Up to 6 outfits split into three warmth bands (median, cooler, warmer —
+ * 2 each; see utils/bandedOutfits.ts' selectBandedOutfits and
+ * utils/warmthBands.ts' splitIntoWarmthBands), with no single item reused
+ * more than twice across the whole set. hasAnyOutfit is kept separate from
+ * shown.length so the empty state can still tell "closest-available
+ * results only" apart from "nothing could be built at all" (see
+ * TodayScreen's NoOutfitState).
+ *
+ * loadToday calls this once, against the real forecast, so TodayScreen's
+ * first render never has to run it — see loadToday's own doc comment for why
+ * that matters. TodayScreen calls it again only when the troubleshooting
+ * slider is actually dragged, against whatever feltTempC/windSpeedKph the
+ * slider supplies; both are just different bounds over the same
+ * already-fetched candidate pools, not two different features.
+ */
 export function outfitsFor(
   todayCandidates: TodayCandidates | null,
   feltTempC: number,
@@ -96,8 +83,19 @@ export function outfitsFor(
     bands,
     todayCandidates.wornDaysAgo,
   );
-  const meetsTarget = diverse.filter((outfit) => outfit.meetsTarget);
-  return { shown: meetsTarget.length > 0 ? meetsTarget : diverse, hasAnyOutfit: diverse.length > 0 };
+  // Not filtered to meetsTarget-only: unlike the old single-target ranking,
+  // each band deliberately steers toward its own edge of the valid range,
+  // so a band's own pick legitimately missing target (especially "warmer",
+  // which sits closest to the ceiling) is expected, not a reason to drop
+  // it. Reported bug: filtering the whole flat list to meetsTarget-only
+  // whenever *any* outfit met target silently dropped the warmer band's
+  // own picks whenever they didn't, breaking the promised 2 cooler/2
+  // median/2 warmer structure even though selectBandedOutfits had
+  // correctly produced it. Each card's own meetsTarget still drives its
+  // own "Meets target" vs "Closest available" label (see TodayScreen's
+  // OutfitCard) -- nothing here needs the list itself filtered for that
+  // to read correctly.
+  return { shown: diverse, hasAnyOutfit: diverse.length > 0 };
 }
 
 export type TodayLoadState =

@@ -35,7 +35,7 @@ describe('outfitsFor', () => {
     expect(result.shown.every((outfit) => !outfit.meetsTarget)).toBe(true);
   });
 
-  it('shows only meets-target outfits when at least one exists, never mixing in a closest-available one', () => {
+  it('shows meets-target outfits as such when every outfit in a thin wardrobe happens to clear target', () => {
     const bottom = item('Pants', { inferredWarmth: 3, inferredWind: 2 });
     const top = item('T-Shirt', { inferredWarmth: 2, inferredWind: 1 });
     const shoes = item('Shoes', { inferredWarmth: 1, inferredWind: 1 });
@@ -51,6 +51,38 @@ describe('outfitsFor', () => {
     expect(result.hasAnyOutfit).toBe(true);
     expect(result.shown.length).toBeGreaterThan(0);
     expect(result.shown.every((outfit) => outfit.meetsTarget)).toBe(true);
+  });
+
+  it('does not drop a band member that misses target just because other outfits meet it', () => {
+    // Regression test: outfitsFor used to filter the whole flat list down
+    // to meets-target-only outfits whenever *any* outfit met target,
+    // silently dropping band members that didn't -- typically the warmer
+    // band's own picks, since they sit closest to the ceiling. With bands,
+    // that's expected, not a bug: a "warmer" pick legitimately missing
+    // target is still a real, honestly-labeled option worth showing.
+    const bottoms = Array.from({ length: 4 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: i }));
+    const tops = Array.from({ length: 4 }, (_, i) => item('T-Shirt', { id: `top-${i}`, inferredWarmth: i }));
+    const shoes = Array.from({ length: 3 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: 0 }));
+    const bags = Array.from({ length: 3 }, (_, i) => item('Bag', { id: `bag-${i}` }));
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms, tops, shoes, bags }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    // A hot day: the narrow warmth ceiling (see thermal.ts's HOT_CEILING_MIN)
+    // makes it plausible for some outfits to meet target and others not,
+    // within the same 6-outfit set.
+    const result = outfitsFor(candidates, 25, 0);
+
+    const someMeetTarget = result.shown.some((outfit) => outfit.meetsTarget);
+    const someDoNot = result.shown.some((outfit) => !outfit.meetsTarget);
+    // This fixture is specifically constructed to produce a mixed result --
+    // if it ever stops doing so, the fixture needs adjusting, not this
+    // assertion. The real assertion is the one below: shown always
+    // reflects everything selectBandedOutfits actually picked.
+    expect(someMeetTarget && someDoNot).toBe(true);
+    expect(result.shown).toHaveLength(6);
   });
 
   it('reports no outfit at all when nothing complete exists in the candidate pools', () => {
