@@ -479,3 +479,30 @@ describe('bandOrderFor', () => {
     expect(bandOrderFor(warmthFloor(19))).toEqual(['median', 'warmer', 'cooler']);
   });
 });
+
+describe('selectBandedOutfits performance', () => {
+  it('completes well within a generous bound even with a wardrobe shaped like the reported flooding bug', () => {
+    // Mirrors the real-wardrobe shape that caused ~26,000 candidates to be
+    // checked before this fix: many Bottoms, a small number of Tops and
+    // Outerwear where one pairing dominates, and enough Shoes/Bags/Belts
+    // to multiply out into a large raw combination count.
+    const bottoms = Array.from({ length: 15 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: i }));
+    const tops = Array.from({ length: 6 }, (_, i) => item('Sweater', { id: `top-${i}`, inferredWarmth: 4 + i }));
+    const outerwear = Array.from({ length: 6 }, (_, i) => item('Jacket', { id: `jacket-${i}`, inferredWarmth: 4 + i }));
+    const shoes = Array.from({ length: 8 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: i }));
+    const belts = Array.from({ length: 4 }, (_, i) => item('Belt', { id: `belt-${i}`, inferredWarmth: i, hasBeltLoops: true }));
+    const bags = Array.from({ length: 8 }, (_, i) => item('Bag', { id: `bag-${i}`, inferredWarmth: i }));
+    const candidates = emptyCandidates({ bottoms, tops, outerwear, shoes, belts, bags });
+    const bands = splitIntoWarmthBands(0, 40);
+
+    const start = Date.now();
+    const results = selectBandedOutfits(candidates, noDismatches, 0, NO_CEILING, 0, bands);
+    const elapsedMs = Date.now() - start;
+
+    expect(results.length).toBeGreaterThan(0);
+    // Generous on purpose (a real run should finish in well under 500ms) --
+    // this is a regression guard against the flooding class of bug
+    // reappearing, not a tight performance budget.
+    expect(elapsedMs).toBeLessThan(3000);
+  });
+});
