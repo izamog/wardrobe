@@ -1,7 +1,8 @@
 /** @jest-environment node */
-import { coreOutfitsForBands, selectBandedOutfits } from '../bandedOutfits';
+import { bandOrderFor, coreOutfitsForBands, selectBandedOutfits } from '../bandedOutfits';
 import { splitIntoWarmthBands } from '../warmthBands';
 import { emptyCandidates, item, resetSeq, noDismatches, NO_CEILING } from '../outfitGeneratorTestHelpers';
+import { warmthFloor } from '../thermal';
 
 beforeEach(() => resetSeq());
 
@@ -234,5 +235,23 @@ describe('selectBandedOutfits', () => {
       expect(outfit.items.some((i) => i.id === 'trousers')).toBe(true);
       expect(outfit.meetsTarget).toBe(true);
     }
+  });
+});
+
+describe('bandOrderFor', () => {
+  it('puts warmer last at or above the 20°C neutral point (warmthFloor === 0)', () => {
+    expect(bandOrderFor(0)).toEqual(['median', 'cooler', 'warmer']);
+  });
+
+  it('puts cooler last below the 20°C neutral point (warmthFloor > 0)', () => {
+    expect(bandOrderFor(1)).toEqual(['median', 'warmer', 'cooler']);
+    expect(bandOrderFor(18)).toEqual(['median', 'warmer', 'cooler']);
+  });
+
+  it('agrees with the real thermal.ts boundary: exactly 20°C is on the warm (warmer-last) side', () => {
+    expect(warmthFloor(20)).toBe(0);
+    expect(bandOrderFor(warmthFloor(20))).toEqual(['median', 'cooler', 'warmer']);
+    expect(warmthFloor(19)).toBeGreaterThan(0);
+    expect(bandOrderFor(warmthFloor(19))).toEqual(['median', 'warmer', 'cooler']);
   });
 });

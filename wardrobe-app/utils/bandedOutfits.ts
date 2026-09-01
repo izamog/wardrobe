@@ -6,6 +6,23 @@ import type { WarmthBand } from './warmthBands';
 import type { ClothingItem } from '../types/wardrobe';
 
 /**
+ * Which band's turn comes last -- and is therefore more likely to fall
+ * back to a closest-available result on a constrained wardrobe -- depends
+ * on today's warmthFloor. Median always goes first; warmer matters less
+ * to prioritize on a hot day than cooler does, and vice versa in the
+ * cold, per direct feedback ("prioritise cool outfits in summer, and
+ * warm outfits in winter").
+ *
+ * warmthFloor === 0 exactly captures "at or above the 20°C neutral point"
+ * (see WARMTH_NEUTRAL_TEMP_C in utils/thermal.ts) without needing
+ * feltTempC threaded through this function separately -- warmthFloor(20)
+ * is exactly 0, so 20°C itself lands on the warm (warmer-last) side.
+ */
+export function bandOrderFor(warmthFloor: number): ('median' | 'cooler' | 'warmer')[] {
+  return warmthFloor === 0 ? ['median', 'cooler', 'warmer'] : ['median', 'warmer', 'cooler'];
+}
+
+/**
  * Merges floorAwareCandidates run once per band into one deduped pool -- see
  * the design spec's "Pool widening" ruling for why this is a static,
  * up-front merge rather than a dynamic re-search.
