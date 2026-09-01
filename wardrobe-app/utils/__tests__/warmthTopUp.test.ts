@@ -187,6 +187,36 @@ describe('topUpToward', () => {
     expect(result.items.some((i) => i.id === 'scarf-big')).toBe(false);
   });
 
+  it('considers the whole compatible pool, not just the 3 lightest -- the best fit can be the heaviest of 5+ candidates', () => {
+    // Regression test: a prior version of this fix ran bestAddition over
+    // accessoryFirst's lightest-first, cap-to-3 pool, which silently
+    // excluded a heavier item even when it was the actual best fit.
+    const skirt = item('Skirt', { inferredWarmth: 2 });
+    const core = scored([skirt], 1, 0);
+    const band: WarmthBand = { min: 6, max: 10, center: 8 };
+    // bestAddition rescores from the real items, not core's given warmth --
+    // Bottom weight 0.6: skirt (inferredWarmth 2) actually contributes 1.2.
+    // Scarf weight 0.8: warmths [1,2,3,7,9] contribute [0.8,1.6,2.4,5.6,7.2]
+    // -- totals [2.0,2.8,3.6,6.8,8.4], gaps to center 8 of
+    // [6,5.2,4.4,1.2,0.4]. The best fit (warmth 9, gap 0.4) is the heaviest
+    // of the five, and would be the 5th-lightest -- excluded by any
+    // cap-to-3 lightest-first trim.
+    const warmths = [1, 2, 3, 7, 9];
+    const scarves = warmths.map((w) => item('Scarf', { id: `scarf-${w}`, inferredWarmth: w }));
+
+    const result = topUpToward(
+      core,
+      band,
+      emptyCandidates({ bottoms: [skirt], scarves }),
+      noDismatches,
+      7,
+      NO_CEILING,
+      0,
+    );
+
+    expect(result.items.some((i) => i.id === 'scarf-9')).toBe(true);
+  });
+
   it('prefers the less-recently-worn of two equally-good scarves', () => {
     const skirt = item('Skirt', { inferredWarmth: 2 });
     const core = scored([skirt], 1, 0);

@@ -1,7 +1,7 @@
 import { sumWarmth, sumWind, meetsRegionFloors } from './outfitScoring';
 import { SCARF_PREFERRED_WARMTH_FLOOR, tightsEligible } from './outfitSlots';
 import { isCompatibleCandidate, pairKey } from './pairs';
-import { accessoryFirst } from './outfitCandidatePools';
+import { recencyPenalty } from './outfitCandidatePools';
 import type { OutfitCandidates, ScoredOutfit } from './outfitGenerator';
 import type { WarmthBand } from './warmthBands';
 import type { ClothingItem } from '../types/wardrobe';
@@ -89,7 +89,18 @@ export function compatibleTopUpPools(
   };
 }
 
-/** The single addition from `pool` (added to `base`) that makes the best top-up result per isBetterTopUp — not simply the warmest item, since the warmest can overshoot band.center or warmthCeiling entirely. */
+/**
+ * The single addition from `pool` (added to `base`) that makes the best
+ * top-up result per isBetterTopUp — not simply the warmest item, since the
+ * warmest can overshoot band.center or warmthCeiling entirely. Searches the
+ * *entire* pool, deliberately not pre-trimmed to a small candidate subset
+ * (see topUpToward's own doc comment) — trimming to e.g. the lightest few
+ * compatible items before this search would silently exclude the very item
+ * a high band.center or a leg-floor fix actually needs. Ties (same
+ * floor-pass status and gap, per isBetterTopUp) are broken by recency — the
+ * less-recently-worn item wins, matching every other accessory slot in this
+ * pipeline.
+ */
 function bestAddition(
   pool: readonly ClothingItem[],
   base: readonly ClothingItem[],
@@ -98,12 +109,24 @@ function bestAddition(
   warmthCeiling: number,
   windFloor: number,
   respectCeiling: boolean,
+  wornDaysAgo: ReadonlyMap<string, number>,
 ): { item: ClothingItem; outfit: ScoredOutfit } | undefined {
   let best: { item: ClothingItem; outfit: ScoredOutfit } | undefined;
   for (const candidateItem of pool) {
     const outfit = rescored([...base, candidateItem], warmthFloor, warmthCeiling, windFloor);
     if (respectCeiling && outfit.warmth > warmthCeiling) continue;
-    if (!best || isBetterTopUp(outfit, best.outfit, band, warmthFloor)) {
+    if (!best) {
+      best = { item: candidateItem, outfit };
+      continue;
+    }
+    if (isBetterTopUp(outfit, best.outfit, band, warmthFloor)) {
+      best = { item: candidateItem, outfit };
+    } else if (
+      !isBetterTopUp(best.outfit, outfit, band, warmthFloor) &&
+      recencyPenalty(candidateItem, wornDaysAgo) < recencyPenalty(best.item, wornDaysAgo)
+    ) {
+      // Neither strictly beats the other on floor-status/gap -- a genuine
+      // tie, broken by recency.
       best = { item: candidateItem, outfit };
     }
   }
@@ -129,9 +152,10 @@ function bestAddition(
  * top-up is a nudge, never a reason to disqualify an outfit that was
  * already valid.
  *
- * `wornDaysAgo`, when given, is applied via accessoryFirst the same way
- * every other accessory slot in this pipeline ranks candidates -- an
- * equally-good top-up prefers the less-recently-worn item.
+ * `wornDaysAgo`, when given, only breaks ties between otherwise
+ * equally-good additions (see bestAddition) -- an equally-good top-up
+ * prefers the less-recently-worn item, but recency never excludes an item
+ * from consideration the way accessoryFirst's own cap-to-3 would.
  *
  * `pools`, when given, replaces this function's own compatible-scarf/tights
  * filtering (see compatibleTopUpPools) -- a caller running this for the
@@ -165,11 +189,29 @@ export function topUpToward(
   const tightsOk = anchor !== undefined && tightsEligible(anchor, warmthFloor) && (needsWarmthBoost || needsFloorFix);
 
   const compatiblePools = pools ?? compatibleTopUpPools(core, candidates, dismatchedKeys);
-  const scarfCandidates = scarfEligible ? accessoryFirst(compatiblePools.scarves, wornDaysAgo) : [];
-  const tightsCandidates = tightsOk ? accessoryFirst(compatiblePools.tights, wornDaysAgo) : [];
+  const scarfCandidates = scarfEligible ? compatiblePools.scarves : [];
+  const tightsCandidates = tightsOk ? compatiblePools.tights : [];
 
-  const scarfPick = bestAddition(scarfCandidates, core.items, band, warmthFloor, warmthCeiling, windFloor, respectCeiling);
-  const tightsPick = bestAddition(tightsCandidates, core.items, band, warmthFloor, warmthCeiling, windFloor, respectCeiling);
+  const scarfPick = bestAddition(
+    scarfCandidates,
+    core.items,
+    band,
+    warmthFloor,
+    warmthCeiling,
+    windFloor,
+    respectCeiling,
+    wornDaysAgo,
+  );
+  const tightsPick = bestAddition(
+    tightsCandidates,
+    core.items,
+    band,
+    warmthFloor,
+    warmthCeiling,
+    windFloor,
+    respectCeiling,
+    wornDaysAgo,
+  );
 
   const attempts: ScoredOutfit[] = [];
   if (scarfPick) attempts.push(scarfPick.outfit);
