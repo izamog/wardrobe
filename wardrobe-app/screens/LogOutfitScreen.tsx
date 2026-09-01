@@ -159,7 +159,7 @@ function useLogOutfitState(date: string) {
   // a category chip narrows the grid below to something else.
   const { data: allItems } = useDbQuery((db) => listItems(db, null), []);
   const { data: existingIds } = useDbQuery((db) => listItemsWornOn(db, date), [date]);
-  const { reload: reloadToday } = useTodayData();
+  const { invalidate: invalidateToday } = useTodayData();
 
   // Pre-selects whatever was already logged for this day, so tapping an
   // already-logged calendar cell opens straight into "here's what's on
@@ -212,7 +212,7 @@ function useLogOutfitState(date: string) {
       // wearCount feeds Today's recency ranking -- see TodayDataContext's
       // own doc comment for why nothing refreshes its cached candidate pool
       // on its own.
-      reloadToday();
+      invalidateToday();
     } finally {
       setSaving(false);
     }

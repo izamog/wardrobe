@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import Slider from '@react-native-community/slider';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { EmptyState } from '../components/EmptyState';
 import { OutfitCollage } from '../components/OutfitCollage';
@@ -496,7 +496,18 @@ function TroubleshootPanel({
 
 export function TodayScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const { state, reload: reloadTodayData, setWornToday } = useTodayData();
+  const { state, reload: reloadTodayData, refreshIfStale, setWornToday } = useTodayData();
+
+  // The one place refreshIfStale is called from -- see its own doc comment.
+  // No-ops unless something invalidated the pool since the last load (an
+  // item edit, a mark-as-worn, etc.), so this doesn't reintroduce the
+  // "recomputes on every ordinary tab switch" slowness reload() was pulled
+  // out of the focus path to avoid in the first place.
+  useFocusEffect(
+    useCallback(() => {
+      refreshIfStale();
+    }, [refreshIfStale]),
+  );
   const [wearingIndex, setWearingIndex] = useState<number | null>(null);
   // null means "use the real forecast" — see effectiveFeltTempC/effectiveWindSpeedKph.
   const [feltTempOverride, setFeltTempOverride] = useState<number | null>(null);

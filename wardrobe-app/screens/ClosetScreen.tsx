@@ -450,7 +450,7 @@ export function ClosetScreen() {
 
   const { data: items, error, loading, reload } = useDbQuery((db) => listItems(db, filter), [filter]);
   const sortedItems = useMemo(() => (items ? sortItems(items, sort) : items), [items, sort]);
-  const { reload: reloadToday } = useTodayData();
+  const { invalidate: invalidateToday } = useTodayData();
   // Delete and the two bulk-mark actions all change whether/how the
   // selected items show up in Today -- see TodayDataContext's own doc
   // comment for why nothing refreshes its cached candidate pool on its own.
@@ -458,7 +458,7 @@ export function ClosetScreen() {
   // rather than widening its props.
   const reloadClosetAndToday = async () => {
     await reload();
-    reloadToday();
+    invalidateToday();
   };
 
   useLayoutEffect(() => {

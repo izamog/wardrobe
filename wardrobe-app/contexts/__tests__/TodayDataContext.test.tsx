@@ -108,4 +108,86 @@ describe('TodayDataProvider', () => {
       await flushMicrotasks();
     });
   });
+
+  it('refreshIfStale does nothing until invalidate() has been called', async () => {
+    (currentLocation as jest.Mock).mockResolvedValue({ ok: true, coords: { latitude: 0, longitude: 0 } });
+    (getLatestLoggedOutfit as jest.Mock).mockResolvedValue([]);
+
+    let latest!: ReturnType<typeof useTodayData>;
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(
+        <TodayDataProvider>
+          <Probe onValue={(value) => (latest = value)} />
+        </TodayDataProvider>,
+      );
+      await flushMicrotasks();
+    });
+    expect(latest.state.step).toBe('ready');
+    (fetchTodayCandidates as jest.Mock).mockClear();
+
+    await act(async () => {
+      latest.refreshIfStale();
+      await flushMicrotasks();
+    });
+
+    // No invalidate() was called, so refreshIfStale must not have re-fetched
+    // anything -- this is what keeps it from reintroducing the "recomputes
+    // on every ordinary Today focus" slowness reload() was pulled off the
+    // focus path to avoid.
+    expect(fetchTodayCandidates).not.toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+      await flushMicrotasks();
+    });
+  });
+
+  it('refreshIfStale re-fetches candidates without a new location fix or weather call, once invalidated', async () => {
+    (currentLocation as jest.Mock).mockResolvedValue({ ok: true, coords: { latitude: 0, longitude: 0 } });
+    (getLatestLoggedOutfit as jest.Mock).mockResolvedValue([]);
+
+    let latest!: ReturnType<typeof useTodayData>;
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(
+        <TodayDataProvider>
+          <Probe onValue={(value) => (latest = value)} />
+        </TodayDataProvider>,
+      );
+      await flushMicrotasks();
+    });
+    expect(latest.state.step).toBe('ready');
+    (currentLocation as jest.Mock).mockClear();
+    (fetchTodayForecast as jest.Mock).mockClear();
+    (fetchTodayCandidates as jest.Mock).mockClear();
+
+    await act(async () => {
+      latest.invalidate();
+      latest.refreshIfStale();
+      await flushMicrotasks();
+    });
+
+    expect(fetchTodayCandidates).toHaveBeenCalledTimes(1);
+    // The whole point of refreshIfStale over reload(): reuse the forecast
+    // already on hand instead of re-running the slow location fix and
+    // network weather call that made every write-triggered reload() freeze
+    // whatever screen was visible.
+    expect(currentLocation).not.toHaveBeenCalled();
+    expect(fetchTodayForecast).not.toHaveBeenCalled();
+
+    // A second call right after must no-op again -- refreshIfStale clears
+    // the stale flag once it actually runs.
+    (fetchTodayCandidates as jest.Mock).mockClear();
+    await act(async () => {
+      latest.refreshIfStale();
+      await flushMicrotasks();
+    });
+    expect(fetchTodayCandidates).not.toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+      await flushMicrotasks();
+    });
+  });
 });

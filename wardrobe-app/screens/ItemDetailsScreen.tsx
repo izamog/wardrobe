@@ -590,7 +590,7 @@ export function ItemDetailsScreen() {
   const { height: windowHeight } = useWindowDimensions();
 
   const { data: item, error, loading, reload } = useDbQuery((db) => getItem(db, itemId), [itemId]);
-  const { reload: reloadToday } = useTodayData();
+  const { invalidate: invalidateToday } = useTodayData();
   const [draft, setDraft] = useState<Draft | null>(null);
   // Read-only until asked. Most visits to this screen are to look something up,
   // and a screen of live text fields invites edits nobody meant to make.
@@ -652,13 +652,13 @@ export function ItemDetailsScreen() {
       // Any edited field can change whether/how this item shows up in
       // Today -- see TodayDataContext's own doc comment for why nothing
       // refreshes its cached candidate pool on its own.
-      reloadToday();
+      invalidateToday();
       navigation.goBack();
     } catch (e) {
       console.error('Failed to update item:', e);
       Alert.alert('Could not save', 'Your changes were not stored.');
     }
-  }, [draft, itemId, navigation, reloadToday]);
+  }, [draft, itemId, navigation, invalidateToday]);
 
   React.useLayoutEffect(() => {
     navigation.setOptions({
@@ -731,7 +731,7 @@ export function ItemDetailsScreen() {
             if (!item) return;
             try {
               await withDb((db) => archiveItems(db, [item.id]));
-              reloadToday();
+              invalidateToday();
               navigation.goBack();
             } catch (e) {
               console.error('Failed to delete item:', e);

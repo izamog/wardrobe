@@ -227,4 +227,32 @@ describe('floorAwareCandidates with wornDaysAgo', () => {
     // warmthFloor 0 -> floorAwareCandidates is exactly leanFirst (see its own doc comment)
     expect(floorAwareCandidates([wornRecently, notWorn], 0, wornDaysAgo).map((i) => i.id)).toEqual(['b', 'a']);
   });
+
+  it('includes the item closest to the warmth floor even when it falls outside both the leanest and warmest thirds', () => {
+    // Reported bug: a wardrobe with more than MAX_SLOT_CANDIDATES (6) bottoms
+    // spread across the warmth range only ever offered the 3 leanest + 3
+    // warmest to the search -- a bottom that would have been the actual best
+    // fit (closest to, or just clearing, the floor) could sit in the
+    // unoffered middle and never get tried at all, however good a match it
+    // was. Eight bottoms, warmth 0/1/2/3/5/7/9/10: leanest-3 is {0,1,2},
+    // warmest-3 is {10,9,7} -- the item at warmth 5, exactly on a floor of
+    // 5, falls in neither and was silently excluded before this fix.
+    const warmths = [0, 1, 2, 3, 5, 7, 9, 10];
+    const items = warmths.map((w) => item({ id: `w${w}`, category: 'Pants', inferredWarmth: w }));
+
+    const pool = floorAwareCandidates(items, 5);
+
+    expect(pool.map((i) => i.id)).toContain('w5');
+  });
+
+  it('does not add a closest-to-floor candidate that the lean/warm split already included', () => {
+    // The floor sits exactly at the warmest of the lean-3, so no extra slot
+    // should be spent re-adding it.
+    const warmths = [0, 1, 2, 8, 9, 10];
+    const items = warmths.map((w) => item({ id: `w${w}`, category: 'Pants', inferredWarmth: w }));
+
+    const pool = floorAwareCandidates(items, 2);
+
+    expect(pool.map((i) => i.id).filter((id) => id === 'w2')).toHaveLength(1);
+  });
 });

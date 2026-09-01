@@ -170,9 +170,55 @@ async function loadToday(): Promise<TodayLoadState> {
   return { step: 'ready', today, forecast, todayCandidates, initialOutfits, wornToday };
 }
 
+/**
+ * Re-fetches just the candidate pool and recomputes outfits against the
+ * `current` state's already-known forecast — reload()'s location fix and
+ * weather call skipped entirely, since neither changes just because an item
+ * was edited. Still does the one unavoidably expensive part (outfitsFor's
+ * synchronous search), which is exactly why this is called lazily on
+ * Today's own focus (see refreshIfStale) rather than eagerly from every
+ * screen that writes an item — see invalidate's own doc comment for the
+ * reported bug that distinction fixes.
+ */
+async function refreshCandidates(
+  current: Extract<TodayLoadState, { step: 'ready' }>,
+): Promise<TodayLoadState> {
+  const { todayCandidates, wornToday } = await withDb(async (db) => {
+    const [fetched, worn] = await Promise.all([
+      fetchTodayCandidates(db, current.today),
+      getLatestLoggedOutfit(db, current.today),
+    ]);
+    return { todayCandidates: fetched, wornToday: worn };
+  });
+  const initialOutfits = outfitsFor(todayCandidates, current.forecast.feltTempC, current.forecast.windSpeedKph);
+  return { ...current, todayCandidates, initialOutfits, wornToday };
+}
+
 interface TodayDataContextValue {
   state: TodayLoadState;
   reload: () => void;
+  /**
+   * Marks the candidate pool stale without doing any work itself — cheap
+   * and synchronous, safe to call from any write anywhere in the app.
+   *
+   * Reported bug (v1): item edits didn't show up in Today until the app was
+   * relaunched, since nothing invalidated the pool loadToday computed once
+   * at launch. Reported bug (v2): calling the *full* reload() (this
+   * function's first version) from every item-writing screen fixed that but
+   * froze the app instead — reload() re-runs a live location fix, a live
+   * weather fetch, and outfitsFor's synchronous, uncapped search, all
+   * inline in whatever save/delete handler triggered it, blocking the JS
+   * thread exactly when the user expected a quick screen transition. What
+   * the original complaint actually needed was only "stale by the time
+   * Today is next shown", not "recomputed the instant something else
+   * saves" — invalidate() marks that and defers the real work to
+   * refreshIfStale, called from Today's own focus effect, matching how
+   * every other screen's useDbQuery already refreshes only when it's
+   * actually about to be looked at.
+   */
+  invalidate: () => void;
+  /** No-ops unless invalidate() was called since the last successful load — see invalidate's own doc comment. Call from Today's own focus effect. */
+  refreshIfStale: () => void;
   /** Patches wornToday locally after logging, without re-running the rest of loadToday — see TodayScreen's wearOutfit. */
   setWornToday: (outfit: ClothingItem[]) => void;
 }
@@ -189,9 +235,13 @@ const TodayDataContext = createContext<TodayDataContextValue | null>(null);
  * even clears — not behind that screen's own isReady gate, since the
  * location fix and the weather fetch (loadToday's first two steps) don't
  * touch the database at all. Its state survives TodayScreen unmounting when
- * another tab is shown. A screen that legitimately needs to force a
- * re-fetch (the retry button on a failure state) calls reload() explicitly;
- * nothing does it automatically on focus.
+ * another tab is shown. A screen that legitimately needs to force a full
+ * re-fetch (the retry button on a failure state) calls reload() explicitly.
+ * Nothing runs automatically on every focus — the one exception is
+ * refreshIfStale, which TodayScreen calls on its own focus and which no-ops
+ * unless something called invalidate() first (see that function's own doc
+ * comment); that's a deliberately narrow exception; it only ever does real
+ * work when a write actually happened, not on every ordinary tab switch.
  */
 export function TodayDataProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<TodayLoadState>({ step: 'loading' });
@@ -222,11 +272,45 @@ export function TodayDataProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A plain ref, not state: setting it must never itself trigger a
+  // re-render or any work — see invalidate's own doc comment for why that
+  // matters (it's called from arbitrary save/delete handlers all over the
+  // app, and has to be free to call from any of them).
+  const staleRef = useRef(false);
+
+  const invalidate = useCallback(() => {
+    staleRef.current = true;
+  }, []);
+
+  const refreshIfStale = useCallback(() => {
+    if (!staleRef.current) return;
+    setState((current) => {
+      if (current.step !== 'ready') return current;
+      staleRef.current = false;
+      const requestId = ++latestRequestId.current;
+      void refreshCandidates(current)
+        .then((result) => {
+          if (latestRequestId.current === requestId) setState(result);
+        })
+        .catch((e: unknown) => {
+          console.error('Failed to refresh today:', e);
+          // Deliberately not setState({step:'error'}) here -- the screen
+          // already has a valid, just-possibly-stale `current` to keep
+          // showing; a failed background refresh shouldn't blank it.
+          if (latestRequestId.current === requestId) staleRef.current = true;
+        });
+      return current;
+    });
+  }, []);
+
   const setWornToday = useCallback((outfit: ClothingItem[]) => {
     setState((current) => (current.step === 'ready' ? { ...current, wornToday: outfit } : current));
   }, []);
 
-  const value = useMemo(() => ({ state, reload, setWornToday }), [state, reload, setWornToday]);
+  const value = useMemo(
+    () => ({ state, reload, invalidate, refreshIfStale, setWornToday }),
+    [state, reload, invalidate, refreshIfStale, setWornToday],
+  );
 
   return <TodayDataContext.Provider value={value}>{children}</TodayDataContext.Provider>;
 }

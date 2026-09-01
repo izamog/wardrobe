@@ -230,6 +230,20 @@ export function layerFirst(
  *
  * At warmthFloor 0 there is nothing to stay warm against, so this is exactly
  * leanFirst.
+ *
+ * Reported bug: a bottom sitting between the leanest and warmest thirds —
+ * often the actual best fit for today, closest to (or just clearing) the
+ * floor without being wastefully over-warm — was silently invisible to the
+ * search whenever the wardrobe had more than MAX_SLOT_CANDIDATES options
+ * spread across that range: leanFirst's own N-lightest slice and the
+ * warmest-N slice can both miss it entirely, in which case nothing else
+ * here ever offered it. One extra slot fixes this, the same bounded-cost
+ * pattern floorAwareOuterwearCandidates already uses for its own leanest
+ * guarantee: the single item whose own warmth sits closest to warmthFloor,
+ * added on top of the existing split rather than taken out of either half
+ * of it — never shrinks the coverage the split already guarantees, only
+ * ever +1 candidate, and a no-op when that item is already one of the ones
+ * picked above.
  */
 export function floorAwareCandidates(
   items: readonly ClothingItem[],
@@ -244,6 +258,13 @@ export function floorAwareCandidates(
 
   const merged = new Map<string, ClothingItem>();
   for (const item of [...leanest, ...warmest]) merged.set(item.id, item);
+
+  const closestToFloor = [...items].sort((a, b) => {
+    const byDistance = Math.abs(a.inferredWarmth - warmthFloor) - Math.abs(b.inferredWarmth - warmthFloor);
+    return byDistance !== 0 ? byDistance : recencyPenalty(a, wornDaysAgo) - recencyPenalty(b, wornDaysAgo);
+  })[0];
+  if (closestToFloor) merged.set(closestToFloor.id, closestToFloor);
+
   return [...merged.values()];
 }
 

@@ -261,7 +261,7 @@ export function CalendarScreen() {
   const months = useMemo(() => monthsAround(new Date(), MONTHS_BEFORE, MONTHS_AFTER), []);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [visibleMonthKey, setVisibleMonthKey] = useState(() => monthKeyForDate(today));
-  const { reload: reloadToday } = useTodayData();
+  const { invalidate: invalidateToday } = useTodayData();
 
   // Populated by whichever MonthPage's own query actually covers a given
   // date — the page for the visible month already fetches every day in it,
@@ -319,7 +319,7 @@ export function CalendarScreen() {
               // wearCount feeds Today's recency ranking -- see
               // TodayDataContext's own doc comment for why nothing
               // refreshes its cached candidate pool on its own.
-              reloadToday();
+              invalidateToday();
             } catch (e) {
               console.error('Failed to remove outfit:', e);
               Alert.alert('Could not remove', 'That outfit is still logged.');

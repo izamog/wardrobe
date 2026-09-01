@@ -263,7 +263,7 @@ function ComposeView({
 
 export function AddItemScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const { reload: reloadToday } = useTodayData();
+  const { invalidate: invalidateToday } = useTodayData();
   const route = useRoute<RouteProp<RootStackParamList, 'AddItem'>>();
 
   const [stage, setStage] = useState<Stage>({ step: 'capture' });
@@ -365,14 +365,14 @@ export function AddItemScreen() {
       // A newly added item is a candidate for Today immediately -- see
       // TodayDataContext's own doc comment for why nothing refreshes its
       // cached candidate pool on its own.
-      reloadToday();
+      invalidateToday();
       navigation.goBack();
     } catch (e) {
       console.error('Failed to save item:', e);
       Alert.alert('Could not save', 'The item was not added. Please try again.');
       setSaving(false);
     }
-  }, [navigation, silent, values, refinement, reloadToday]);
+  }, [navigation, silent, values, refinement, invalidateToday]);
 
   // Discards a bad cutout and falls back to the plain crop -- see
   // ComposeHeader's onKeepPlainPhoto doc comment for why this exists instead

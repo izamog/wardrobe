@@ -70,7 +70,7 @@ function ArchiveRow({
 export function ArchiveScreen() {
   const { data: items, error, loading, reload } = useDbQuery((db) => listArchivedItems(db), []);
   const [restoringId, setRestoringId] = useState<string | null>(null);
-  const { reload: reloadToday } = useTodayData();
+  const { invalidate: invalidateToday } = useTodayData();
 
   async function restore(item: ClothingItem) {
     setRestoringId(item.id);
@@ -80,7 +80,7 @@ export function ArchiveScreen() {
       // A restored item is eligible for Today again -- see TodayDataContext's
       // own doc comment for why nothing refreshes its cached candidate pool
       // on its own.
-      reloadToday();
+      invalidateToday();
     } catch (e) {
       console.error('Failed to restore item:', e);
       Alert.alert('Could not restore', 'The item is still archived. Please try again.');
