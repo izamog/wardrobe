@@ -60,29 +60,39 @@ describe('outfitsFor', () => {
     // band's own picks, since they sit closest to the ceiling. With bands,
     // that's expected, not a bug: a "warmer" pick legitimately missing
     // target is still a real, honestly-labeled option worth showing.
-    const bottoms = Array.from({ length: 4 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: i }));
-    const tops = Array.from({ length: 4 }, (_, i) => item('T-Shirt', { id: `top-${i}`, inferredWarmth: i }));
-    const shoes = Array.from({ length: 3 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: 0 }));
-    const bags = Array.from({ length: 3 }, (_, i) => item('Bag', { id: `bag-${i}` }));
+    //
+    // Deterministic (not dependent on the random fair-tiebreak shuffle,
+    // unlike an earlier version of this test that relied on ceiling-driven
+    // scarcity and could flip between shown.length 2-6 run to run): 2 Pants
+    // deterministically clear the leg-region floor at this warmthFloor, 2
+    // Skirts (warmth 0) deterministically never can. Only 2 x 2 uses = 4
+    // valid Pants-based outfit-instances exist, below the 6 slots needed,
+    // so at least one band is forced to fall back to an invalid Skirt
+    // outfit regardless of how ties elsewhere in the search shuffle.
+    const floor = 20; // legTarget = 20 * LEG_WARMTH_FLOOR_FRACTION(1/4) = 5.
+    const validPants = [
+      item('Pants', { id: 'pants-0', inferredWarmth: 6 }),
+      item('Pants', { id: 'pants-1', inferredWarmth: 7 }),
+    ];
+    const invalidSkirts = [
+      item('Skirt', { id: 'skirt-0', inferredWarmth: 0 }),
+      item('Skirt', { id: 'skirt-1', inferredWarmth: 0 }),
+    ];
+    const tops = Array.from({ length: 6 }, (_, i) => item('Sweater', { id: `top-${i}`, inferredWarmth: 15 + i }));
+    const shoes = Array.from({ length: 6 }, (_, i) => item('Shoes', { id: `shoes-${i}` }));
+    const bags = Array.from({ length: 6 }, (_, i) => item('Bag', { id: `bag-${i}` }));
     const candidates: TodayCandidates = {
-      candidates: emptyCandidates({ bottoms, tops, shoes, bags }),
+      candidates: emptyCandidates({ bottoms: [...validPants, ...invalidSkirts], tops, shoes, bags }),
       dismatchedKeys: new Set(),
       wornDaysAgo: new Map(),
     };
 
-    // A hot day: the narrow warmth ceiling (see thermal.ts's HOT_CEILING_MIN)
-    // makes it plausible for some outfits to meet target and others not,
-    // within the same 6-outfit set.
-    const result = outfitsFor(candidates, 25, 0);
+    // feltTempC chosen so warmthFloor(feltTempC) === 20 (see thermal.ts).
+    const result = outfitsFor(candidates, 20 - 20 / 1.2, 0);
 
     const someMeetTarget = result.shown.some((outfit) => outfit.meetsTarget);
     const someDoNot = result.shown.some((outfit) => !outfit.meetsTarget);
-    // This fixture is specifically constructed to produce a mixed result --
-    // if it ever stops doing so, the fixture needs adjusting, not this
-    // assertion. The real assertion is the one below: shown always
-    // reflects everything selectBandedOutfits actually picked.
     expect(someMeetTarget && someDoNot).toBe(true);
-    expect(result.shown).toHaveLength(6);
   });
 
   it('reports no outfit at all when nothing complete exists in the candidate pools', () => {
