@@ -141,6 +141,7 @@ function MonthPage({
   selectedDate,
   onDayPress,
   onOutfitsLoaded,
+  getItems,
 }: {
   monthKey: string;
   today: string;
@@ -148,6 +149,15 @@ function MonthPage({
   onDayPress: (date: string) => void;
   /** Reports this page's own fetch up to CalendarScreen, so tapping a visible day never re-queries a range this page already has. */
   onOutfitsLoaded: (outfitsByDate: ReadonlyMap<string, ClothingItem[]>) => void;
+  /**
+   * What each day cell actually renders — CalendarScreen's own cache, not
+   * this page's local `outfitsByDate` state directly. The cache starts
+   * populated from that same state (via onOutfitsLoaded below), but unlike
+   * it, CalendarScreen can patch a single date in place after a write (a
+   * removed outfit) without waiting for this useDbQuery to refetch on its
+   * next focus — see CalendarScreen's confirmRemoveOutfit.
+   */
+  getItems: (date: string) => readonly ClothingItem[];
 }) {
   const [start, end] = useMemo(() => monthDateRange(monthKey), [monthKey]);
   const { data: outfitsByDate } = useDbQuery((db) => listLoggedOutfitsInRange(db, start, end), [start, end]);
@@ -165,7 +175,7 @@ function MonthPage({
             <CalendarCell
               key={day.date}
               day={day}
-              items={outfitsByDate?.get(day.date) ?? []}
+              items={getItems(day.date)}
               isToday={day.date === today}
               isSelected={day.date === selectedDate}
               onPress={() => onDayPress(day.date)}
@@ -270,6 +280,12 @@ export function CalendarScreen() {
   const selectedDateItems = useMemo(
     () => (selectedDate ? (outfitsCacheRef.current.get(selectedDate) ?? []) : []),
     [selectedDate, cacheVersion],
+  );
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- cacheVersion is a read trigger, not a real dependency of the lookup itself
+  const getItems = useCallback(
+    (date: string) => outfitsCacheRef.current.get(date) ?? [],
+    [cacheVersion],
   );
 
   const onDayPress = (date: string) => setSelectedDate((current) => (current === date ? null : date));
@@ -382,6 +398,7 @@ export function CalendarScreen() {
                 selectedDate={selectedDate}
                 onDayPress={onDayPress}
                 onOutfitsLoaded={onOutfitsLoaded}
+                getItems={getItems}
               />
             </View>
           )}

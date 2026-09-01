@@ -378,6 +378,36 @@ export async function archiveItems(
   ]);
 }
 
+/**
+ * Sets one or both boolean flags for a whole batch of items in one call —
+ * Closet's bulk-select "Mark as second-hand" / "Mark as work appropriate".
+ * A flag left out of `flags` is untouched, not reset to false.
+ */
+export async function setItemFlags(
+  db: ItemsDatabase,
+  ids: readonly string[],
+  flags: { isSecondHand?: boolean; isWorkAppropriate?: boolean },
+): Promise<void> {
+  if (ids.length === 0) return;
+  const assignments: string[] = [];
+  const params: BindValue[] = [];
+  if (flags.isSecondHand !== undefined) {
+    assignments.push('isSecondHand = ?');
+    params.push(flags.isSecondHand ? 1 : 0);
+  }
+  if (flags.isWorkAppropriate !== undefined) {
+    assignments.push('isWorkAppropriate = ?');
+    params.push(flags.isWorkAppropriate ? 1 : 0);
+  }
+  if (assignments.length === 0) return;
+
+  const placeholders = ids.map(() => '?').join(', ');
+  await db.runAsync(`UPDATE ClothingItems SET ${assignments.join(', ')} WHERE id IN (${placeholders})`, [
+    ...params,
+    ...ids,
+  ]);
+}
+
 /** Pulls one item back out of the archive — the Archive screen's Restore action. */
 export async function restoreItem(db: ItemsDatabase, id: string): Promise<void> {
   await db.runAsync(`UPDATE ClothingItems SET archivedAt = '' WHERE id = ?`, [id]);

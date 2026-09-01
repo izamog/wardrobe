@@ -8,7 +8,7 @@ import { Chip } from '../components/Chip';
 import { EmptyState } from '../components/EmptyState';
 import { chunkIntoRows, ItemGridRow } from '../components/ItemGrid';
 import { useDbQuery } from '../hooks/useDbQuery';
-import { archiveItems, listItems } from '../services/items';
+import { archiveItems, listItems, setItemFlags } from '../services/items';
 import { withDb } from '../services/database';
 import { ALL_CATEGORIES } from '../utils/categories';
 import { CLOSET_SORT_LABELS, sortItems, type ClosetSort } from '../utils/closetSort';
@@ -35,39 +35,93 @@ function presentSortOptions(current: ClosetSort, onChange: (sort: ClosetSort) =>
 
 type ClosetNav = NativeStackNavigationProp<RootStackParamList>;
 
+/** One bulk action button in SelectionBar — Delete's own destructive styling stays inline there, this is for the neutral "mark as" pair. */
+function SelectionAction({
+  label,
+  busy,
+  disabled,
+  onPress,
+}: {
+  label: string;
+  busy: boolean;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled || busy}
+      accessibilityRole="button"
+      className={`flex-1 rounded-sm px-2 py-3 items-center border ${disabled || busy ? 'border-rule' : 'border-ink'}`}
+    >
+      <Text className={`text-xs font-sans-medium text-center ${disabled || busy ? 'text-ink-muted' : 'text-ink'}`}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
 /**
- * The bar under the header while bulk-select mode is active: a count, and
- * the one action selection exists for.
+ * The bar under the header while bulk-select mode is active: a count, then
+ * every bulk action selection exists for.
  *
  * A separate bar rather than reusing the FAB's corner: the FAB navigates to
  * Add Item, which has no meaning while a selection is in progress, so it's
  * hidden for the same reason this bar appears — the screen is doing a
  * different job right now.
+ *
+ * "Mark second-hand" / "Mark work appropriate" set the flag true for the
+ * whole selection in one call (setItemFlags) — there's no bulk "unset" here,
+ * matching what was actually asked for; toggling one back off is still a
+ * per-item edit on ItemDetailsScreen.
  */
 function SelectionBar({
   count,
   archiving,
+  marking,
   onArchive,
+  onMarkSecondHand,
+  onMarkWorkAppropriate,
 }: {
   count: number;
   archiving: boolean;
+  marking: boolean;
   onArchive: () => void;
+  onMarkSecondHand: () => void;
+  onMarkWorkAppropriate: () => void;
 }) {
+  const disabled = count === 0;
   return (
-    <BottomBar className="flex-row items-center justify-between">
-      <Text className="text-sm font-sans-semibold text-ink-muted">
+    <BottomBar>
+      <Text className="text-sm font-sans-semibold text-ink-muted mb-2">
         {count} {count === 1 ? 'item' : 'items'} selected
       </Text>
-      <Pressable
-        onPress={onArchive}
-        disabled={count === 0 || archiving}
-        accessibilityRole="button"
-        className={`rounded-sm px-4 py-3.5 ${count === 0 || archiving ? 'bg-rule' : 'bg-rose-600'}`}
-      >
-        <Text className={`text-sm font-sans-medium ${count === 0 || archiving ? 'text-ink-muted' : 'text-white'}`}>
-          {archiving ? 'Deleting…' : 'Delete'}
-        </Text>
-      </Pressable>
+      <View className="flex-row gap-2">
+        <SelectionAction
+          label="Second-hand"
+          busy={marking}
+          disabled={disabled}
+          onPress={onMarkSecondHand}
+        />
+        <SelectionAction
+          label="Work appropriate"
+          busy={marking}
+          disabled={disabled}
+          onPress={onMarkWorkAppropriate}
+        />
+        <Pressable
+          onPress={onArchive}
+          disabled={disabled || archiving}
+          accessibilityRole="button"
+          className={`flex-1 rounded-sm px-2 py-3 items-center ${disabled || archiving ? 'bg-rule' : 'bg-rose-600'}`}
+        >
+          <Text
+            className={`text-xs font-sans-medium text-center ${disabled || archiving ? 'text-ink-muted' : 'text-white'}`}
+          >
+            {archiving ? 'Deleting…' : 'Delete'}
+          </Text>
+        </Pressable>
+      </View>
     </BottomBar>
   );
 }
@@ -228,6 +282,24 @@ function confirmAndArchive(
   );
 }
 
+/** Runs a bulk mark-as-flag and reports a failure the same way confirmAndArchive does. Non-destructive and reversible per item, so unlike Delete this doesn't confirm first. */
+async function markSelected(
+  ids: readonly string[],
+  flags: { isSecondHand?: boolean; isWorkAppropriate?: boolean },
+  { setMarking, onDone }: { setMarking: (v: boolean) => void; onDone: () => Promise<void> },
+): Promise<void> {
+  setMarking(true);
+  try {
+    await withDb((db) => setItemFlags(db, ids, flags));
+    await onDone();
+  } catch (e) {
+    console.error('Failed to mark items:', e);
+    Alert.alert('Could not update', 'Those items were not changed.');
+  } finally {
+    setMarking(false);
+  }
+}
+
 interface ClosetGridProps {
   items: ClothingItem[] | null;
   error: string | null;
@@ -312,6 +384,8 @@ function ClosetFooter({
   selectedIds,
   archiving,
   setArchiving,
+  marking,
+  setMarking,
   exitSelection,
   reload,
   onAddPress,
@@ -320,6 +394,8 @@ function ClosetFooter({
   selectedIds: ReadonlySet<string>;
   archiving: boolean;
   setArchiving: (v: boolean) => void;
+  marking: boolean;
+  setMarking: (v: boolean) => void;
   exitSelection: () => void;
   reload: () => Promise<void>;
   onAddPress: () => void;
@@ -329,6 +405,7 @@ function ClosetFooter({
       <SelectionBar
         count={selectedIds.size}
         archiving={archiving}
+        marking={marking}
         onArchive={() =>
           confirmAndArchive([...selectedIds], {
             setArchiving,
@@ -337,6 +414,12 @@ function ClosetFooter({
               await reload();
             },
           })
+        }
+        onMarkSecondHand={() =>
+          void markSelected([...selectedIds], { isSecondHand: true }, { setMarking, onDone: reload })
+        }
+        onMarkWorkAppropriate={() =>
+          void markSelected([...selectedIds], { isWorkAppropriate: true }, { setMarking, onDone: reload })
         }
       />
     );
@@ -362,6 +445,7 @@ export function ClosetScreen() {
   const { selecting, setSelecting, selectedIds, exit: exitSelection, toggle: toggleSelected } =
     useSelection();
   const [archiving, setArchiving] = useState(false);
+  const [marking, setMarking] = useState(false);
 
   const { data: items, error, loading, reload } = useDbQuery((db) => listItems(db, filter), [filter]);
   const sortedItems = useMemo(() => (items ? sortItems(items, sort) : items), [items, sort]);
@@ -403,6 +487,8 @@ export function ClosetScreen() {
         selectedIds={selectedIds}
         archiving={archiving}
         setArchiving={setArchiving}
+        marking={marking}
+        setMarking={setMarking}
         exitSelection={exitSelection}
         reload={reload}
         onAddPress={() => navigation.navigate('AddItem', filter ? { category: filter } : undefined)}

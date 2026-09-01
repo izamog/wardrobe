@@ -175,18 +175,25 @@ describe('selectDiverseOutfits: Outerwear, Bag, and Belt anchors', () => {
     expect(selected).toHaveLength(2);
   });
 
-  it('treats two outfits sharing a Top+Bottom but differing only by Shoes as genuinely distinct combos, once the shared Bottom cap allows both through', () => {
+  it('does NOT treat two outfits sharing a Top+Bottom but differing only by Shoes as distinct combos, even once the primary cap is wide open', () => {
+    // Reported bug: Today showed the identical Top+Bottom combo four times
+    // over, only the bag and shoes differing each time -- Shoes briefly
+    // joined CORE_GROUPS to fix boot rotation (see that constant's own
+    // history), which had exactly this side effect: shoe variation alone
+    // was enough for coreComboKey to treat four outfits as "different",
+    // even though a person looking at them sees the same outfit four times.
+    // Shoes deliberately stays out of CORE_GROUPS now -- unlike the
+    // Outerwear case above, this must stay collapsed to one result even
+    // with maxPerAnchor wide open, since Bottom isn't what's blocking the
+    // second one here.
     const top = item('T-Shirt', { id: 't1' });
     const bottom = item('Pants', { id: 'p1' });
     const bootsA = item('Boots', { id: 'boots-a' });
     const bootsB = item('Boots', { id: 'boots-b' });
     const outfits = [outfit([top, bottom, bootsA]), outfit([top, bottom, bootsB])];
 
-    // Boots isn't the blocker here (each id is fresh, under its own default
-    // secondary cap of 1) -- Bottom's shared primary cap is, so this needs
-    // the same maxPerAnchor relaxation as the Outerwear case above.
     const selected = selectDiverseOutfits(outfits, 2, 2);
-    expect(selected).toHaveLength(2);
+    expect(selected).toHaveLength(1);
   });
 });
 
@@ -223,6 +230,31 @@ describe('rankedDiverseOutfits: reported bug -- identical coats/boots not rotati
     );
     expect(coatIdsUsed.has('coat-a')).toBe(true);
     expect(coatIdsUsed.has('coat-b')).toBe(true);
+  });
+
+  it('never repeats the identical Top+Bottom combo just because bags or shoes vary, even under escalation', () => {
+    // Reported bug, exact shape: a single Top+Bottom this thin a wardrobe can
+    // build at all, several bags and several shoes -- before this fix, the
+    // primary cap escalating to reach MIN_TODAY_OUTFITS-style floor let the
+    // identical Top+Bottom through repeatedly, varying only by bag/shoes,
+    // since Shoes counted toward coreComboKey. It must now cap at exactly
+    // one result for this combo, however high minMeetsTarget escalates.
+    const bottom = item('Pants');
+    const top = item('T-Shirt');
+    const shoes = Array.from({ length: 4 }, () => item('Boots'));
+    const bags = Array.from({ length: 4 }, () => item('Bag'));
+
+    const results = rankedDiverseOutfits(
+      emptyCandidates({ bottoms: [bottom], tops: [top], shoes, bags }),
+      noDismatches,
+      0,
+      NO_CEILING,
+      0,
+      6,
+      4,
+    );
+
+    expect(results).toHaveLength(1);
   });
 });
 

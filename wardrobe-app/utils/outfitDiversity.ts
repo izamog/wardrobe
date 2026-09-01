@@ -17,19 +17,29 @@ import type { CategoryGroup } from '../types/wardrobe';
 /**
  * The body-region groups that define an outfit's identity for this purpose.
  *
- * Outerwear and Shoes joined Top/Bottom/Dress here after a reported bug: two
- * outfits sharing the same Top+Bottom but wearing a different (functionally
- * identical) coat, or a different pair of boots, used to collapse to "the
- * same combo" — only the first-ranked coat/boots pairing ever survived this
- * function's dedup, so a second coat or a second and third boot the user
- * owned could never appear even once, regardless of PRIMARY_ANCHOR_GROUPS'/
- * SECONDARY_ANCHOR_GROUPS' own caps below, which only ever get a chance to
- * run on the combos that make it past this dedup in the first place. Scarf,
- * Belt, Bag and Tights remain outside CORE_GROUPS — those still vary freely
- * within what counts as "the same" recommendation, subject only to
- * SECONDARY_ANCHOR_GROUPS' own cap for Bag/Belt/Shoes.
+ * Outerwear joined Top/Bottom/Dress here after a reported bug: two outfits
+ * sharing the same Top+Bottom but wearing a different (functionally
+ * identical) coat used to collapse to "the same combo" — only the
+ * first-ranked coat ever survived this function's dedup, so a second coat
+ * the user owned could never appear even once, regardless of
+ * PRIMARY_ANCHOR_GROUPS' own cap below, which only ever gets a chance to run
+ * on the combos that make it past this dedup in the first place.
+ *
+ * Shoes does NOT belong here, despite the same reasoning seeming to apply to
+ * boots — tried once (see git history), then reverted by a second reported
+ * bug: including Shoes here meant two outfits differing *only* by shoes
+ * counted as "different", so the search could (and did) show the exact same
+ * Top+Bottom four times over with only the shoe swapped, which is precisely
+ * the "same outfit re-shown" failure this whole function exists to prevent
+ * — the reverse of the coat problem, since Shoes/Bag/Belt read as accessory
+ * variation to a person looking at the outfit, not as part of "is this a
+ * different outfit", the way a different coat or a different Top/Bottom
+ * does. Boot rotation is still handled, just one tier down — see
+ * SECONDARY_ANCHOR_GROUPS below, which caps a repeated pair of shoes the
+ * same way it caps a repeated bag, without letting shoe variation alone
+ * justify repeating the Top+Bottom itself.
  */
-const CORE_GROUPS: ReadonlySet<CategoryGroup> = new Set<CategoryGroup>(['Top', 'Bottom', 'Dress', 'Outerwear', 'Shoes']);
+const CORE_GROUPS: ReadonlySet<CategoryGroup> = new Set<CategoryGroup>(['Top', 'Bottom', 'Dress', 'Outerwear']);
 
 /** The Top/Bottom/Dress items an outfit is built around, as a stable, order-independent key — see CORE_GROUPS. */
 function coreComboKey(outfit: ScoredOutfit): string {

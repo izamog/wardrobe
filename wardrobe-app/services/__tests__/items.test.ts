@@ -35,6 +35,7 @@ import {
   restoreItem,
   rowToItem,
   setCompatibility,
+  setItemFlags,
   updateItem,
   type ItemsDatabase,
   type NewClothingItem,
@@ -864,6 +865,60 @@ describe('archiveItems / restoreItem / listArchivedItems / listExpiredArchivedIt
     const expired = await listExpiredArchivedItems(db, '2026-07-01T00:00:00.000Z');
 
     expect(expired.map((i) => i.id)).toEqual(['old', 'boundary']);
+  });
+});
+
+describe('setItemFlags', () => {
+  it('sets isSecondHand true for a whole batch in one call', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await insertItem(db, draft({ category: 'Pants' }), 'bottom1');
+
+    await setItemFlags(db, ['top1', 'bottom1'], { isSecondHand: true });
+
+    expect((await getItem(db, 'top1'))?.isSecondHand).toBe(true);
+    expect((await getItem(db, 'bottom1'))?.isSecondHand).toBe(true);
+  });
+
+  it('sets isWorkAppropriate true for a whole batch in one call', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await insertItem(db, draft({ category: 'Pants' }), 'bottom1');
+
+    await setItemFlags(db, ['top1', 'bottom1'], { isWorkAppropriate: true });
+
+    expect((await getItem(db, 'top1'))?.isWorkAppropriate).toBe(true);
+    expect((await getItem(db, 'bottom1'))?.isWorkAppropriate).toBe(true);
+  });
+
+  it('sets both flags at once when both are given', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+
+    await setItemFlags(db, ['top1'], { isSecondHand: true, isWorkAppropriate: true });
+
+    const item = await getItem(db, 'top1');
+    expect(item?.isSecondHand).toBe(true);
+    expect(item?.isWorkAppropriate).toBe(true);
+  });
+
+  it('leaves items outside the id list untouched', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await insertItem(db, draft({ category: 'Top' }), 'top2');
+
+    await setItemFlags(db, ['top1'], { isWorkAppropriate: true });
+
+    expect((await getItem(db, 'top2'))?.isWorkAppropriate).toBe(false);
+  });
+
+  it('does nothing for an empty id list', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+
+    await expect(setItemFlags(db, [], { isSecondHand: true })).resolves.toBeUndefined();
+
+    expect((await getItem(db, 'top1'))?.isSecondHand).toBe(false);
   });
 });
 
