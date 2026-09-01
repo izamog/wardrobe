@@ -98,26 +98,13 @@ function trackedItemIds(outfit: ScoredOutfit): string[] {
 }
 
 /**
- * Ranks `core` outfits by closeness to `band.center` after topping each one
- * up -- the per-band ranked list selectBandedOutfits' greedy pass walks.
- *
- * Outfits that actually meetTarget always rank ahead of ones that don't,
- * regardless of raw distance to band.center -- reported bug: a bare-legged
- * Skirt/Dress padded with a heavy Coat and Tights can land numerically
- * closer to a band's center (band.center is a whole-outfit total, easily
- * reached by piling on Outerwear) than a genuinely valid Pants-based
- * outfit sitting a little further from center, even though the padded
- * outfit fails its own leg-region floor and the Pants one doesn't. A pure
- * distance sort had no way to prefer the outfit that actually works;
- * meetsTarget is checked first, distance only breaks a tie within each
- * group.
- *
- * `poolsByOutfit`, keyed by outfit object identity (stable across all three
- * band calls, since every call shares the same `core` array), lets
- * topUpToward skip re-filtering the same outfit's compatible scarves/tights
- * three times over -- see compatibleTopUpPools' own doc comment.
+ * Applies topUpToward to every core outfit for `band`, with no sort --
+ * the expensive, order-independent part of ranking (topUpToward is
+ * band-specific but does not depend on what any other band has claimed),
+ * kept separate from rankNow's cheap, live re-sort below. Computed once
+ * per band regardless of pick order -- see selectBandedOutfits.
  */
-function rankedForBand(
+export function toppedUpForBand(
   core: readonly ScoredOutfit[],
   band: WarmthBand,
   candidates: OutfitCandidates,
@@ -128,24 +115,60 @@ function rankedForBand(
   wornDaysAgo: ReadonlyMap<string, number>,
   poolsByOutfit: ReadonlyMap<ScoredOutfit, TopUpPools>,
 ): ScoredOutfit[] {
-  return core
-    .map((outfit) =>
-      topUpToward(
-        outfit,
-        band,
-        candidates,
-        dismatchedKeys,
-        warmthFloor,
-        warmthCeiling,
-        windFloor,
-        wornDaysAgo,
-        poolsByOutfit.get(outfit),
-      ),
-    )
-    .sort((a, b) => {
-      if (a.meetsTarget !== b.meetsTarget) return a.meetsTarget ? -1 : 1;
-      return Math.abs(a.warmth - band.center) - Math.abs(b.warmth - band.center);
-    });
+  return core.map((outfit) =>
+    topUpToward(
+      outfit,
+      band,
+      candidates,
+      dismatchedKeys,
+      warmthFloor,
+      warmthCeiling,
+      windFloor,
+      wornDaysAgo,
+      poolsByOutfit.get(outfit),
+    ),
+  );
+}
+
+/**
+ * How many of `outfit`'s own tracked items (see trackedItemIds -- every
+ * category except Tights) are already claimed by an earlier band's picks,
+ * per `useCounts`. 0 (fully fresh) is best.
+ */
+export function freshnessPenalty(outfit: ScoredOutfit, useCounts: ReadonlyMap<string, number>): number {
+  return trackedItemIds(outfit).filter((id) => (useCounts.get(id) ?? 0) >= 1).length;
+}
+
+/**
+ * Re-sorts an already-topped-up list (see toppedUpForBand) live, using
+ * whatever `useCounts` state exists right now. Cheap (a map lookup per
+ * candidate), unlike toppedUpForBand's own topUpToward pass -- safe to
+ * call fresh every time a band (or a donor being borrowed from) is about
+ * to pick, so the ranking always reflects exactly what's been claimed so
+ * far.
+ *
+ * Reported bug this exists to fix: a single "best" Top+Outerwear pairing
+ * numerically beats almost every other pairing for a high warmth target,
+ * regardless of which Bottom it's paired with. Once two earlier bands
+ * have legitimately claimed its max-2 reuse budget, the band picked last
+ * still saw that same pairing (with a third Bottom) ranked first by pure
+ * distance-to-center -- rejected by the reuse rule, over and over,
+ * while a genuinely different, valid Top/Outerwear pairing sat far down
+ * the list. meetsTarget still wins first; freshness is the new middle
+ * tier; distance to band.center is the final tiebreak.
+ */
+export function rankNow(
+  toppedUp: readonly ScoredOutfit[],
+  band: WarmthBand,
+  useCounts: ReadonlyMap<string, number>,
+): ScoredOutfit[] {
+  return [...toppedUp].sort((a, b) => {
+    if (a.meetsTarget !== b.meetsTarget) return a.meetsTarget ? -1 : 1;
+    const freshA = freshnessPenalty(a, useCounts);
+    const freshB = freshnessPenalty(b, useCounts);
+    if (freshA !== freshB) return freshA - freshB;
+    return Math.abs(a.warmth - band.center) - Math.abs(b.warmth - band.center);
+  });
 }
 
 export function selectBandedOutfits(
@@ -211,14 +234,14 @@ export function selectBandedOutfits(
     return picked;
   }
 
-  const rankedByBand = {
-    cooler: rankedForBand(core, bands.cooler, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor, wornDaysAgo, poolsByOutfit),
-    median: rankedForBand(core, bands.median, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor, wornDaysAgo, poolsByOutfit),
-    warmer: rankedForBand(core, bands.warmer, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor, wornDaysAgo, poolsByOutfit),
+  const toppedUpByBand = {
+    cooler: toppedUpForBand(core, bands.cooler, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor, wornDaysAgo, poolsByOutfit),
+    median: toppedUpForBand(core, bands.median, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor, wornDaysAgo, poolsByOutfit),
+    warmer: toppedUpForBand(core, bands.warmer, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor, wornDaysAgo, poolsByOutfit),
   };
 
-  const order: (keyof typeof rankedByBand)[] = ['median', 'cooler', 'warmer'];
-  const borrowOrder: Record<keyof typeof rankedByBand, (keyof typeof rankedByBand)[]> = {
+  const order = bandOrderFor(warmthFloor);
+  const borrowOrder: Record<keyof typeof toppedUpByBand, (keyof typeof toppedUpByBand)[]> = {
     median: ['cooler', 'warmer'],
     cooler: ['median', 'warmer'],
     warmer: ['median', 'cooler'],
@@ -226,10 +249,10 @@ export function selectBandedOutfits(
 
   const results: ScoredOutfit[] = [];
   for (const bandName of order) {
-    let picked = pickUpTo(rankedByBand[bandName], 2);
+    let picked = pickUpTo(rankNow(toppedUpByBand[bandName], bands[bandName], useCounts), 2);
     for (const donor of borrowOrder[bandName]) {
       if (picked.length === 2) break;
-      picked = [...picked, ...pickUpTo(rankedByBand[donor], 2 - picked.length)];
+      picked = [...picked, ...pickUpTo(rankNow(toppedUpByBand[donor], bands[donor], useCounts), 2 - picked.length)];
     }
     // Tagged with the band slot being filled, not the band it was ranked/
     // topped-up for — a borrowed outfit still fills bandName's slot, and

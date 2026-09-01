@@ -1,6 +1,7 @@
 /** @jest-environment node */
-import { bandOrderFor, coreOutfitsForBands, selectBandedOutfits } from '../bandedOutfits';
+import { bandOrderFor, coreOutfitsForBands, selectBandedOutfits, toppedUpForBand, freshnessPenalty, rankNow } from '../bandedOutfits';
 import { splitIntoWarmthBands } from '../warmthBands';
+import type { WarmthBand } from '../warmthBands';
 import { emptyCandidates, item, resetSeq, noDismatches, NO_CEILING } from '../outfitGeneratorTestHelpers';
 import { warmthFloor } from '../thermal';
 
@@ -235,6 +236,209 @@ describe('selectBandedOutfits', () => {
       expect(outfit.items.some((i) => i.id === 'trousers')).toBe(true);
       expect(outfit.meetsTarget).toBe(true);
     }
+  });
+
+  it('picks warmer last (and cooler gets priority) at or above the 20°C neutral point', () => {
+    // One dominant Sweater+Jacket pairing that wins for almost every
+    // Bottom, plus enough genuine alternates (3 more Sweaters, 3 more
+    // Jackets -- 4 distinct Sweaters/Jackets total, cap-2 reuse each = 8
+    // Top-slots of total supply) that the last-processed band still has a
+    // fresh, valid alternative to route to, rather than the fixture itself
+    // being mathematically incapable of supplying all 3 bands x 2 outfits
+    // (6 total demand) regardless of ranking strategy -- see task-3-report.md
+    // for the supply/demand proof that motivated widening this fixture
+    // from the plan's original 2-Sweater/2-Jacket version.
+    const dominantTop = item('Sweater', { id: 'dominant-top', inferredWarmth: 10 });
+    const dominantJacket = item('Jacket', { id: 'dominant-jacket', inferredWarmth: 10 });
+    const altTops = Array.from({ length: 3 }, (_, i) => item('Sweater', { id: `alt-top-${i}`, inferredWarmth: 9 - i }));
+    const altJackets = Array.from({ length: 3 }, (_, i) => item('Jacket', { id: `alt-jacket-${i}`, inferredWarmth: 9 - i }));
+    const bottoms = Array.from({ length: 6 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: 4 + i }));
+    const shoes = Array.from({ length: 4 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: i }));
+    const bags = Array.from({ length: 4 }, (_, i) => item('Bag', { id: `bag-${i}`, inferredWarmth: i }));
+    const candidates = emptyCandidates({
+      bottoms,
+      tops: [dominantTop, ...altTops],
+      outerwear: [dominantJacket, ...altJackets],
+      shoes,
+      bags,
+    });
+    // warmthFloor 0 -> at/above 20°C neutral -> warmer goes last.
+    const bands = splitIntoWarmthBands(0, 40);
+
+    const results = selectBandedOutfits(candidates, noDismatches, 0, NO_CEILING, 0, bands);
+
+    const bandTags = results.map((o) => o.band);
+    expect(bandTags.slice(0, 2)).toEqual(['median', 'median']);
+    // warmer (picked last here) should still find a *meetsTarget* outfit,
+    // built around the alternate Sweater/Jacket pairing once the dominant
+    // one is used up -- not silently fall back to an invalid one while a
+    // valid alternative exists in the wardrobe.
+    const warmerPicks = results.filter((o) => o.band === 'warmer');
+    expect(warmerPicks.length).toBeGreaterThan(0);
+    for (const outfit of warmerPicks) {
+      expect(outfit.meetsTarget).toBe(true);
+    }
+  });
+
+  it('picks cooler last (and warmer gets priority) below the 20°C neutral point', () => {
+    // Same widened fixture as the "picks warmer last" test above (4
+    // distinct Sweaters/Jackets, cap-2 reuse each = 8 Top-slots of supply
+    // against 6 total demand) -- see that test's comment and
+    // task-3-report.md for why the plan's original 2-Sweater/2-Jacket
+    // fixture was mathematically unsatisfiable regardless of ranking.
+    const dominantTop = item('Sweater', { id: 'dominant-top', inferredWarmth: 10 });
+    const dominantJacket = item('Jacket', { id: 'dominant-jacket', inferredWarmth: 10 });
+    const altTops = Array.from({ length: 3 }, (_, i) => item('Sweater', { id: `alt-top-${i}`, inferredWarmth: 9 - i }));
+    const altJackets = Array.from({ length: 3 }, (_, i) => item('Jacket', { id: `alt-jacket-${i}`, inferredWarmth: 9 - i }));
+    const bottoms = Array.from({ length: 6 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: 4 + i }));
+    const shoes = Array.from({ length: 4 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: i }));
+    const bags = Array.from({ length: 4 }, (_, i) => item('Bag', { id: `bag-${i}`, inferredWarmth: i }));
+    const candidates = emptyCandidates({
+      bottoms,
+      tops: [dominantTop, ...altTops],
+      outerwear: [dominantJacket, ...altJackets],
+      shoes,
+      bags,
+    });
+    // warmthFloor 5 (> 0) -> below 20°C neutral -> cooler goes last.
+    const bands = splitIntoWarmthBands(5, 45);
+
+    const results = selectBandedOutfits(candidates, noDismatches, 5, NO_CEILING, 0, bands);
+
+    const coolerPicks = results.filter((o) => o.band === 'cooler');
+    expect(coolerPicks.length).toBeGreaterThan(0);
+    for (const outfit of coolerPicks) {
+      expect(outfit.meetsTarget).toBe(true);
+    }
+  });
+
+  it('a borrowed (adjacent-band) pick also reflects live reuse state, not a stale pre-computed ranking', () => {
+    // Reuses the same thin-wardrobe shape as the existing borrowing test
+    // below, just confirming borrowing still works under the new dynamic
+    // order + live re-ranking rather than asserting anything new about
+    // freshness specifically (that's covered by the rankNow unit tests in
+    // Task 2).
+    const bottoms = Array.from({ length: 2 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: i }));
+    const tops = Array.from({ length: 2 }, (_, i) => item('T-Shirt', { id: `top-${i}`, inferredWarmth: i }));
+    const shoes = Array.from({ length: 2 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: i }));
+    const bands = splitIntoWarmthBands(0, 12);
+
+    const results = selectBandedOutfits(
+      emptyCandidates({ bottoms, tops, shoes }),
+      noDismatches,
+      0,
+      NO_CEILING,
+      0,
+      bands,
+    );
+
+    expect(results.length).toBeGreaterThan(0);
+    const counts = new Map<string, number>();
+    for (const outfit of results) {
+      for (const outfitItem of outfit.items) {
+        counts.set(outfitItem.id, (counts.get(outfitItem.id) ?? 0) + 1);
+      }
+    }
+    for (const count of counts.values()) {
+      expect(count).toBeLessThanOrEqual(2);
+    }
+  });
+});
+
+describe('freshnessPenalty', () => {
+  it('is 0 when none of the outfit\'s tracked items have been used yet', () => {
+    const outfit = { items: [item('Pants', { id: 'p1' }), item('Sweater', { id: 's1' })], warmth: 0, wind: 0, meetsTarget: true };
+    expect(freshnessPenalty(outfit, new Map())).toBe(0);
+  });
+
+  it('counts each already-used tracked item once', () => {
+    const outfit = { items: [item('Pants', { id: 'p1' }), item('Sweater', { id: 's1' }), item('Shoes', { id: 'sh1' })], warmth: 0, wind: 0, meetsTarget: true };
+    const useCounts = new Map([['p1', 1], ['sh1', 2]]);
+    expect(freshnessPenalty(outfit, useCounts)).toBe(2);
+  });
+
+  it('never counts Tights, matching trackedItemIds\' own exclusion', () => {
+    const outfit = { items: [item('Skirt', { id: 'sk1' }), item('Tights', { id: 't1' })], warmth: 0, wind: 0, meetsTarget: true };
+    const useCounts = new Map([['t1', 2]]);
+    expect(freshnessPenalty(outfit, useCounts)).toBe(0);
+  });
+});
+
+describe('toppedUpForBand', () => {
+  it('applies topUpToward to every core outfit for the given band, with no sort applied', () => {
+    const skirt = item('Skirt', { id: 'skirt', inferredWarmth: 0 });
+    const core = [{ items: [skirt], warmth: 0, wind: 0, meetsTarget: false }];
+    const band = { min: 6, max: 10, center: 8 };
+    const scarf = item('Scarf', { id: 'scarf', inferredWarmth: 9 });
+
+    const result = toppedUpForBand(
+      core,
+      band,
+      emptyCandidates({ bottoms: [skirt], scarves: [scarf] }),
+      noDismatches,
+      7,
+      NO_CEILING,
+      0,
+      new Map(),
+      new Map(),
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0].items.some((i) => i.id === 'scarf')).toBe(true);
+  });
+});
+
+describe('rankNow', () => {
+  it('ranks meetsTarget outfits ahead of non-meetsTarget ones regardless of freshness or distance', () => {
+    const valid = { items: [item('Pants', { id: 'valid-bottom' })], warmth: 20, wind: 0, meetsTarget: true };
+    const invalidButFresh = { items: [item('Skirt', { id: 'fresh-invalid' })], warmth: 8, wind: 0, meetsTarget: false };
+    const band: WarmthBand = { min: 6, max: 10, center: 8 };
+
+    const ranked = rankNow([invalidButFresh, valid], band, new Map());
+
+    expect(ranked[0]).toBe(valid);
+  });
+
+  it('among equally-valid outfits, prefers the one whose tracked items are not already in use', () => {
+    const usedBottom = item('Pants', { id: 'used-bottom' });
+    const freshBottom = item('Pants', { id: 'fresh-bottom' });
+    const outfitUsingUsed = { items: [usedBottom], warmth: 5, wind: 0, meetsTarget: true };
+    const outfitUsingFresh = { items: [freshBottom], warmth: 9, wind: 0, meetsTarget: true };
+    const band: WarmthBand = { min: 6, max: 10, center: 8 };
+    const useCounts = new Map([['used-bottom', 1]]);
+
+    // outfitUsingFresh (warmth 9, gap 1) is numerically closer to center 8
+    // than outfitUsingUsed (warmth 5, gap 3) -- freshness should rank it
+    // first regardless, but this also confirms the deliberate case: even
+    // if outfitUsingUsed were closer, freshness wins first.
+    const ranked = rankNow([outfitUsingUsed, outfitUsingFresh], band, useCounts);
+
+    expect(ranked[0]).toBe(outfitUsingFresh);
+  });
+
+  it('falls back to closeness-to-center once freshness is tied', () => {
+    const a = { items: [item('Pants', { id: 'a' })], warmth: 9, wind: 0, meetsTarget: true };
+    const b = { items: [item('Pants', { id: 'b' })], warmth: 6, wind: 0, meetsTarget: true };
+    const band: WarmthBand = { min: 6, max: 10, center: 8 };
+
+    const ranked = rankNow([b, a], band, new Map());
+
+    // a (gap 1) is closer to center 8 than b (gap 2); neither is used yet.
+    expect(ranked[0]).toBe(a);
+  });
+
+  it('ranks freshness ahead of distance: a fresh outfit farther from center beats a used outfit closer to center', () => {
+    const usedCloser = { items: [item('Pants', { id: 'used-item' })], warmth: 8, wind: 0, meetsTarget: true };
+    const freshFarther = { items: [item('Pants', { id: 'fresh-item' })], warmth: 5, wind: 0, meetsTarget: true };
+    const band: WarmthBand = { min: 6, max: 10, center: 8 };
+    const useCounts = new Map([['used-item', 1]]);
+
+    // usedCloser: gap 0 (at center), but used (freshness penalty 1)
+    // freshFarther: gap 3 (farther from center), but fresh (freshness penalty 0)
+    // Freshness tier should rank freshFarther first, even though distance would prefer usedCloser
+    const ranked = rankNow([usedCloser, freshFarther], band, useCounts);
+
+    expect(ranked[0]).toBe(freshFarther);
   });
 });
 
