@@ -84,6 +84,17 @@ function trackedItemIds(outfit: ScoredOutfit): string[] {
  * Ranks `core` outfits by closeness to `band.center` after topping each one
  * up -- the per-band ranked list selectBandedOutfits' greedy pass walks.
  *
+ * Outfits that actually meetTarget always rank ahead of ones that don't,
+ * regardless of raw distance to band.center -- reported bug: a bare-legged
+ * Skirt/Dress padded with a heavy Coat and Tights can land numerically
+ * closer to a band's center (band.center is a whole-outfit total, easily
+ * reached by piling on Outerwear) than a genuinely valid Pants-based
+ * outfit sitting a little further from center, even though the padded
+ * outfit fails its own leg-region floor and the Pants one doesn't. A pure
+ * distance sort had no way to prefer the outfit that actually works;
+ * meetsTarget is checked first, distance only breaks a tie within each
+ * group.
+ *
  * `poolsByOutfit`, keyed by outfit object identity (stable across all three
  * band calls, since every call shares the same `core` array), lets
  * topUpToward skip re-filtering the same outfit's compatible scarves/tights
@@ -114,7 +125,10 @@ function rankedForBand(
         poolsByOutfit.get(outfit),
       ),
     )
-    .sort((a, b) => Math.abs(a.warmth - band.center) - Math.abs(b.warmth - band.center));
+    .sort((a, b) => {
+      if (a.meetsTarget !== b.meetsTarget) return a.meetsTarget ? -1 : 1;
+      return Math.abs(a.warmth - band.center) - Math.abs(b.warmth - band.center);
+    });
 }
 
 export function selectBandedOutfits(

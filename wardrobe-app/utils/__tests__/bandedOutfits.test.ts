@@ -195,4 +195,44 @@ describe('selectBandedOutfits', () => {
       expect(count).toBeLessThanOrEqual(2);
     }
   });
+
+  it('prefers a valid outfit over an invalid one closer to band.center, rather than ranking by raw distance alone', () => {
+    // Reported bug (real wardrobe): a mini skirt padded with a heavy top
+    // and jacket can land numerically closer to a band's center than a
+    // genuinely valid trousers-based outfit sitting a little further from
+    // it, even though the skirt outfit fails its own leg-region floor and
+    // the trousers one doesn't. warmthFloor 12 -> legTarget 3 (1/4):
+    // skirt's own legWarmth (0, Bottom weight 0.6 * inferredWarmth 0) fails
+    // on its own; trousers' legWarmth (6) passes. Both share the same top
+    // (torsoWarmth 8 clears torsoTarget 4 either way), so only the leg
+    // floor differs. skirtTotal = 0.6*0 + 8(top) + 7(jacket) = 15; pantsTotal
+    // = 0.6*6 + 8 + 7 = 18.6 -- band.center 15.5 sits closer to skirtTotal
+    // (gap 0.5) than to pantsTotal (gap 3.1), so a pure distance sort would
+    // wrongly prefer the invalid skirt outfit.
+    const skirt = item('Skirt', { id: 'skirt', inferredWarmth: 0 });
+    const trousers = item('Pants', { id: 'trousers', inferredWarmth: 6 });
+    const top = item('Sweater', { id: 'top', inferredWarmth: 8 });
+    const jacket = item('Jacket', { id: 'jacket', inferredWarmth: 7 });
+    const shoes = item('Shoes', { id: 'shoes' });
+
+    const median = { min: 0, max: 30, center: 15.5 };
+    const cooler = { min: 0, max: 30, center: 5 };
+    const warmer = { min: 0, max: 30, center: 25 };
+
+    const results = selectBandedOutfits(
+      emptyCandidates({ bottoms: [skirt, trousers], tops: [top], outerwear: [jacket], shoes: [shoes] }),
+      noDismatches,
+      12,
+      30,
+      0,
+      { cooler, median, warmer },
+    );
+
+    const medianPicks = results.filter((o) => o.band === 'median');
+    expect(medianPicks.length).toBeGreaterThan(0);
+    for (const outfit of medianPicks) {
+      expect(outfit.items.some((i) => i.id === 'trousers')).toBe(true);
+      expect(outfit.meetsTarget).toBe(true);
+    }
+  });
 });
