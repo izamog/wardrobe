@@ -5,24 +5,12 @@ import { fetchTodayCandidates, type TodayCandidates } from '../services/outfitGe
 import { getLatestLoggedOutfit } from '../services/items';
 import { initDatabase, withDb } from '../services/database';
 import { warmthCeiling, warmthFloor, windFloor } from '../utils/thermal';
-import { rankedDiverseOutfits } from '../utils/outfitDiversity';
+import { selectBandedOutfits } from '../utils/bandedOutfits';
+import { splitIntoWarmthBands } from '../utils/warmthBands';
 import type { ScoredOutfit } from '../utils/outfitGenerator';
 import { todayDateString } from '../utils/date';
 import type { ClothingItem } from '../types/wardrobe';
 import type { OutfitCandidates } from '../utils/outfitGenerator';
-
-/** The most outfits the Today screen ever recommends at once. */
-const TODAY_OUTFIT_COUNT = 6;
-
-/**
- * The fewest weather-appropriate outfits Today tries to show before giving
- * up and showing fewer — see rankedDiverseOutfits' minMeetsTarget for how
- * that's actually enforced (relaxing outfit variety, never the weather
- * bounds, as a last resort). Still just a target, not a guarantee: a
- * wardrobe that truly cannot build this many valid outfits at all still
- * shows fewer, same as before.
- */
-const MIN_TODAY_OUTFITS = 4;
 
 /** Whether outfitsFor found anything to build at all, vs. found candidates but none met today's target. */
 export interface TodayOutfits {
@@ -43,12 +31,11 @@ export interface TodayOutfits {
 }
 
 /**
- * Every outfit the search space could build for a given felt temperature and
- * wind speed, ranked closest to those bounds first and thinned to a varied
- * set (see rankedDiverseOutfits) — capped at TODAY_OUTFIT_COUNT and, so long
- * as the wardrobe can actually support it, never fewer than
- * MIN_TODAY_OUTFITS (see rankedDiverseOutfits' minMeetsTarget) meeting
- * target. hasAnyOutfit is kept separate from shown.length so the empty state
+ * Up to 6 outfits split into three warmth bands (median, cooler, warmer —
+ * 2 each; see utils/bandedOutfits.ts' selectBandedOutfits and
+ * utils/warmthBands.ts' splitIntoWarmthBands), with no single item reused
+ * more than twice across the whole set. hasAnyOutfit is kept separate from
+ * shown.length so the empty state
  * can still tell "closest-available fallback" apart from "nothing could be
  * built at all" (see TodayScreen's NoOutfitState).
  *
@@ -97,14 +84,16 @@ export function outfitsFor(
   const candidates = workAppropriateOnly
     ? filterWorkAppropriate(todayCandidates.candidates)
     : todayCandidates.candidates;
-  const diverse = rankedDiverseOutfits(
+  const floor = warmthFloor(feltTempC);
+  const ceiling = warmthCeiling(feltTempC);
+  const bands = splitIntoWarmthBands(floor, ceiling);
+  const diverse = selectBandedOutfits(
     candidates,
     todayCandidates.dismatchedKeys,
-    warmthFloor(feltTempC),
-    warmthCeiling(feltTempC),
+    floor,
+    ceiling,
     windFloor(windSpeedKph, feltTempC),
-    TODAY_OUTFIT_COUNT,
-    MIN_TODAY_OUTFITS,
+    bands,
     todayCandidates.wornDaysAgo,
   );
   const meetsTarget = diverse.filter((outfit) => outfit.meetsTarget);
@@ -125,7 +114,7 @@ export type TodayLoadState =
       /**
        * outfitsFor(todayCandidates, forecast.feltTempC, forecast.windSpeedKph),
        * computed once here rather than by TodayScreen's own first render.
-       * rankedDiverseOutfits runs a full, uncapped search over the whole
+       * selectBandedOutfits runs a full, uncapped search over the whole
        * candidate space (see its own doc comment) — synchronous and, on a
        * closet of any size, slow enough to block the JS thread. Running it
        * during TodayScreen's initial render meant it ran exactly when the

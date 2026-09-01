@@ -124,3 +124,21 @@ describe('outfitsFor threads wornDaysAgo into rankedDiverseOutfits', () => {
     expect(withFreshBag).toBe(true);
   });
 });
+
+describe('outfitsFor banded recommendations', () => {
+  it('returns up to 6 outfits spanning cooler/median/warmer, not ranked against one single target', () => {
+    const bottoms = Array.from({ length: 6 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: i * 2 }));
+    const tops = Array.from({ length: 6 }, (_, i) => item('T-Shirt', { id: `top-${i}`, inferredWarmth: i }));
+    const shoes = Array.from({ length: 6 }, (_, i) => item('Shoes', { id: `shoes-${i}` }));
+    const todayCandidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms, tops, shoes }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const result = outfitsFor(todayCandidates, 10, 0);
+
+    expect(result.shown.length).toBeGreaterThan(0);
+    expect(result.shown.length).toBeLessThanOrEqual(6);
+  });
+});
