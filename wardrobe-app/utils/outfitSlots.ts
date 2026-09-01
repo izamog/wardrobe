@@ -252,13 +252,18 @@ export function buildSlots(
   needsScarf: boolean,
   needsBelt: boolean,
   wornDaysAgo: ReadonlyMap<string, number> = new Map(),
+  options: { includeWarmthAccessories?: boolean; topCandidatesOverride?: readonly ClothingItem[] } = {},
 ): Slot[] {
+  const { includeWarmthAccessories = true, topCandidatesOverride } = options;
   const isDress = isDressAnchor(anchor);
-  const offerTights = tightsEligible(anchor, warmthFloor);
+  const offerTights = includeWarmthAccessories && tightsEligible(anchor, warmthFloor);
+  const offerScarf = includeWarmthAccessories && needsScarf;
 
   return [
     {
-      candidates: floorAwareCandidates(baseTopCandidates(candidates.tops, warmthFloor), warmthFloor, wornDaysAgo),
+      candidates: topCandidatesOverride
+        ? [...topCandidatesOverride]
+        : floorAwareCandidates(baseTopCandidates(candidates.tops, warmthFloor), warmthFloor, wornDaysAgo),
       required: !isDress,
     },
     { candidates: accessoryFirst(cardiganCandidates(candidates.tops, warmthFloor), wornDaysAgo), required: false },
@@ -267,7 +272,7 @@ export function buildSlots(
       candidates: floorAwareCandidates(shoeCandidatesFor(candidates, warmthFloor), warmthFloor, wornDaysAgo),
       required: true,
     },
-    ...(needsScarf
+    ...(offerScarf
       ? [{ candidates: accessoryFirst(candidates.scarves, wornDaysAgo), required: false, preferred: true }]
       : []),
     ...(needsBelt ? [{ candidates: accessoryFirst(candidates.belts, wornDaysAgo), required: true }] : []),
