@@ -36,10 +36,10 @@ const SURFACE_COLOR = '#FFFFFF';
 const INK_COLOR = '#1A1714';
 const INK_MUTED_COLOR = '#6B6259';
 
-// Screen titles: Playfair Display 400 — see design.md § Typography.
+// Screen titles: Public Sans 700 Bold — see design.md § Typography.
 const HEADER_STYLE = {
   headerStyle: { backgroundColor: SURFACE_COLOR },
-  headerTitleStyle: { color: INK_COLOR, fontFamily: 'PlayfairDisplay_400Regular', fontSize: 20 },
+  headerTitleStyle: { color: INK_COLOR, fontFamily: 'PublicSans_700Bold', fontSize: 20 },
   headerTintColor: INK_COLOR,
   headerShadowVisible: false,
 } as const;

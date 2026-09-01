@@ -60,10 +60,10 @@ module.exports = {
       // nothing once one of these is applied — reach for the named token
       // for the actual weight, not a weight utility alongside it.
       fontFamily: {
-        // Playfair Display 400 — screen titles only (the nav header; see
+        // Public Sans 700 Bold — screen titles only (the nav header; see
         // navigation/RootNavigator.tsx, which sets this by raw fontFamily
         // string since header options aren't styled through a className).
-        title: ["PlayfairDisplay_400Regular"],
+        "sans-bold": ["PublicSans_700Bold"],
         // Public Sans 300 — an item's own brand name only (ItemGridRow's
         // label band). Public Sans ships no 330 weight as a static file
         // (only 100/200/300/…/900), so 300 is the nearest available. Same

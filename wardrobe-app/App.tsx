@@ -6,12 +6,13 @@ import {
   initialWindowMetrics,
 } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { useFonts, PlayfairDisplay_400Regular } from '@expo-google-fonts/playfair-display';
 import {
+  useFonts,
   PublicSans_300Light,
   PublicSans_400Regular,
   PublicSans_500Medium,
   PublicSans_600SemiBold,
+  PublicSans_700Bold,
 } from '@expo-google-fonts/public-sans';
 import { initDatabase, withDb } from './services/database';
 import { purgeExpiredArchivedItems } from './services/itemActions';
@@ -27,11 +28,11 @@ export default function App() {
   // swapping to the real one a frame later — an accepted trade for not
   // blocking the whole app on it.
   useFonts({
-    PlayfairDisplay_400Regular,
     PublicSans_300Light,
     PublicSans_400Regular,
     PublicSans_500Medium,
     PublicSans_600SemiBold,
+    PublicSans_700Bold,
   });
 
   useEffect(() => {

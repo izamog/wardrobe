@@ -207,6 +207,19 @@ replacing it — all are folded into the tokens/type below, not layered on top:
       to `ink`'s. `success` (`#2E6E49`, the match-verdict green) is
       untouched — it's an informational verdict colour, not a decorative
       accent, and wasn't part of this feedback.
+12. **Screen titles moved from Playfair Display to Public Sans Bold.** Per
+    direct feedback: an accidental font-load race (Closet mounts first, at
+    app launch, so its header briefly rendered in the OS's bold
+    system-font fallback before Playfair Display finished loading) produced
+    a bold sans-serif look the user preferred over the editorial serif —
+    made deliberate and consistent by loading `PublicSans_700Bold` and
+    switching all three tabs' headers to it (`font-sans-bold` in the
+    config, though — same as the old `font-title` — this role has no
+    Tailwind-side usage; `navigation/RootNavigator.tsx`'s `HEADER_STYLE`
+    sets it by raw `fontFamily` string). Playfair Display is dropped
+    entirely — nothing else in the app used it — and its package
+    uninstalled, following round 5's own precedent for a font with no
+    remaining callers.
 
 ## Macrostructure family
 This is a native app, not a marketing site — there is one family, "app
@@ -260,14 +273,16 @@ Tailwind font-weight utility layered on top of one (see the fontFamily
 comment in `tailwind.config.js`: `font-medium`/`font-semibold`/etc. do
 nothing once a named custom font is already set, since expo-google-fonts
 ships one distinct font file per weight rather than a single variable font
-with adjustable weight). Two families:
+with adjustable weight). One family (Public Sans), five weights, each its
+own named role:
 
-- **Playfair Display 400** (`font-title`) — screen titles only. Applied in
-  `navigation/RootNavigator.tsx`'s `HEADER_STYLE` by raw `fontFamily`
+- **Public Sans 700 Bold** (`font-sans-bold`) — screen titles only. Applied
+  in `navigation/RootNavigator.tsx`'s `HEADER_STYLE` by raw `fontFamily`
   string (header options aren't styled through a className), so this is
-  the one role with no Tailwind-side usage — `font-title` exists in the
-  config for symmetry/future use, but the actual screen-title styling
-  lives in the navigator.
+  the one role with no Tailwind-side usage — `font-sans-bold` exists in
+  the config for symmetry/future use, but the actual screen-title styling
+  lives in the navigator. Replaced Playfair Display per § Amendments
+  round 12.
 - **Public Sans**, four weights, each a distinct named token:
   - `font-sans` (400) — category tabs, tab bar labels, list row labels,
     item labels/metadata, body copy/descriptions, and big statistic
