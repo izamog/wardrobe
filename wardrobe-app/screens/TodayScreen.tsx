@@ -200,26 +200,72 @@ function TodayOutfitBanner({
 }
 
 /**
- * The warmth/wind totals shown alongside this can each look fully on-target
- * while the outfit still fails to meet it — meetsTarget also requires the
- * leg and torso regions to each independently clear their own share of
- * warmthFloor (see meetsRegionFloors in outfitScoring.ts), which has no
- * other visible number. Surfacing it here is what turns "why is this only a
- * runner-up when the totals look right" into something the region breakdown
- * actually answers, instead of a total that looks fine hiding which body
- * part it's short on. Only rendered for a card that doesn't meet target —
- * see OutfitCard.
+ * All four checks meetsTarget actually depends on, always shown, each
+ * individually marked pass or fail — not just on a card that misses target.
+ *
+ * Reported confusion this replaces: the old version only rendered on a
+ * failing card, and only ever showed the leg/torso region numbers — so a
+ * card whose real failure reason was the *ceiling* (e.g. warmth 6 against a
+ * needs-0-5 range) still showed region numbers that both trivially passed
+ * (a 0 warmthFloor means a 0+ region requirement), giving no indication
+ * ceiling was the actual problem and reading as if the app had a bug. And a
+ * passing card showed nothing at all, so there was no way to double-check a
+ * "Meets target" card's own numbers the way a failing card's could be
+ * inspected. Every check is shown for every card now, and each is coloured
+ * by whether *that specific check* passes — not by the card's overall
+ * meetsTarget — so a viewer can see exactly which bound(s), if any, an
+ * outfit actually fails.
+ *
+ * Outerwear intentionally contributes nothing to torsoWarmth (see
+ * meetsTorsoFloor's own doc comment in outfitScoring.ts) — a warm jacket
+ * over a bare-legged, thin dress can score well on whole-outfit warmth
+ * while still failing the torso floor, which is exactly what this is meant
+ * to make visible rather than leave as an unexplained rejection.
  */
-function RegionShortfall({ items, warmthFloor }: { items: readonly ClothingItem[]; warmthFloor: number }) {
+function OutfitDiagnostics({
+  outfit,
+  warmthFloor,
+  warmthCeiling,
+  windFloor,
+}: {
+  outfit: ScoredOutfit;
+  warmthFloor: number;
+  warmthCeiling: number;
+  windFloor: number;
+}) {
   const legTarget = warmthFloor * LEG_WARMTH_FLOOR_FRACTION;
   const torsoTarget = warmthFloor * TORSO_WARMTH_FLOOR_FRACTION;
-  const legs = legWarmth(items);
-  const torso = torsoWarmth(items);
+  const legs = legWarmth(outfit.items);
+  const torso = torsoWarmth(outfit.items);
+
+  const warmthOk = outfit.warmth >= warmthFloor && outfit.warmth <= warmthCeiling;
+  const windOk = outfit.wind >= windFloor;
+  const legsOk = legs >= legTarget;
+  const torsoOk = torso >= torsoTarget;
+
+  const checkClass = (ok: boolean) => (ok ? 'text-ink-muted' : 'text-amber-700');
+
   return (
-    <Text className="text-xs font-sans text-amber-700 mt-1">
-      Legs {legs.toFixed(1)} (needs {legTarget.toFixed(1)}+) · Torso {torso.toFixed(1)} (needs{' '}
-      {torsoTarget.toFixed(1)}+)
-    </Text>
+    <View className="mt-2">
+      <Text className="text-xs font-sans text-ink-muted">
+        <Text className={checkClass(warmthOk)}>
+          Warmth {outfit.warmth.toFixed(1)} (needs {warmthFloor}-{warmthCeiling})
+        </Text>
+        {' · '}
+        <Text className={checkClass(windOk)}>
+          Wind {outfit.wind.toFixed(1)} (needs {windFloor}+)
+        </Text>
+      </Text>
+      <Text className="text-xs font-sans text-ink-muted mt-1">
+        <Text className={checkClass(legsOk)}>
+          Legs {legs.toFixed(1)} (needs {legTarget.toFixed(1)}+)
+        </Text>
+        {' · '}
+        <Text className={checkClass(torsoOk)}>
+          Torso {torso.toFixed(1)} (needs {torsoTarget.toFixed(1)}+)
+        </Text>
+      </Text>
+    </View>
   );
 }
 
@@ -279,11 +325,7 @@ function OutfitCard({
           read as "meets it" once both sides rounded to the same integer —
           a reported source of confusion about why a card wasn't a Best
           match despite the numbers looking exactly right. */}
-      <Text className="text-xs font-sans text-ink-muted mt-2">
-        Warmth {outfit.warmth.toFixed(1)} (needs {warmthFloor}-{warmthCeiling}) · Wind {outfit.wind.toFixed(1)} (needs{' '}
-        {windFloor}+)
-      </Text>
-      {!meetsTarget && <RegionShortfall items={outfit.items} warmthFloor={warmthFloor} />}
+      <OutfitDiagnostics outfit={outfit} warmthFloor={warmthFloor} warmthCeiling={warmthCeiling} windFloor={windFloor} />
       <Pressable
         onPress={onWear}
         disabled={wearing}
