@@ -151,6 +151,8 @@ export interface ScoredOutfit {
   wind: number;
   /** Whether this outfit actually clears every bound — see generateOutfits. */
   meetsTarget: boolean;
+  /** Which warmth band this outfit was picked to fill — only set by selectBandedOutfits (utils/bandedOutfits.ts); every other producer leaves it undefined. */
+  band?: 'cooler' | 'median' | 'warmer';
 }
 
 /** Scores one complete candidate outfit against the bounds — the leaf case of generateClosestOutfits' search. */

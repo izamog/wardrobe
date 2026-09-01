@@ -1,6 +1,7 @@
 import { sumWarmth, sumWind, meetsRegionFloors } from './outfitScoring';
 import { SCARF_PREFERRED_WARMTH_FLOOR, tightsEligible } from './outfitSlots';
 import { isCompatibleCandidate, pairKey } from './pairs';
+import { accessoryFirst } from './outfitCandidatePools';
 import type { OutfitCandidates, ScoredOutfit } from './outfitGenerator';
 import type { WarmthBand } from './warmthBands';
 import type { ClothingItem } from '../types/wardrobe';
@@ -38,7 +39,75 @@ function isCompatibleWithEveryItem(
 
 /** The Bottom/Dress anchor among an outfit's own items — Tights eligibility is gated on the anchor's own category, same as buildSlots. */
 function anchorOf(items: readonly ClothingItem[]): ClothingItem | undefined {
-  return items.find((item) => item.category === 'Pants' || item.category === 'Leggings' || item.category === 'Skirt' || item.category === 'Dress');
+  return items.find(
+    (item) =>
+      item.category === 'Pants' ||
+      item.category === 'Leggings' ||
+      item.category === 'Skirt' ||
+      item.category === 'Dress',
+  );
+}
+
+/**
+ * True if `a` is a strictly better top-up result than `b`. Fixing a failing
+ * leg/torso region floor always wins over any whole-outfit warmth
+ * consideration — Tights count toward legWarmth directly (see
+ * outfitScoring.ts), so a top-up that turns a failing floor into a passing
+ * one must never lose to one that merely sits closer to the band's center
+ * while leaving the floor broken. Once floor-pass status is equal between
+ * the two, closeness to band.center decides.
+ */
+function isBetterTopUp(a: ScoredOutfit, b: ScoredOutfit, band: WarmthBand, warmthFloor: number): boolean {
+  const aFloorOk = meetsRegionFloors(a.items, warmthFloor);
+  const bFloorOk = meetsRegionFloors(b.items, warmthFloor);
+  if (aFloorOk !== bFloorOk) return aFloorOk;
+  return Math.abs(a.warmth - band.center) < Math.abs(b.warmth - band.center);
+}
+
+/** Compatible-scarf/tights pools for one core outfit, independent of which band it's being topped up toward — see compatibleTopUpPools. */
+export interface TopUpPools {
+  scarves: readonly ClothingItem[];
+  tights: readonly ClothingItem[];
+}
+
+/**
+ * The scarves/tights from `candidates` that are compatible with `core`'s
+ * existing items — the part of topUpToward's own work that doesn't depend
+ * on which band it's being topped up toward, so a caller running
+ * topUpToward for the same `core` against all three bands (selectBandedOutfits'
+ * rankedForBand) can compute this once and reuse it three times instead of
+ * repeating the same per-item compatibility filter for every band.
+ */
+export function compatibleTopUpPools(
+  core: ScoredOutfit,
+  candidates: OutfitCandidates,
+  dismatchedKeys: ReadonlySet<string>,
+): TopUpPools {
+  return {
+    scarves: candidates.scarves.filter((s) => isCompatibleWithEveryItem(s, core.items, dismatchedKeys)),
+    tights: candidates.tights.filter((t) => isCompatibleWithEveryItem(t, core.items, dismatchedKeys)),
+  };
+}
+
+/** The single addition from `pool` (added to `base`) that makes the best top-up result per isBetterTopUp — not simply the warmest item, since the warmest can overshoot band.center or warmthCeiling entirely. */
+function bestAddition(
+  pool: readonly ClothingItem[],
+  base: readonly ClothingItem[],
+  band: WarmthBand,
+  warmthFloor: number,
+  warmthCeiling: number,
+  windFloor: number,
+  respectCeiling: boolean,
+): { item: ClothingItem; outfit: ScoredOutfit } | undefined {
+  let best: { item: ClothingItem; outfit: ScoredOutfit } | undefined;
+  for (const candidateItem of pool) {
+    const outfit = rescored([...base, candidateItem], warmthFloor, warmthCeiling, windFloor);
+    if (respectCeiling && outfit.warmth > warmthCeiling) continue;
+    if (!best || isBetterTopUp(outfit, best.outfit, band, warmthFloor)) {
+      best = { item: candidateItem, outfit };
+    }
+  }
+  return best;
 }
 
 /**
@@ -46,9 +115,31 @@ function anchorOf(items: readonly ClothingItem[]): ClothingItem | undefined {
  * smallest addition first (Scarf alone, then Tights alone, then both) --
  * stopping as soon as the running total reaches band.center. Never removes
  * anything from `core.items`; returns `core` unchanged if it is already at
- * or past band.center, or if nothing eligible and compatible closes any of
- * the gap. See the design spec's "Warmth top-up" section for the full
- * reasoning (docs/superpowers/specs/2026-09-01-today-banded-recommendations-design.md).
+ * or past band.center *and* its region floors already pass, or if nothing
+ * eligible and compatible improves on that.
+ *
+ * Also runs (Tights only -- Scarf never counts toward a region floor, see
+ * outfitScoring.ts's WARMTH_REGION_WEIGHT) whenever `core` already meets
+ * band.center but still fails a leg/torso region floor, since Tights can
+ * turn a borderline leg-floor-failing core outfit into a passing one even
+ * without needing more whole-outfit warmth -- see the design spec's
+ * "Warmth top-up" section (docs/superpowers/specs/2026-09-01-today-banded-recommendations-design.md).
+ *
+ * Never pushes a `core` that was within warmthCeiling out past it -- a
+ * top-up is a nudge, never a reason to disqualify an outfit that was
+ * already valid.
+ *
+ * `wornDaysAgo`, when given, is applied via accessoryFirst the same way
+ * every other accessory slot in this pipeline ranks candidates -- an
+ * equally-good top-up prefers the less-recently-worn item.
+ *
+ * `pools`, when given, replaces this function's own compatible-scarf/tights
+ * filtering (see compatibleTopUpPools) -- a caller running this for the
+ * same `core` against multiple bands can compute it once and pass it in
+ * every time, instead of repeating the same per-item compatibility check
+ * once per band for a core-outfit list that can be uncapped (see
+ * coreOutfitsForBands). Omitted, this filters `candidates` itself exactly
+ * as before.
  */
 export function topUpToward(
   core: ScoredOutfit,
@@ -58,38 +149,40 @@ export function topUpToward(
   warmthFloor: number,
   warmthCeiling: number,
   windFloor: number,
+  wornDaysAgo: ReadonlyMap<string, number> = new Map(),
+  pools?: TopUpPools,
 ): ScoredOutfit {
-  if (core.warmth >= band.center) return core;
+  const needsWarmthBoost = core.warmth < band.center;
+  const needsFloorFix = !meetsRegionFloors(core.items, warmthFloor);
+  if (!needsWarmthBoost && !needsFloorFix) return core;
 
+  const respectCeiling = core.warmth <= warmthCeiling;
   const anchor = anchorOf(core.items);
-  const scarfEligible = warmthFloor >= SCARF_PREFERRED_WARMTH_FLOOR;
-  const tightsOk = anchor !== undefined && tightsEligible(anchor, warmthFloor);
+  // Scarf never counts toward a region floor (WARMTH_REGION_WEIGHT treats
+  // it as whole-outfit only), so it's only ever worth trying for a warmth
+  // boost, never purely to fix a floor.
+  const scarfEligible = needsWarmthBoost && warmthFloor >= SCARF_PREFERRED_WARMTH_FLOOR;
+  const tightsOk = anchor !== undefined && tightsEligible(anchor, warmthFloor) && (needsWarmthBoost || needsFloorFix);
 
-  const scarfCandidates = scarfEligible
-    ? candidates.scarves.filter((s) => isCompatibleWithEveryItem(s, core.items, dismatchedKeys))
-    : [];
-  const tightsCandidates = tightsOk
-    ? candidates.tights.filter((t) => isCompatibleWithEveryItem(t, core.items, dismatchedKeys))
-    : [];
+  const compatiblePools = pools ?? compatibleTopUpPools(core, candidates, dismatchedKeys);
+  const scarfCandidates = scarfEligible ? accessoryFirst(compatiblePools.scarves, wornDaysAgo) : [];
+  const tightsCandidates = tightsOk ? accessoryFirst(compatiblePools.tights, wornDaysAgo) : [];
 
-  const closestBy = (pool: readonly ClothingItem[]): ClothingItem | undefined =>
-    [...pool].sort((a, b) => b.inferredWarmth - a.inferredWarmth)[0];
+  const scarfPick = bestAddition(scarfCandidates, core.items, band, warmthFloor, warmthCeiling, windFloor, respectCeiling);
+  const tightsPick = bestAddition(tightsCandidates, core.items, band, warmthFloor, warmthCeiling, windFloor, respectCeiling);
 
-  const scarf = closestBy(scarfCandidates);
-  const tights = closestBy(tightsCandidates);
-
-  const attempts: ClothingItem[][] = [];
-  if (scarf) attempts.push([scarf]);
-  if (tights) attempts.push([tights]);
-  if (scarf && tights) attempts.push([scarf, tights]);
+  const attempts: ScoredOutfit[] = [];
+  if (scarfPick) attempts.push(scarfPick.outfit);
+  if (tightsPick) attempts.push(tightsPick.outfit);
+  if (scarfPick && tightsPick) {
+    const both = rescored([...core.items, scarfPick.item, tightsPick.item], warmthFloor, warmthCeiling, windFloor);
+    if (!respectCeiling || both.warmth <= warmthCeiling) attempts.push(both);
+  }
 
   let best = core;
-  for (const addition of attempts) {
-    const candidate = rescored([...core.items, ...addition], warmthFloor, warmthCeiling, windFloor);
-    const bestGap = Math.abs(best.warmth - band.center);
-    const candidateGap = Math.abs(candidate.warmth - band.center);
-    if (candidateGap < bestGap) best = candidate;
-    if (best.warmth >= band.center) break;
+  for (const candidate of attempts) {
+    if (isBetterTopUp(candidate, best, band, warmthFloor)) best = candidate;
+    if (best.warmth >= band.center && meetsRegionFloors(best.items, warmthFloor)) break;
   }
 
   return best;

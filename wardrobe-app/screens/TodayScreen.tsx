@@ -14,8 +14,6 @@ import { withDb } from '../services/database';
 import { warmthCeiling, warmthFloor, windFloor } from '../utils/thermal';
 import type { ScoredOutfit } from '../utils/outfitGenerator';
 import { LEG_WARMTH_FLOOR_FRACTION, TORSO_WARMTH_FLOOR_FRACTION, legWarmth, torsoWarmth } from '../utils/outfitScoring';
-import { PREFERRED_ACCESSORY_GROUPS } from '../utils/outfitDedup';
-import { CATEGORY_GROUP } from '../utils/categories';
 import { todayDateString } from '../utils/date';
 import type { RootStackParamList } from '../navigation/types';
 import type { ClothingItem } from '../types/wardrobe';
@@ -225,57 +223,27 @@ function RegionShortfall({ items, warmthFloor }: { items: readonly ClothingItem[
   );
 }
 
+/** The heading shown above each band's own pair of cards — see selectBandedOutfits (utils/bandedOutfits.ts), display order median/cooler/warmer. */
+const BAND_HEADING: Record<'median' | 'cooler' | 'warmer', string> = {
+  median: 'Just right',
+  cooler: 'Cooler option',
+  warmer: 'Warmer option',
+};
+
 /** The badge text for an OutfitCard — split out to keep OutfitCard's own complexity down. */
-function outfitCardLabel(meetsTarget: boolean, rank: number): string {
-  if (meetsTarget) return rank === 0 ? 'Best match' : `Runner-up ${rank}`;
-  return rank === 0 ? 'Closest available (short of target)' : `Runner-up ${rank} (short of target)`;
-}
-
-/** How many Bag/Scarf/Tights items an outfit carries — see PREFERRED_ACCESSORY_GROUPS. */
-function accessoryCount(items: readonly ClothingItem[]): number {
-  return items.filter((item) => PREFERRED_ACCESSORY_GROUPS.has(CATEGORY_GROUP[item.category])).length;
+function outfitCardLabel(meetsTarget: boolean): string {
+  return meetsTarget ? 'Meets target' : 'Closest available (short of target)';
 }
 
 /**
- * A reason for a Runner-up card whose Warmth/Wind line reads identically to
- * the Best match's — the exact case those visible totals give no reason for
- * (reported confusion: "why is this only a runner-up when the numbers look
- * the same"). Both outfits meeting today's target already means they're
- * tied at distance 0 from the weather bounds (see distanceFromBounds in
- * outfitScoring.ts — a met floor/ceiling/wind/region target each contribute
- * 0), so accessory count — the next tie-break generateClosestOutfits'
- * ranking actually applies (see outfitGenerator.ts's sort) — is the only
- * thing left that could have decided the order. Only called for a card that
- * meets target and isn't itself the best match; RegionShortfall already
- * covers the short-of-target case.
- */
-function whySameNumbersRankedBelowBest(outfit: ScoredOutfit, best: ScoredOutfit): string | null {
-  if (outfit.warmth !== best.warmth || outfit.wind !== best.wind) return null;
-  const short = accessoryCount(best.items) - accessoryCount(outfit.items);
-  if (short > 0) {
-    const noun = short === 1 ? 'an accessory (bag, scarf or tights)' : `${short} more preferred accessories`;
-    return `Same warmth and wind as the best match — it adds ${noun} this one doesn't.`;
-  }
-  return 'Same warmth and wind as the best match — shown as an equally valid alternative.';
-}
-
-/**
- * rank 0 is the generator's own top pick — generateClosestTodayOutfits sorts
- * real matches to the front by construction (distance 0 first, ties broken by
- * the same lean-first search order generateOutfits itself uses), so
- * outfits[0] genuinely is "what the algorithm recommends" whenever a real
- * match exists, not an arbitrary first entry.
- *
- * meetsTarget separately controls the badge and border: a card can be rank 0
- * and still not meet the target, when nothing in the wardrobe does — that's
- * "the closest attempt", not a recommendation, and the styling says so rather
- * than implying a match that isn't there. Wearing it is still offered either
- * way; it's a real closet combination and the choice is the user's.
+ * One outfit within a band's own group of (up to) two cards. Bands are no
+ * longer ranked against each other by distance-from-target — each is a
+ * deliberate warmth choice (see selectBandedOutfits) — so a card's own
+ * meetsTarget is the only thing that still varies its badge/border; there
+ * is no single "best match" to compare the rest against any more.
  */
 function OutfitCard({
   outfit,
-  rank,
-  best,
   warmthFloor,
   warmthCeiling,
   windFloor,
@@ -284,9 +252,6 @@ function OutfitCard({
   onItemPress,
 }: {
   outfit: ScoredOutfit;
-  rank: number;
-  /** The rank-0 outfit shown in this grid — see whySameNumbersRankedBelowBest. */
-  best: ScoredOutfit;
   warmthFloor: number;
   warmthCeiling: number;
   windFloor: number;
@@ -295,16 +260,13 @@ function OutfitCard({
   onItemPress: (itemId: string) => void;
 }) {
   const { meetsTarget } = outfit;
-  const whyBelowBest = rank > 0 && meetsTarget ? whySameNumbersRankedBelowBest(outfit, best) : null;
-  const isTopMatch = meetsTarget && rank === 0;
-  const label = outfitCardLabel(meetsTarget, rank);
+  const label = outfitCardLabel(meetsTarget);
   // No card chrome (see design.md's box-in-box rule) — outfits are
   // separated by whitespace and a hairline rule beneath each, not by a
   // bordered white box around an already-bordered collage.
   return (
     <View style={{ width: '48%' }} className="pb-4 mb-4 border-b border-rule">
       <View className="flex-row items-center mb-2">
-        {isTopMatch && <Ionicons name="star" size={12} color="#6B1F2A" style={{ marginRight: 4 }} />}
         <Text
           className={`text-xs font-sans uppercase tracking-wide ${meetsTarget ? 'text-accent' : 'text-ink-muted'}`}
         >
@@ -322,7 +284,6 @@ function OutfitCard({
         {windFloor}+)
       </Text>
       {!meetsTarget && <RegionShortfall items={outfit.items} warmthFloor={warmthFloor} />}
-      {whyBelowBest && <Text className="text-xs font-sans text-ink-muted mt-1">{whyBelowBest}</Text>}
       <Pressable
         onPress={onWear}
         disabled={wearing}
@@ -344,7 +305,16 @@ function NoOutfitState() {
   );
 }
 
-/** The recommended outfits, two per row — split out of TodayScreen to keep its own complexity down. */
+const BAND_ORDER: ('median' | 'cooler' | 'warmer')[] = ['median', 'cooler', 'warmer'];
+
+/**
+ * The recommended outfits, grouped into their band sections (median, then
+ * cooler, then warmer — see BAND_ORDER/selectBandedOutfits) rather than one
+ * flat, distance-ranked grid. `index` passed to onWear/wearing is the
+ * outfit's position in the original flat `outfits` array (not its position
+ * within its band section), since that's what TodayScreen's wearingIndex
+ * state and wearOutfit call already key off.
+ */
 function OutfitGrid({
   outfits,
   bounds,
@@ -358,22 +328,43 @@ function OutfitGrid({
   onWear: (outfit: readonly ClothingItem[], index: number) => void;
   onItemPress: (itemId: string) => void;
 }) {
+  const indexed = outfits.map((outfit, index) => ({ outfit, index }));
+  const unbanded = indexed.filter((entry) => entry.outfit.band === undefined);
+
+  function renderCards(entries: { outfit: ScoredOutfit; index: number }[]) {
+    return entries.map(({ outfit, index }) => (
+      <OutfitCard
+        key={outfit.items.map((item) => item.id).join('|')}
+        outfit={outfit}
+        warmthFloor={bounds.warmthFloor}
+        warmthCeiling={bounds.warmthCeiling}
+        windFloor={bounds.windFloor}
+        wearing={wearingIndex === index}
+        onWear={() => onWear(outfit.items, index)}
+        onItemPress={onItemPress}
+      />
+    ));
+  }
+
   return (
-    <View className="flex-row flex-wrap justify-between">
-      {outfits.map((outfit, index) => (
-        <OutfitCard
-          key={outfit.items.map((item) => item.id).join('|')}
-          outfit={outfit}
-          rank={index}
-          best={outfits[0]}
-          warmthFloor={bounds.warmthFloor}
-          warmthCeiling={bounds.warmthCeiling}
-          windFloor={bounds.windFloor}
-          wearing={wearingIndex === index}
-          onWear={() => onWear(outfit.items, index)}
-          onItemPress={onItemPress}
-        />
-      ))}
+    <View>
+      {BAND_ORDER.map((bandName) => {
+        const entries = indexed.filter((entry) => entry.outfit.band === bandName);
+        if (entries.length === 0) return null;
+        return (
+          <View key={bandName} className="mb-2">
+            <Text className="text-xs font-sans-medium uppercase tracking-wide text-ink-muted mb-2">
+              {BAND_HEADING[bandName]}
+            </Text>
+            <View className="flex-row flex-wrap justify-between">{renderCards(entries)}</View>
+          </View>
+        );
+      })}
+      {/* Every outfit outfitsFor produces is tagged with a band (see
+          selectBandedOutfits) -- this only renders if some future caller of
+          OutfitGrid ever passes an untagged ScoredOutfit, so nothing is
+          silently dropped rather than shown. */}
+      {unbanded.length > 0 && <View className="flex-row flex-wrap justify-between">{renderCards(unbanded)}</View>}
     </View>
   );
 }

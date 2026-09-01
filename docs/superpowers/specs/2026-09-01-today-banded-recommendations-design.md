@@ -99,6 +99,22 @@ it can request the *next*-best excluded candidates for that slot (the
 "check item #7" mechanism) before ever falling back to reusing an
 already-selected item a 2nd time.
 
+**Ruling (recorded post-implementation, from the same design-review
+conversation this spec transcribes): the "check item #7" widening above is
+implemented as one bounded, deterministic, up-front merge — one
+`floorAwareCandidates` call per band (three total per pool), each targeting
+that band's own center scaled into the region's raw-inferredWarmth units by
+the same `LEG_WARMTH_FLOOR_FRACTION`/`TORSO_WARMTH_FLOOR_FRACTION` used for
+the region floor checks — rather than a dynamic re-search that re-queries
+the pool on demand mid-selection.** A dynamic re-search was considered and
+explicitly rejected: it risks reintroducing the JS-thread-blocking class of
+bug this session had just finished fixing in the pre-banding search
+(`floorAwareCandidates` excluding mid-warmth items). The up-front merge is
+strictly smaller in scope than "true" on-demand widening — it cannot react
+to which specific item selection turns out to need — but it was judged an
+acceptable interim trade for staying synchronous and bounded, matching this
+plan's other explicit placeholder (see step 7's empty-band fallback).
+
 ### 4. Core search — Scarf and Tights pulled out
 
 The exhaustive DFS (`generateClosestOutfits` in `utils/outfitGenerator.ts`)

@@ -1,18 +1,36 @@
 import { floorAwareCandidates, bottomCandidatesFor, baseTopCandidates } from './outfitCandidatePools';
 import { generateClosestOutfits, type OutfitCandidates, type ScoredOutfit } from './outfitGenerator';
-import { topUpToward } from './warmthTopUp';
+import { topUpToward, compatibleTopUpPools, type TopUpPools } from './warmthTopUp';
+import { LEG_WARMTH_FLOOR_FRACTION, TORSO_WARMTH_FLOOR_FRACTION } from './outfitScoring';
 import type { WarmthBand } from './warmthBands';
 import type { ClothingItem } from '../types/wardrobe';
 
-/** Merges floorAwareCandidates run once per band (each targeting that band's own center) into one deduped pool -- see the design spec's "Pool widening" ruling for why this is a static, up-front merge rather than a dynamic re-search. */
+/**
+ * Merges floorAwareCandidates run once per band into one deduped pool -- see
+ * the design spec's "Pool widening" ruling for why this is a static,
+ * up-front merge rather than a dynamic re-search.
+ *
+ * `regionFraction` (LEG_WARMTH_FLOOR_FRACTION or TORSO_WARMTH_FLOOR_FRACTION)
+ * scales each band's own whole-outfit `center` down to the same raw,
+ * per-item inferredWarmth scale floorAwareCandidates' own "closest to
+ * target" tiebreak compares against (see outfitCandidatePools.ts) -- a
+ * single Bottom or Top item's own inferredWarmth is never on the same scale
+ * as a whole outfit's weighted warmth total, so ranking a Bottom pool
+ * against a bare band.center measured a single trouser against a number
+ * roughly LEG_WARMTH_FLOOR_FRACTION's reciprocal too large. Scaling by the
+ * same fraction the leg/torso region floors themselves use keeps this
+ * per-band varying (each band's own center still differs) while bringing it
+ * into the right units.
+ */
 function mergedByBandCenters(
   items: readonly ClothingItem[],
   bands: { cooler: WarmthBand; median: WarmthBand; warmer: WarmthBand },
+  regionFraction: number,
   wornDaysAgo: ReadonlyMap<string, number>,
 ): ClothingItem[] {
   const merged = new Map<string, ClothingItem>();
   for (const band of [bands.cooler, bands.median, bands.warmer]) {
-    for (const candidate of floorAwareCandidates(items, band.center, wornDaysAgo)) {
+    for (const candidate of floorAwareCandidates(items, band.center * regionFraction, wornDaysAgo)) {
       merged.set(candidate.id, candidate);
     }
   }
@@ -37,8 +55,18 @@ export function coreOutfitsForBands(
   bands: { cooler: WarmthBand; median: WarmthBand; warmer: WarmthBand },
   wornDaysAgo: ReadonlyMap<string, number> = new Map(),
 ): ScoredOutfit[] {
-  const anchorPool = mergedByBandCenters(bottomCandidatesFor(candidates, warmthFloor), bands, wornDaysAgo);
-  const topPool = mergedByBandCenters(baseTopCandidates(candidates.tops, warmthFloor), bands, wornDaysAgo);
+  const anchorPool = mergedByBandCenters(
+    bottomCandidatesFor(candidates, warmthFloor),
+    bands,
+    LEG_WARMTH_FLOOR_FRACTION,
+    wornDaysAgo,
+  );
+  const topPool = mergedByBandCenters(
+    baseTopCandidates(candidates.tops, warmthFloor),
+    bands,
+    TORSO_WARMTH_FLOOR_FRACTION,
+    wornDaysAgo,
+  );
 
   return generateClosestOutfits(candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor, Infinity, wornDaysAgo, {
     anchorPool,
@@ -52,7 +80,15 @@ function trackedItemIds(outfit: ScoredOutfit): string[] {
   return outfit.items.filter((item) => item.category !== 'Tights').map((item) => item.id);
 }
 
-/** Ranks `core` outfits by closeness to `band.center` after topping each one up -- the per-band ranked list selectBandedOutfits' greedy pass walks. */
+/**
+ * Ranks `core` outfits by closeness to `band.center` after topping each one
+ * up -- the per-band ranked list selectBandedOutfits' greedy pass walks.
+ *
+ * `poolsByOutfit`, keyed by outfit object identity (stable across all three
+ * band calls, since every call shares the same `core` array), lets
+ * topUpToward skip re-filtering the same outfit's compatible scarves/tights
+ * three times over -- see compatibleTopUpPools' own doc comment.
+ */
 function rankedForBand(
   core: readonly ScoredOutfit[],
   band: WarmthBand,
@@ -61,9 +97,23 @@ function rankedForBand(
   warmthFloor: number,
   warmthCeiling: number,
   windFloor: number,
+  wornDaysAgo: ReadonlyMap<string, number>,
+  poolsByOutfit: ReadonlyMap<ScoredOutfit, TopUpPools>,
 ): ScoredOutfit[] {
   return core
-    .map((outfit) => topUpToward(outfit, band, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor))
+    .map((outfit) =>
+      topUpToward(
+        outfit,
+        band,
+        candidates,
+        dismatchedKeys,
+        warmthFloor,
+        warmthCeiling,
+        windFloor,
+        wornDaysAgo,
+        poolsByOutfit.get(outfit),
+      ),
+    )
     .sort((a, b) => Math.abs(a.warmth - band.center) - Math.abs(b.warmth - band.center));
 }
 
@@ -84,6 +134,10 @@ export function selectBandedOutfits(
     windFloor,
     bands,
     wornDaysAgo,
+  );
+
+  const poolsByOutfit = new Map<ScoredOutfit, TopUpPools>(
+    core.map((outfit) => [outfit, compatibleTopUpPools(outfit, candidates, dismatchedKeys)]),
   );
 
   const useCounts = new Map<string, number>();
@@ -114,10 +168,11 @@ export function selectBandedOutfits(
     }
   }
 
-  function pickTwo(ranked: readonly ScoredOutfit[]): ScoredOutfit[] {
+  /** Picks up to `need` outfits, recording (and permanently consuming reuse budget for) only what it actually keeps -- never records a candidate it evaluates but then discards, which would silently tighten the max-2 ceiling for outfits the user never sees. */
+  function pickUpTo(ranked: readonly ScoredOutfit[], need: number): ScoredOutfit[] {
     const picked: ScoredOutfit[] = [];
     for (const outfit of ranked) {
-      if (picked.length === 2) break;
+      if (picked.length === need) break;
       if (violatesUniqueness(outfit)) continue;
       record(outfit);
       picked.push(outfit);
@@ -126,9 +181,9 @@ export function selectBandedOutfits(
   }
 
   const rankedByBand = {
-    cooler: rankedForBand(core, bands.cooler, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor),
-    median: rankedForBand(core, bands.median, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor),
-    warmer: rankedForBand(core, bands.warmer, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor),
+    cooler: rankedForBand(core, bands.cooler, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor, wornDaysAgo, poolsByOutfit),
+    median: rankedForBand(core, bands.median, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor, wornDaysAgo, poolsByOutfit),
+    warmer: rankedForBand(core, bands.warmer, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor, wornDaysAgo, poolsByOutfit),
   };
 
   const order: (keyof typeof rankedByBand)[] = ['median', 'cooler', 'warmer'];
@@ -140,13 +195,15 @@ export function selectBandedOutfits(
 
   const results: ScoredOutfit[] = [];
   for (const bandName of order) {
-    let picked = pickTwo(rankedByBand[bandName]);
+    let picked = pickUpTo(rankedByBand[bandName], 2);
     for (const donor of borrowOrder[bandName]) {
       if (picked.length === 2) break;
-      const more = pickTwo(rankedByBand[donor].filter((o) => !picked.includes(o)));
-      picked = [...picked, ...more].slice(0, 2);
+      picked = [...picked, ...pickUpTo(rankedByBand[donor], 2 - picked.length)];
     }
-    results.push(...picked);
+    // Tagged with the band slot being filled, not the band it was ranked/
+    // topped-up for — a borrowed outfit still fills bandName's slot, and
+    // this tag is what the UI (TodayScreen.tsx) groups and labels by.
+    results.push(...picked.map((outfit) => ({ ...outfit, band: bandName })));
   }
 
   return results;

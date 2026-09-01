@@ -103,7 +103,7 @@ describe('outfitsFor workAppropriateOnly', () => {
   });
 });
 
-describe('outfitsFor threads wornDaysAgo into rankedDiverseOutfits', () => {
+describe('outfitsFor threads wornDaysAgo into selectBandedOutfits', () => {
   it('passes todayCandidates.wornDaysAgo through', () => {
     const wornBag = item('Bag', { id: 'worn-bag' });
     const freshBag = item('Bag', { id: 'fresh-bag' });

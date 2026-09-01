@@ -29,15 +29,17 @@ describe('coreOutfitsForBands', () => {
   });
 
   it('reaches a bottom that is only the closest-to-target item for one specific band, not the global leanest/warmest', () => {
-    // Seven bottoms spread across the warmth range: the middle one (warmth 5)
-    // is neither in the leanest-3 (0,1,2) nor the warmest-3 (10,9,8) of the
+    // Seven bottoms spread across the warmth range: the middle one (warmth 3)
+    // is neither in the leanest-3 (0,1,2) nor the warmest-3 (9,8,7) of the
     // *global* split -- it only enters the pool because the median band's
-    // own center (around 5, for a 0-10 range) pulls it in directly.
-    const warmths = [0, 1, 2, 5, 8, 9, 10];
+    // own center, scaled into the leg region's raw-inferredWarmth units by
+    // LEG_WARMTH_FLOOR_FRACTION (0.25), lands exactly on it: floor 0,
+    // ceiling 24 -> median band center 12 -> leg target 12*0.25 = 3.
+    const warmths = [0, 1, 2, 3, 7, 8, 9];
     const bottoms = warmths.map((w) => item('Pants', { id: `w${w}`, inferredWarmth: w }));
     const top = item('T-Shirt');
     const shoes = item('Shoes');
-    const bands = splitIntoWarmthBands(0, 10);
+    const bands = splitIntoWarmthBands(0, 24);
 
     const results = coreOutfitsForBands(
       emptyCandidates({ bottoms, tops: [top], shoes: [shoes] }),
@@ -49,7 +51,7 @@ describe('coreOutfitsForBands', () => {
     );
 
     const bottomIdsUsed = new Set(results.map((o) => o.items.find((i) => i.category === 'Pants')?.id));
-    expect(bottomIdsUsed.has('w5')).toBe(true);
+    expect(bottomIdsUsed.has('w3')).toBe(true);
   });
 });
 
@@ -72,6 +74,24 @@ describe('selectBandedOutfits', () => {
     );
 
     expect(results).toHaveLength(6);
+  });
+
+  it('tags each outfit with the band slot it fills: 2 median, then 2 cooler, then 2 warmer', () => {
+    const bottoms = Array.from({ length: 6 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: i * 2 }));
+    const tops = Array.from({ length: 6 }, (_, i) => item('T-Shirt', { id: `top-${i}`, inferredWarmth: i }));
+    const shoes = Array.from({ length: 6 }, (_, i) => item('Shoes', { id: `shoes-${i}` }));
+    const bands = splitIntoWarmthBands(0, 12);
+
+    const results = selectBandedOutfits(
+      emptyCandidates({ bottoms, tops, shoes }),
+      noDismatches,
+      0,
+      NO_CEILING,
+      0,
+      bands,
+    );
+
+    expect(results.map((o) => o.band)).toEqual(['median', 'median', 'cooler', 'cooler', 'warmer', 'warmer']);
   });
 
   it('never uses the same item more than twice across the whole 6-outfit set', () => {
@@ -158,12 +178,13 @@ describe('selectBandedOutfits', () => {
       bands,
     );
 
-    // Every item is used at most twice, and the thin wardrobe still yields
-    // more than the 2 outfits a single band alone could produce -- this is
-    // a smoke test that the borrowing/ranking path degrades gracefully
-    // rather than getting stuck at 2 (see this task's own "Implementation
-    // notes"), not an exact-count assertion.
-    expect(results.length).toBeGreaterThan(2);
+    // 2 items x 2 uses = 4 is the true system-wide ceiling for every one of
+    // bottoms/tops/shoes here, so the borrowing/ranking path should reach
+    // exactly that -- not fewer (getting stuck early) and not more
+    // (regression test for a prior bug where a discarded, unshown borrow
+    // candidate was still recorded against the reuse tracker, silently
+    // tightening the ceiling below what the wardrobe could actually support).
+    expect(results.length).toBe(4);
     const counts = new Map<string, number>();
     for (const outfit of results) {
       for (const outfitItem of outfit.items) {
