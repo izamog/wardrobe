@@ -285,14 +285,31 @@ describe('generateOutfitsWithItem', () => {
 
     // With Task 6's per-anchor caps, filtering to outfits containing `belt`
     // before diversifying means every outfit shares the same Belt anchor --
-    // without passing count through as the anchor caps too, that alone would
-    // cap the whole function's output at 1 regardless of the variety below.
+    // without exempting only the pinned item's own anchor id, that alone
+    // would cap the whole function's output at 1 regardless of the variety
+    // below (round 1's bug), or -- if the fix over-corrects by relaxing the
+    // cap for every anchor instead of just the pinned one (round 2's bug) --
+    // let the non-pinned Bottom anchor (bottom1 or bottom2) repeat across
+    // more outfits than its normal cap of 1 allows.
     const outfits = await generateOutfitsWithItem(db, belt, bounds);
 
     expect(outfits.length).toBeGreaterThan(1);
     for (const outfit of outfits) {
       expect(outfit.some((i) => i.id === 'the-belt')).toBe(true);
     }
+    // The non-pinned Bottom anchor must still respect its normal cap of 1 --
+    // this is what distinguishes "only the pinned anchor is exempted" from
+    // "every anchor's cap was relaxed" (round 2's over-correction): a
+    // fixture with 2 bottoms, each pairable with 2 tops, has 4 valid
+    // non-duplicate combos available, but only bottom1-once and
+    // bottom2-once should ever be selected, never e.g. bottom1 twice with a
+    // different top before bottom2 is ever tried.
+    const bottomIdsUsed = outfits.map(
+      (outfit) => outfit.find((i) => i.id === 'bottom1' || i.id === 'bottom2')!.id,
+    );
+    const bottomCounts = new Map<string, number>();
+    for (const id of bottomIdsUsed) bottomCounts.set(id, (bottomCounts.get(id) ?? 0) + 1);
+    for (const count of bottomCounts.values()) expect(count).toBeLessThanOrEqual(1);
   });
 
   it('does not require the item to have been logged unworn today, unlike generateTodayOutfits', async () => {

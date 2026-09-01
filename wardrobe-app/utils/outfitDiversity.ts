@@ -114,12 +114,26 @@ const MAX_OUTFITS_PER_ACCESSORY_ANCHOR = 1;
  * under the same bottom used to, so there is nothing left for a second,
  * repeat-combo pass to ever find (every anchor hits its cap the moment its
  * first, best candidate is taken).
+ *
+ * `exemptAnchorId`, when given, is never blocked by either cap — it can
+ * appear in the result set as many times as `usedCombos`/rank order
+ * otherwise allow. This is for the one caller that pre-filters `ranked` to
+ * outfits that all already share one specific anchor id
+ * (`generateOutfitsWithItem`, pinning the anchor for the item the user
+ * asked to build around): without the exemption, that anchor's own cap
+ * would silently limit the whole result set to `maxPerAnchor`/
+ * `maxPerAccessoryAnchor` outfits regardless of how much variety the other
+ * slots offer, since every candidate shares it. Every *other* primary/
+ * secondary anchor id keeps being capped normally — this is not a blanket
+ * relaxation of diversity, only a targeted exemption for the one id every
+ * candidate is already guaranteed to share.
  */
 export function selectDiverseOutfits(
   ranked: readonly ScoredOutfit[],
   count: number,
   maxPerAnchor: number = MAX_OUTFITS_PER_ANCHOR,
   maxPerAccessoryAnchor: number = MAX_OUTFITS_PER_ACCESSORY_ANCHOR,
+  exemptAnchorId?: string,
 ): ScoredOutfit[] {
   const selected: ScoredOutfit[] = [];
   const usedCombos = new Set<string>();
@@ -127,15 +141,19 @@ export function selectDiverseOutfits(
   const secondaryCounts = new Map<string, number>();
 
   const underPrimaryCap = (outfit: ScoredOutfit): boolean =>
-    primaryAnchorIds(outfit).every((id) => (primaryCounts.get(id) ?? 0) < maxPerAnchor);
+    primaryAnchorIds(outfit).every((id) => id === exemptAnchorId || (primaryCounts.get(id) ?? 0) < maxPerAnchor);
   const underSecondaryCap = (outfit: ScoredOutfit): boolean =>
-    secondaryAnchorIds(outfit).every((id) => (secondaryCounts.get(id) ?? 0) < maxPerAccessoryAnchor);
+    secondaryAnchorIds(outfit).every(
+      (id) => id === exemptAnchorId || (secondaryCounts.get(id) ?? 0) < maxPerAccessoryAnchor,
+    );
 
   for (const outfit of ranked) {
     if (selected.length >= count) return selected;
     if (usedCombos.has(coreComboKey(outfit)) || !underPrimaryCap(outfit) || !underSecondaryCap(outfit)) continue;
-    for (const id of primaryAnchorIds(outfit)) primaryCounts.set(id, (primaryCounts.get(id) ?? 0) + 1);
-    for (const id of secondaryAnchorIds(outfit)) secondaryCounts.set(id, (secondaryCounts.get(id) ?? 0) + 1);
+    for (const id of primaryAnchorIds(outfit))
+      if (id !== exemptAnchorId) primaryCounts.set(id, (primaryCounts.get(id) ?? 0) + 1);
+    for (const id of secondaryAnchorIds(outfit))
+      if (id !== exemptAnchorId) secondaryCounts.set(id, (secondaryCounts.get(id) ?? 0) + 1);
     usedCombos.add(coreComboKey(outfit));
     selected.push(outfit);
   }
