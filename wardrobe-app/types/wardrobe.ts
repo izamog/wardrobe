@@ -39,11 +39,15 @@ export type CategoryGroup =
  * utils/layering.ts for the layer pairs and utils/categories.ts for the
  * conflict rule.
  *
- * 'Pants' and 'Skirt' are the two Bottom-group categories — 'Pants' covers
- * trousers, jeans and shorts (anything below the waist that isn't a skirt).
- * 'Leggings' is a third: distinct from 'Pants' because it carries none of the
- * cut/fabric assumptions "Pants" does, but it fills the same outfit slot —
- * they share the 'Bottom' CategoryGroup (see CATEGORY_GROUP in
+ * 'Pants', 'Shorts' and 'Skirt' are three of the Bottom-group categories —
+ * 'Pants' covers trousers and jeans (anything below the waist, full-length
+ * and not a skirt). 'Shorts' used to be "Pants at 'Short' length" rather
+ * than its own category; it was split out per direct feedback, so it no
+ * longer carries a `length` field at all (always '' — see the `length`
+ * CHECK in services/migrations.ts) the way Pants/Leggings/Skirt/Dress do.
+ * 'Leggings' is a fourth: distinct from 'Pants' because it carries none of
+ * the cut/fabric assumptions "Pants" does, but it fills the same outfit
+ * slot — they share the 'Bottom' CategoryGroup (see CATEGORY_GROUP in
  * utils/categories.ts), which is the "Bottoms" umbrella: sibling categories
  * competing for the same outfit slot, the same relationship 'Shoes',
  * 'Sandals' and 'Boots' already have.
@@ -66,6 +70,7 @@ export type Category =
   | 'Coat'
   | 'Dress'
   | 'Pants'
+  | 'Shorts'
   | 'Leggings'
   | 'Skirt'
   | 'Shoes'
@@ -137,10 +142,16 @@ export type ItemColor =
 export type SleeveLength = 'Sleeveless' | 'Short' | 'Long';
 
 /**
- * How long a pair of trousers/shorts is. Skirt uses a different vocabulary
- * entirely (SkirtLength) — the two categories don't share a "length" concept
- * the way every Top-group category shares one "sleeve length" concept, so
- * this isn't a single flat union the way SleeveLength is.
+ * How long a pair of (full-length) trousers is — not Shorts, which is its
+ * own category with no `length` field at all (see Category's own doc
+ * comment). Skirt uses a different vocabulary entirely (SkirtLength) — the
+ * two categories don't share a "length" concept the way every Top-group
+ * category shares one "sleeve length" concept, so this isn't a single flat
+ * union the way SleeveLength is.
+ *
+ * 'Short' survives in this union even though real Shorts-length Pants are
+ * now their own category: existing data or a deliberate edge case (a very
+ * short pair still logged as 'Pants') isn't rejected outright.
  *
  * Each member here has a matching entry in the length CHECK constraint in
  * services/migrations.ts. Adding one means adding a migration.

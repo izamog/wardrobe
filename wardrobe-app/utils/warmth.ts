@@ -99,6 +99,12 @@ const CATEGORY_RANGE: Record<Category, { warmth: ScaleRange; wind: ScaleRange }>
   // still a single unlined layer, nowhere near a Bottom-plus-Top total.
   Dress: { warmth: { baseline: 2, max: 5 }, wind: { baseline: 1, max: 4 } },
   Pants: { warmth: { baseline: 3, max: 7 }, wind: { baseline: 2, max: 8 } },
+  // Split out from Pants (previously "Pants at 'Short' length") into its own
+  // category, per direct feedback — the old LENGTH_WARMTH_ADJUSTMENT/
+  // LENGTH_WIND_ADJUSTMENT 'Short' entries (-2 warmth, -3 wind) are baked in
+  // directly here instead, since Shorts no longer carries a `length` field
+  // to apply that adjustment through.
+  Shorts: { warmth: { baseline: 1, max: 5 }, wind: { baseline: 0, max: 5 } },
   // A thinner, close-knit relative of Pants: less bulk to trap air and
   // typically a stretch knit rather than a woven fabric, so both baseline
   // and ceiling sit below Pants even before a material is chosen.

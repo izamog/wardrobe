@@ -844,6 +844,83 @@ describe('v20 -> v21: a work-appropriate flag', () => {
   });
 });
 
+describe('v21 -> v22: Shorts split out of Pants into its own category', () => {
+  function v21Db(): DatabaseSync {
+    const db = freshDb();
+    for (const migration of MIGRATIONS.slice(0, 21)) db.exec(migration);
+    db.exec('PRAGMA user_version = 21;');
+    return db;
+  }
+
+  it('rejects a Shorts category before the migration runs', () => {
+    const db = v21Db();
+    expect(() =>
+      db
+        .prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+        .run('aaa', '', 'Shorts', 'then'),
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('accepts Shorts once migrated, and ALL_CATEGORIES includes it', async () => {
+    const db = v21Db();
+    await runMigrations(adapt(db));
+
+    expect(() =>
+      db
+        .prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+        .run('aaa', '', 'Shorts', 'then'),
+    ).not.toThrow();
+    expect(ALL_CATEGORIES).toContain('Shorts');
+  });
+
+  it('rejects a length on Shorts, the same as any other category with no length vocabulary', async () => {
+    const db = v21Db();
+    await runMigrations(adapt(db));
+
+    expect(() =>
+      db
+        .prepare('INSERT INTO ClothingItems (id, imagePath, category, length, createdAt) VALUES (?,?,?,?,?)')
+        .run('aaa', '', 'Shorts', 'Short', 'then'),
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it('auto-migrates existing Pants at Short length to the new Shorts category', async () => {
+    const db = v21Db();
+    db.prepare(
+      "INSERT INTO ClothingItems (id, imagePath, category, length, createdAt) VALUES ('aaa','', 'Pants', 'Short', 'then')",
+    ).run();
+    db.prepare(
+      "INSERT INTO ClothingItems (id, imagePath, category, length, createdAt) VALUES ('bbb','', 'Pants', 'Long', 'then')",
+    ).run();
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT category AS c, length AS l FROM ClothingItems WHERE id=?').get('aaa')).toEqual({
+      c: 'Shorts',
+      l: '',
+    });
+    // A full-length pair of Pants is untouched by the remap.
+    expect(db.prepare('SELECT category AS c, length AS l FROM ClothingItems WHERE id=?').get('bbb')).toEqual({
+      c: 'Pants',
+      l: 'Long',
+    });
+  });
+
+  it('keeps every verdict across this migration too', async () => {
+    const db = v21Db();
+    db.prepare('INSERT INTO ClothingItems (id, imagePath, category, createdAt) VALUES (?,?,?,?)')
+      .run('aaa', '', 'Top', 'then');
+    db.prepare("INSERT INTO ClothingItems (id, imagePath, category, length, createdAt) VALUES ('bbb','', 'Pants', 'Short', 'then')")
+      .run();
+    db.prepare('INSERT INTO Item_Compatibility VALUES (?,?,?,?,?)')
+      .run('p1', 'aaa', 'bbb', 'MATCH', '2026-01-01');
+
+    await runMigrations(adapt(db));
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM Item_Compatibility').get()).toEqual({ n: 1 });
+  });
+});
+
 describe('schema constraints', () => {
   let db: DatabaseSync;
   beforeEach(async () => {

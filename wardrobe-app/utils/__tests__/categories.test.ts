@@ -85,6 +85,7 @@ describe('getComplementaryCategories', () => {
       'Coat',
       'Dress',
       'Pants',
+      'Shorts',
       'Leggings',
       'Skirt',
       'Shoes',
@@ -196,8 +197,8 @@ describe('attribute applicability', () => {
     expect(ALL_CATEGORIES.filter(hardwareColorApplies)).toEqual(['Belt', 'Bag']);
   });
 
-  it('asks for belt loops on Pants and Skirt only', () => {
-    expect(ALL_CATEGORIES.filter(beltLoopsApply)).toEqual(['Pants', 'Skirt']);
+  it('asks for belt loops on Pants, Shorts and Skirt only', () => {
+    expect(ALL_CATEGORIES.filter(beltLoopsApply)).toEqual(['Pants', 'Shorts', 'Skirt']);
   });
 
   it('asks for sleeve length on Top-group, Outerwear-group and Dress categories only', () => {
@@ -248,6 +249,7 @@ describe('attribute applicability', () => {
       'Coat',
       'Dress',
       'Pants',
+      'Shorts',
       'Skirt',
       'Scarf',
     ]);
@@ -264,6 +266,7 @@ describe('attribute applicability', () => {
       'Coat',
       'Dress',
       'Pants',
+      'Shorts',
       'Leggings',
       'Skirt',
       'Scarf',

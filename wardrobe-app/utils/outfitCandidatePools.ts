@@ -330,9 +330,9 @@ export function shoeCandidatesFor(candidates: OutfitCandidates, warmthFloor: num
 }
 
 /**
- * Excludes true Shorts (Pants at 'Short' length) from the bottom/anchor pool
- * once any extra warmth is called for at all (warmthFloor > 0 — the same
- * cutoff shoeCandidatesFor already uses for Sandals).
+ * Excludes Shorts from the bottom/anchor pool once any extra warmth is
+ * called for at all (warmthFloor > 0 — the same cutoff shoeCandidatesFor
+ * already uses for Sandals).
  *
  * Not just a job for meetsLegFloor (outfitScoring.ts): a heavier material can
  * push Shorts' own warmth score up to exactly warmthFloor * LEG_WARMTH_FLOOR_FRACTION
@@ -350,7 +350,7 @@ export function shoeCandidatesFor(candidates: OutfitCandidates, warmthFloor: num
 export function bottomCandidatesFor(candidates: OutfitCandidates, warmthFloor: number): readonly ClothingItem[] {
   return excludesSleeveless(
     warmthFloor > 0
-      ? candidates.bottoms.filter((item) => !(item.category === 'Pants' && item.length === 'Short'))
+      ? candidates.bottoms.filter((item) => item.category !== 'Shorts')
       : candidates.bottoms,
     warmthFloor,
   );

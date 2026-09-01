@@ -15,6 +15,7 @@ export const ALL_CATEGORIES: Category[] = [
   'Coat',
   'Dress',
   'Pants',
+  'Shorts',
   'Leggings',
   'Skirt',
   'Shoes',
@@ -49,6 +50,7 @@ export const CATEGORY_GROUP: Record<Category, CategoryGroup> = {
   Coat: 'Outerwear',
   Dress: 'Dress',
   Pants: 'Bottom',
+  Shorts: 'Bottom',
   Leggings: 'Bottom',
   Skirt: 'Bottom',
   Shoes: 'Shoes',
@@ -137,9 +139,9 @@ export function hardwareColorApplies(category: Category): boolean {
   return category === 'Belt' || category === 'Bag';
 }
 
-/** Whether belt loops are worth recording. Pants and Skirt can both have them, and only those make a belt wearable. */
+/** Whether belt loops are worth recording. Pants, Shorts and Skirt can all have them, and only those make a belt wearable. */
 export function beltLoopsApply(category: Category): boolean {
-  return category === 'Pants' || category === 'Skirt';
+  return category === 'Pants' || category === 'Shorts' || category === 'Skirt';
 }
 
 /**

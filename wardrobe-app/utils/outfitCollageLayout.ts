@@ -188,6 +188,9 @@ const BUCKET_BY_CATEGORY: Record<Exclude<Category, 'Pants' | 'Skirt'>, Bucket> =
   Cardigan: 'cardigan',
   Sweater: 'sweater',
   Dress: 'dress',
+  // Always short by definition, unlike Pants/Skirt which split on their own
+  // length field — see bucketFor.
+  Shorts: 'shortBottom',
   Leggings: 'longBottom',
   Shoes: 'shoes',
   Boots: 'shoes',

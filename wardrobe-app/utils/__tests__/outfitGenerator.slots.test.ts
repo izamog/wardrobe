@@ -272,8 +272,7 @@ describe('generateOutfits: Shorts are excluded once any extra warmth is needed',
     // offerTights in outfitSlots.ts's buildSlots), so bottomCandidatesFor
     // excludes them outright once warmthFloor > 0, the same way
     // shoeCandidatesFor already excludes Sandals.
-    const shorts = item('Pants', {
-      length: 'Short',
+    const shorts = item('Shorts', {
       inferredWarmth: 2,
       inferredWind: 0,
     });
@@ -291,13 +290,11 @@ describe('generateOutfits: Shorts are excluded once any extra warmth is needed',
     );
 
     expect(results.length).toBeGreaterThan(0);
-    expect(results.every((outfit) => !outfit.some((i) => i.category === 'Pants' && i.length === 'Short'))).toBe(
-      true,
-    );
+    expect(results.every((outfit) => !outfit.some((i) => i.category === 'Shorts'))).toBe(true);
   });
 
   it('still offers Shorts when no extra warmth is needed at all', () => {
-    const shorts = item('Pants', { length: 'Short', inferredWarmth: 2, inferredWind: 0 });
+    const shorts = item('Shorts', { inferredWarmth: 2, inferredWind: 0 });
     const top = item('T-Shirt');
     const shoes = item('Shoes');
 
@@ -310,7 +307,7 @@ describe('generateOutfits: Shorts are excluded once any extra warmth is needed',
     );
 
     expect(results).toHaveLength(1);
-    expect(results[0].some((i) => i.category === 'Pants' && i.length === 'Short')).toBe(true);
+    expect(results[0].some((i) => i.category === 'Shorts')).toBe(true);
   });
 });
 
