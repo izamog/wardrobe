@@ -58,7 +58,7 @@ export const SCARF_PREFERRED_WARMTH_FLOOR = 7;
  * as odd, not practical; colder than that, Tights-under-trousers is a real
  * layering habit worth offering.
  */
-const TIGHTS_UNDER_TROUSERS_WARMTH_FLOOR = 18;
+export const TIGHTS_UNDER_TROUSERS_WARMTH_FLOOR = 18;
 
 export interface Slot {
   candidates: ClothingItem[];
@@ -179,6 +179,16 @@ function isDressAnchor(anchor: ClothingItem): boolean {
   return anchor.category === 'Dress';
 }
 
+/** Whether Tights are offered under this anchor at all — the exact condition buildSlots already gates its own Tights slot on, pulled out so warmthTopUp.ts can reuse it. */
+export function tightsEligible(anchor: ClothingItem, warmthFloor: number): boolean {
+  const isDress = isDressAnchor(anchor);
+  const isTrousers = anchor.category === 'Pants' || anchor.category === 'Leggings';
+  return (
+    warmthFloor > 0 &&
+    ((isDress || anchor.category === 'Skirt') || (isTrousers && warmthFloor > TIGHTS_UNDER_TROUSERS_WARMTH_FLOOR))
+  );
+}
+
 /**
  * The slots a search considers after the anchor (Bottom or Dress), in a
  * fixed order, given what this particular anchor and today's weather need.
@@ -244,10 +254,7 @@ export function buildSlots(
   wornDaysAgo: ReadonlyMap<string, number> = new Map(),
 ): Slot[] {
   const isDress = isDressAnchor(anchor);
-  const isTrousers = anchor.category === 'Pants' || anchor.category === 'Leggings';
-  const offerTights =
-    warmthFloor > 0 &&
-    ((isDress || anchor.category === 'Skirt') || (isTrousers && warmthFloor > TIGHTS_UNDER_TROUSERS_WARMTH_FLOOR));
+  const offerTights = tightsEligible(anchor, warmthFloor);
 
   return [
     {
