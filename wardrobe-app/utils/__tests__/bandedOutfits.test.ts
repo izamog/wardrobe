@@ -239,19 +239,26 @@ describe('selectBandedOutfits', () => {
   });
 
   it('picks warmer last (and cooler gets priority) at or above the 20°C neutral point', () => {
-    // One dominant Sweater+Jacket pairing that wins for almost every
-    // Bottom, plus enough genuine alternates (3 more Sweaters, 3 more
-    // Jackets -- 4 distinct Sweaters/Jackets total, cap-2 reuse each = 8
-    // Top-slots of total supply) that the last-processed band still has a
-    // fresh, valid alternative to route to, rather than the fixture itself
-    // being mathematically incapable of supplying all 3 bands x 2 outfits
-    // (6 total demand) regardless of ranking strategy -- see task-3-report.md
-    // for the supply/demand proof that motivated widening this fixture
-    // from the plan's original 2-Sweater/2-Jacket version.
+    // One dominant Sweater+Jacket pairing, plus exactly 2 genuine
+    // alternates (2 more Sweaters, 2 more Jackets -- 3 distinct
+    // Sweaters/Jackets total, cap-2 reuse each = 6 Top-slots of total
+    // supply, EXACTLY matching the 6 total demand across 3 bands x 2
+    // outfits). Tight on purpose, not oversupplied: verified empirically
+    // (see task-3-report.md) that with the freshness tier stripped from
+    // rankNow (reverting to plain meetsTarget -> distance-to-center, the
+    // pre-fix behavior), median and cooler's own pure-distance top picks
+    // exhaust the dominant pairing's reuse budget before warmer's turn,
+    // dropping warmer to 1 valid pick instead of 2 -- hence asserting
+    // exactly 2, not just >0. Earlier fixture attempts: a 2-Sweater/2-Jacket
+    // version (the plan's original) was mathematically unsatisfiable even
+    // with the real fix (4 Top-slots against 6 demand); a 4-Sweater/4-Jacket
+    // version was oversupplied enough (8 slots) that pickUpTo's linear
+    // skip-and-continue over violatesUniqueness found a valid fresh entry
+    // regardless of sort order, making the freshness tier not load-bearing.
     const dominantTop = item('Sweater', { id: 'dominant-top', inferredWarmth: 10 });
     const dominantJacket = item('Jacket', { id: 'dominant-jacket', inferredWarmth: 10 });
-    const altTops = Array.from({ length: 3 }, (_, i) => item('Sweater', { id: `alt-top-${i}`, inferredWarmth: 9 - i }));
-    const altJackets = Array.from({ length: 3 }, (_, i) => item('Jacket', { id: `alt-jacket-${i}`, inferredWarmth: 9 - i }));
+    const altTops = Array.from({ length: 2 }, (_, i) => item('Sweater', { id: `alt-top-${i}`, inferredWarmth: 9 - i }));
+    const altJackets = Array.from({ length: 2 }, (_, i) => item('Jacket', { id: `alt-jacket-${i}`, inferredWarmth: 9 - i }));
     const bottoms = Array.from({ length: 6 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: 4 + i }));
     const shoes = Array.from({ length: 4 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: i }));
     const bags = Array.from({ length: 4 }, (_, i) => item('Bag', { id: `bag-${i}`, inferredWarmth: i }));
@@ -262,34 +269,43 @@ describe('selectBandedOutfits', () => {
       shoes,
       bags,
     });
-    // warmthFloor 0 -> at/above 20°C neutral -> warmer goes last.
-    const bands = splitIntoWarmthBands(0, 40);
+    // warmthFloor 0 -> at/above 20°C neutral -> warmer goes last. (0-30,
+    // not 0-40: verified empirically to be the range where this specific
+    // item/bottom fixture is actually load-bearing for warmer.)
+    const bands = splitIntoWarmthBands(0, 30);
 
     const results = selectBandedOutfits(candidates, noDismatches, 0, NO_CEILING, 0, bands);
 
     const bandTags = results.map((o) => o.band);
     expect(bandTags.slice(0, 2)).toEqual(['median', 'median']);
-    // warmer (picked last here) should still find a *meetsTarget* outfit,
-    // built around the alternate Sweater/Jacket pairing once the dominant
-    // one is used up -- not silently fall back to an invalid one while a
-    // valid alternative exists in the wardrobe.
+    // warmer (picked last here) should still fill both of its slots with a
+    // *meetsTarget* outfit, routed to a still-fresh alternate Sweater/Jacket
+    // pairing once the dominant one's reuse budget is claimed -- asserting
+    // the exact count (not just >0) is what makes this a real regression
+    // guard given the exactly-matching 6-slot supply/6-outfit demand above.
     const warmerPicks = results.filter((o) => o.band === 'warmer');
-    expect(warmerPicks.length).toBeGreaterThan(0);
+    expect(warmerPicks.length).toBe(2);
     for (const outfit of warmerPicks) {
       expect(outfit.meetsTarget).toBe(true);
     }
   });
 
   it('picks cooler last (and warmer gets priority) below the 20°C neutral point', () => {
-    // Same widened fixture as the "picks warmer last" test above (4
-    // distinct Sweaters/Jackets, cap-2 reuse each = 8 Top-slots of supply
-    // against 6 total demand) -- see that test's comment and
-    // task-3-report.md for why the plan's original 2-Sweater/2-Jacket
-    // fixture was mathematically unsatisfiable regardless of ranking.
-    const dominantTop = item('Sweater', { id: 'dominant-top', inferredWarmth: 10 });
-    const dominantJacket = item('Jacket', { id: 'dominant-jacket', inferredWarmth: 10 });
-    const altTops = Array.from({ length: 3 }, (_, i) => item('Sweater', { id: `alt-top-${i}`, inferredWarmth: 9 - i }));
-    const altJackets = Array.from({ length: 3 }, (_, i) => item('Jacket', { id: `alt-jacket-${i}`, inferredWarmth: 9 - i }));
+    // Same tight, exactly-matching-supply-and-demand item-count shape as
+    // the "picks warmer last" test above (3 distinct Sweaters/Jackets,
+    // cap-2 reuse each = exactly 6 Top-slots of supply against exactly 6
+    // total demand) -- see that test's comment and task-3-report.md for
+    // the full rationale and the fixture attempts this replaces. Uses
+    // different warmth values (12/11/9 instead of 10/9/8) and a different
+    // band range (5-35 instead of 0-30) than that test: verified
+    // empirically to be the specific combination where this fixture shape
+    // is actually load-bearing for cooler (with the freshness tier
+    // stripped, cooler drops to 1 valid pick instead of 2) rather than for
+    // warmer.
+    const dominantTop = item('Sweater', { id: 'dominant-top', inferredWarmth: 12 });
+    const dominantJacket = item('Jacket', { id: 'dominant-jacket', inferredWarmth: 12 });
+    const altTops = [11, 9].map((w, i) => item('Sweater', { id: `alt-top-${i}`, inferredWarmth: w }));
+    const altJackets = [11, 9].map((w, i) => item('Jacket', { id: `alt-jacket-${i}`, inferredWarmth: w }));
     const bottoms = Array.from({ length: 6 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: 4 + i }));
     const shoes = Array.from({ length: 4 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: i }));
     const bags = Array.from({ length: 4 }, (_, i) => item('Bag', { id: `bag-${i}`, inferredWarmth: i }));
@@ -301,12 +317,16 @@ describe('selectBandedOutfits', () => {
       bags,
     });
     // warmthFloor 5 (> 0) -> below 20°C neutral -> cooler goes last.
-    const bands = splitIntoWarmthBands(5, 45);
+    const bands = splitIntoWarmthBands(5, 35);
 
     const results = selectBandedOutfits(candidates, noDismatches, 5, NO_CEILING, 0, bands);
 
+    // cooler (picked last here) should still fill both of its slots with a
+    // *meetsTarget* outfit -- asserting the exact count (not just >0) is
+    // what makes this a real regression guard, same reasoning as the
+    // "picks warmer last" test above.
     const coolerPicks = results.filter((o) => o.band === 'cooler');
-    expect(coolerPicks.length).toBeGreaterThan(0);
+    expect(coolerPicks.length).toBe(2);
     for (const outfit of coolerPicks) {
       expect(outfit.meetsTarget).toBe(true);
     }
