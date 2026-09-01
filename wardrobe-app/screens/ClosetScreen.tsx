@@ -10,6 +10,7 @@ import { chunkIntoRows, ItemGridRow } from '../components/ItemGrid';
 import { useDbQuery } from '../hooks/useDbQuery';
 import { archiveItems, listItems, setItemFlags } from '../services/items';
 import { withDb } from '../services/database';
+import { exportWardrobeCsv } from '../services/wardrobeExport';
 import { ALL_CATEGORIES } from '../utils/categories';
 import { CLOSET_SORT_LABELS, sortItems, type ClosetSort } from '../utils/closetSort';
 import { useTodayData } from '../contexts/TodayDataContext';
@@ -147,7 +148,17 @@ function SelectionBar({
  * default the header slot itself provides, since that default was what
  * "too close to the side of the screen" was reported against.
  */
-function ClosetHeaderLeft({ navigation, selecting }: { navigation: ClosetNav; selecting: boolean }) {
+function ClosetHeaderLeft({
+  navigation,
+  selecting,
+  exporting,
+  onExport,
+}: {
+  navigation: ClosetNav;
+  selecting: boolean;
+  exporting: boolean;
+  onExport: () => void;
+}) {
   if (selecting) return null;
   return (
     <View className="flex-row items-center">
@@ -159,6 +170,24 @@ function ClosetHeaderLeft({ navigation, selecting }: { navigation: ClosetNav; se
         className="pl-3 pr-2 py-1"
       >
         <Ionicons name="camera-outline" size={22} color="#1A1714" />
+      </Pressable>
+      {/* Exports every non-archived item as a CSV via the native share sheet
+          — for handing your closet's data over when reporting an outfit-
+          recommendation bug, not a mainstream feature, hence tucked in here
+          rather than given its own screen. See services/wardrobeExport.ts. */}
+      <Pressable
+        onPress={onExport}
+        disabled={exporting}
+        accessibilityRole="button"
+        accessibilityLabel="Export wardrobe as CSV"
+        hitSlop={12}
+        className="px-2 py-1"
+      >
+        {exporting ? (
+          <ActivityIndicator size="small" color="#1A1714" />
+        ) : (
+          <Ionicons name="share-outline" size={22} color="#1A1714" />
+        )}
       </Pressable>
       <Pressable
         onPress={() => navigation.navigate('Archive')}
@@ -447,6 +476,7 @@ export function ClosetScreen() {
     useSelection();
   const [archiving, setArchiving] = useState(false);
   const [marking, setMarking] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const { data: items, error, loading, reload } = useDbQuery((db) => listItems(db, filter), [filter]);
   const sortedItems = useMemo(() => (items ? sortItems(items, sort) : items), [items, sort]);
@@ -461,9 +491,29 @@ export function ClosetScreen() {
     invalidateToday();
   };
 
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const allItems = await withDb((db) => listItems(db, null));
+      await exportWardrobeCsv(allItems);
+    } catch (e) {
+      console.error('Failed to export wardrobe:', e);
+      Alert.alert('Could not export', 'The wardrobe export failed. Try again.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   useLayoutEffect(() => {
     navigation.setOptions({
-      headerLeft: () => <ClosetHeaderLeft navigation={navigation} selecting={selecting} />,
+      headerLeft: () => (
+        <ClosetHeaderLeft
+          navigation={navigation}
+          selecting={selecting}
+          exporting={exporting}
+          onExport={() => void handleExport()}
+        />
+      ),
       headerRight: () => (
         <ClosetHeaderRight
           selecting={selecting}
@@ -474,7 +524,7 @@ export function ClosetScreen() {
       ),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation, selecting, sort]);
+  }, [navigation, selecting, sort, exporting]);
 
   return (
     <View className="flex-1 bg-paper">
