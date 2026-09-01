@@ -770,6 +770,9 @@ export async function getLatestLoggedOutfit(
   return listItemsByIds(db, parseStringArrayColumn(row.itemIds));
 }
 
+/** The widest recentWearDays window this app has any use for -- a year of history, generously. Rejects anything past it rather than scanning Outfit_Logs against an unbounded or absurd cutoff. */
+const MAX_RECENT_WEAR_WINDOW_DAYS = 366;
+
 /**
  * itemId -> days since it was last worn, for every item logged within the
  * last `windowDays` of `today` (both YYYY-MM-DD) -- feeds the recency
@@ -785,7 +788,12 @@ export async function recentWearDays(
   today: string,
   windowDays: number = 30,
 ): Promise<Map<string, number>> {
-  if (!isValidDateString(today) || !Number.isFinite(windowDays) || windowDays < 0) {
+  if (
+    !isValidDateString(today) ||
+    !Number.isInteger(windowDays) ||
+    windowDays < 0 ||
+    windowDays > MAX_RECENT_WEAR_WINDOW_DAYS
+  ) {
     throw new Error('Invalid recent-wear query');
   }
 

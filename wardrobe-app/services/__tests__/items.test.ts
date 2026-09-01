@@ -997,6 +997,14 @@ describe('recentWearDays', () => {
     await expect(recentWearDays(db, '2026-08-31', Infinity)).rejects.toThrow('Invalid recent-wear query');
   });
 
+  it('throws when windowDays is fractional or exceeds the domain-appropriate maximum', async () => {
+    const db = await freshDb();
+    await expect(recentWearDays(db, '2026-08-31', 30.5)).rejects.toThrow('Invalid recent-wear query');
+    await expect(recentWearDays(db, '2026-08-31', 367)).rejects.toThrow('Invalid recent-wear query');
+    // The boundary itself is still valid.
+    await expect(recentWearDays(db, '2026-08-31', 366)).resolves.toBeInstanceOf(Map);
+  });
+
   it('skips rows with future dates', async () => {
     const db = await freshDb();
     await logOutfitWorn(db, ['item-a'], '2026-08-25', 'log-past', '2026-08-25T09:00:00.000Z');
