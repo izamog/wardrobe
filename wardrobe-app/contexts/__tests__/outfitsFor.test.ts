@@ -78,9 +78,17 @@ describe('outfitsFor', () => {
       item('Skirt', { id: 'skirt-0', inferredWarmth: 0 }),
       item('Skirt', { id: 'skirt-1', inferredWarmth: 0 }),
     ];
+    // Shoes/Bags given distinct (if scoring-irrelevant) warmth values too --
+    // not identical apart from id -- so the accessory slots resolve
+    // deterministically rather than through the random fair-tiebreak
+    // shuffle used for genuine ties (see rankWithFairTiebreak in
+    // outfitCandidatePools.ts). The someMeetTarget/someDoNot assertion
+    // below only ever depends on which Bottom (Pants vs Skirt) is chosen,
+    // so this doesn't change what's being tested -- it just removes an
+    // unrelated source of nondeterminism from the test run.
     const tops = Array.from({ length: 6 }, (_, i) => item('Sweater', { id: `top-${i}`, inferredWarmth: 15 + i }));
-    const shoes = Array.from({ length: 6 }, (_, i) => item('Shoes', { id: `shoes-${i}` }));
-    const bags = Array.from({ length: 6 }, (_, i) => item('Bag', { id: `bag-${i}` }));
+    const shoes = Array.from({ length: 6 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: i }));
+    const bags = Array.from({ length: 6 }, (_, i) => item('Bag', { id: `bag-${i}`, inferredWarmth: i }));
     const candidates: TodayCandidates = {
       candidates: emptyCandidates({ bottoms: [...validPants, ...invalidSkirts], tops, shoes, bags }),
       dismatchedKeys: new Set(),
@@ -162,8 +170,13 @@ describe('outfitsFor threads wornDaysAgo into selectBandedOutfits', () => {
 
     const result = outfitsFor(todayCandidates, 20, 0);
 
-    const withFreshBag = result.shown.some((outfit) => outfit.items.some((i) => i.id === 'fresh-bag'));
-    expect(withFreshBag).toBe(true);
+    // A single Pants/T-Shirt/Shoes combination -- only the Bag choice can
+    // vary, so this deterministically shows recency is what picked
+    // fresh-bag over worn-bag, not just that fresh-bag happens to appear
+    // somewhere among several outfits.
+    const bagIds = result.shown.flatMap((outfit) => outfit.items.filter((i) => i.category === 'Bag').map((i) => i.id));
+    expect(bagIds).toContain('fresh-bag');
+    expect(bagIds).not.toContain('worn-bag');
   });
 });
 
