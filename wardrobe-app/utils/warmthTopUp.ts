@@ -73,9 +73,7 @@ export function topUpToward(
     : [];
 
   const closestBy = (pool: readonly ClothingItem[]): ClothingItem | undefined =>
-    [...pool].sort((a, b) => Math.abs(a.inferredWarmth - 0) - Math.abs(b.inferredWarmth - 0)).length > 0
-      ? [...pool].sort((a, b) => b.inferredWarmth - a.inferredWarmth)[0]
-      : undefined;
+    [...pool].sort((a, b) => b.inferredWarmth - a.inferredWarmth)[0];
 
   const scarf = closestBy(scarfCandidates);
   const tights = closestBy(tightsCandidates);
