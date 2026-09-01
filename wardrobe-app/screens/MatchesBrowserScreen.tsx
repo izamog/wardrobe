@@ -1,10 +1,11 @@
-import React from 'react';
-import { ActivityIndicator, FlatList, Text, View } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { ActivityIndicator, FlatList, ScrollView, Text, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { EmptyState } from '../components/EmptyState';
 import { ItemPhotoBackdrop } from '../components/ItemPhotoBackdrop';
 import { StoredImage } from '../components/StoredImage';
+import { Chip } from '../components/Chip';
 import { chunkIntoRows, ItemGridRow, type Badge } from '../components/ItemGrid';
 import { useDbQuery } from '../hooks/useDbQuery';
 import {
@@ -15,10 +16,10 @@ import {
   setCompatibility,
 } from '../services/items';
 import { withDb } from '../services/database';
-import { getComplementaryCategories } from '../utils/categories';
+import { ALL_CATEGORIES, getComplementaryCategories } from '../utils/categories';
 import { isCompatibleCandidate } from '../utils/pairs';
 import type { RootStackParamList } from '../navigation/types';
-import type { ClothingItem, CompatibilityStatus } from '../types/wardrobe';
+import type { Category, ClothingItem, CompatibilityStatus } from '../types/wardrobe';
 
 /**
  * Tapping a tile toggles DISMATCH on or off — an X appears, tapping again
@@ -38,6 +39,48 @@ function nextStatus(current: CompatibilityStatus | null): CompatibilityStatus | 
 const badgeFor = (status: CompatibilityStatus | null): Badge =>
   status === 'MATCH' ? 'match' : status === 'DISMATCH' ? 'dismatch' : 'unrated';
 
+/**
+ * The category filter row: an "All" chip plus one per category actually
+ * present among `candidates` — dynamic, not the full ALL_CATEGORIES list,
+ * so a Top's own matches screen never offers a "Top" chip to filter by
+ * (getComplementaryCategories already excludes same-slot categories from
+ * `candidates` in the first place; this row only ever shows what could
+ * genuinely appear). Multi-select: `selected` empty means "All" (every
+ * chip unselected shows everything, the same as explicitly picking "All").
+ */
+function CategoryFilterBar({
+  candidates,
+  selected,
+  onToggle,
+  onClear,
+}: {
+  candidates: readonly ClothingItem[];
+  selected: ReadonlySet<Category>;
+  onToggle: (category: Category) => void;
+  onClear: () => void;
+}) {
+  const present = useMemo(() => new Set(candidates.map((c) => c.category)), [candidates]);
+  const availableCategories = ALL_CATEGORIES.filter((category) => present.has(category));
+
+  if (availableCategories.length === 0) return null;
+
+  return (
+    <View className="border-b border-rule bg-paper">
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerClassName="px-3 pt-4 pb-3">
+        <Chip label="All" selected={selected.size === 0} onPress={onClear} />
+        {availableCategories.map((category) => (
+          <Chip
+            key={category}
+            label={category}
+            selected={selected.has(category)}
+            onPress={() => onToggle(category)}
+          />
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
 interface BrowserData {
   item: ClothingItem | null;
   candidates: ClothingItem[];
@@ -47,6 +90,10 @@ interface BrowserData {
 export function MatchesBrowserScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { itemId } = useRoute<RouteProp<RootStackParamList, 'MatchesBrowser'>>().params;
+  // Screen-local, not persisted: matches the same reasoning as Closet's own
+  // category filter (see ClosetScreen.tsx) — a filter this deliberate is
+  // worth re-choosing each visit.
+  const [selectedCategories, setSelectedCategories] = useState<Set<Category>>(new Set());
 
   const { data, error, loading, reload } = useDbQuery<BrowserData>(async (db) => {
     const item = await getItem(db, itemId);
@@ -90,6 +137,20 @@ export function MatchesBrowserScreen() {
     }
   }
 
+  function toggleCategory(category: Category) {
+    setSelectedCategories((current) => {
+      const next = new Set(current);
+      if (next.has(category)) next.delete(category);
+      else next.add(category);
+      return next;
+    });
+  }
+
+  const filteredCandidates =
+    selectedCategories.size === 0
+      ? data.candidates
+      : data.candidates.filter((candidate) => selectedCategories.has(candidate.category));
+
   return (
     <View className="flex-1 bg-paper">
       {/* A small reminder of what's being dismatched against — the header's
@@ -109,14 +170,24 @@ export function MatchesBrowserScreen() {
           Tap an item to mark it a dismatch against {data.item.brand}. Tap again to remove it.
         </Text>
       </View>
+      <CategoryFilterBar
+        candidates={data.candidates}
+        selected={selectedCategories}
+        onToggle={toggleCategory}
+        onClear={() => setSelectedCategories(new Set())}
+      />
       <FlatList
-        data={chunkIntoRows(data.candidates)}
+        data={chunkIntoRows(filteredCandidates)}
         keyExtractor={(row) => row[0]?.id ?? 'empty'}
         contentContainerClassName="grow"
         ListEmptyComponent={
           <EmptyState
-            title="Nothing to match against yet"
-            detail="Add items in other categories first."
+            title={selectedCategories.size === 0 ? 'Nothing to match against yet' : 'Nothing in the selected categories'}
+            detail={
+              selectedCategories.size === 0
+                ? 'Add items in other categories first.'
+                : 'Try selecting a different category, or tap All to see everything again.'
+            }
           />
         }
         renderItem={({ item: row }) => (
