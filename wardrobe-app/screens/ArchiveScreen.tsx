@@ -5,6 +5,7 @@ import { StoredImage } from '../components/StoredImage';
 import { useDbQuery } from '../hooks/useDbQuery';
 import { listArchivedItems, restoreItem } from '../services/items';
 import { withDb } from '../services/database';
+import { useTodayData } from '../contexts/TodayDataContext';
 import { ARCHIVE_RETENTION_DAYS } from '../services/itemActions';
 import { daysSince } from '../utils/date';
 import type { ClothingItem } from '../types/wardrobe';
@@ -69,12 +70,17 @@ function ArchiveRow({
 export function ArchiveScreen() {
   const { data: items, error, loading, reload } = useDbQuery((db) => listArchivedItems(db), []);
   const [restoringId, setRestoringId] = useState<string | null>(null);
+  const { reload: reloadToday } = useTodayData();
 
   async function restore(item: ClothingItem) {
     setRestoringId(item.id);
     try {
       await withDb((db) => restoreItem(db, item.id));
       await reload();
+      // A restored item is eligible for Today again -- see TodayDataContext's
+      // own doc comment for why nothing refreshes its cached candidate pool
+      // on its own.
+      reloadToday();
     } catch (e) {
       console.error('Failed to restore item:', e);
       Alert.alert('Could not restore', 'The item is still archived. Please try again.');

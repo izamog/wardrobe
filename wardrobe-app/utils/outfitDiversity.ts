@@ -77,6 +77,15 @@ function coreComboKey(outfit: ScoredOutfit): string {
  * separately-escalating cap: a repeated coat is exactly the same kind of
  * "read as the same outfit twice" complaint as a repeated bottom, worth
  * fixing on the same priority as Bottom/Dress, not after it.
+ *
+ * Top deliberately does NOT join this tier, even though the same "read as
+ * one outfit repeated" complaint applies to it too (see SECONDARY_ANCHOR_
+ * GROUPS' own doc comment for where it actually landed and why) — tried
+ * here first, then moved: sharing one escalating cap number with Bottom/
+ * Outerwear meant that whatever cap Bottom's own diversity needed to reach
+ * (which can go as high as `count`) was also how far Top's cap opened up,
+ * so a Top that ties for best-ranked across most Bottoms could still repeat
+ * as many times as Bottom's own escalation required, defeating the point.
  */
 const PRIMARY_ANCHOR_GROUPS: ReadonlySet<CategoryGroup> = new Set<CategoryGroup>(['Bottom', 'Dress', 'Outerwear']);
 
@@ -84,10 +93,10 @@ const PRIMARY_ANCHOR_GROUPS: ReadonlySet<CategoryGroup> = new Set<CategoryGroup>
  * The groups tracked as a "secondary" anchor -- capped independently of
  * PRIMARY_ANCHOR_GROUPS, and only relaxed once the primary cap has already
  * reached its own ceiling (see rankedDiverseOutfits' escalation loop). A
- * repeated bag, belt or pair of shoes is a milder version of the same "same
- * outfit twice" complaint the primary tier exists for, but strictly less bad
- * than a repeated bottom, dress or coat — so every way to fix the primary
- * tier is exhausted before this tier is ever allowed to relax.
+ * repeated bag, belt, pair of shoes or top is a milder version of the same
+ * "same outfit twice" complaint the primary tier exists for, but strictly
+ * less bad than a repeated bottom, dress or coat — so every way to fix the
+ * primary tier is exhausted before this tier is ever allowed to relax.
  *
  * Shoes joined Bag/Belt here for the same reason Outerwear joined
  * CORE_GROUPS above: once Shoes started counting toward combo identity, a
@@ -95,15 +104,27 @@ const PRIMARY_ANCHOR_GROUPS: ReadonlySet<CategoryGroup> = new Set<CategoryGroup>
  * result list with boot variants of a single Top+Bottom pairing before a
  * genuinely different Bottom was ever tried — this cap is what keeps that in
  * check, exactly the way it already does for a repeated Bag.
+ *
+ * Reported bug (v3): Top had no cap at all -- coreComboKey includes it, so a
+ * repeated Top paired with a *different* Bottom still counted as a
+ * genuinely different combo (correctly), but nothing stopped the search's
+ * own best-ranked Top from independently winning that same tie for every
+ * Bottom's own buildSlots call, since Top contributes 0 warmth either way
+ * and so ties near-identically across most Bottoms — five or six outfits
+ * anchored on genuinely different Bottoms, every one wearing the identical
+ * sweater. Landed here rather than in PRIMARY_ANCHOR_GROUPS specifically so
+ * its own cap stays independent of however far Bottom/Outerwear need to
+ * escalate — see PRIMARY_ANCHOR_GROUPS' own doc comment for the version
+ * that shared the cap and why that didn't hold Top down.
  */
-const SECONDARY_ANCHOR_GROUPS: ReadonlySet<CategoryGroup> = new Set<CategoryGroup>(['Bag', 'Belt', 'Shoes']);
+const SECONDARY_ANCHOR_GROUPS: ReadonlySet<CategoryGroup> = new Set<CategoryGroup>(['Bag', 'Belt', 'Shoes', 'Top']);
 
 /** Every primary-anchor item id present in this outfit -- almost always exactly one (the Bottom/Dress anchor the search picks), plus Outerwear when present. */
 function primaryAnchorIds(outfit: ScoredOutfit): string[] {
   return outfit.items.filter((item) => PRIMARY_ANCHOR_GROUPS.has(CATEGORY_GROUP[item.category])).map((item) => item.id);
 }
 
-/** Every secondary-anchor item id present in this outfit (Bag, Belt) -- zero, one, or two. */
+/** Every secondary-anchor item id present in this outfit (Top, Bag, Belt, Shoes) -- Top and Shoes are always present, Bag/Belt only when the outfit called for them. */
 function secondaryAnchorIds(outfit: ScoredOutfit): string[] {
   return outfit.items.filter((item) => SECONDARY_ANCHOR_GROUPS.has(CATEGORY_GROUP[item.category])).map((item) => item.id);
 }
@@ -258,25 +279,68 @@ export function rankedDiverseOutfits(
     wornDaysAgo,
   );
 
-  const meetsCount = (outfits: ScoredOutfit[]): boolean =>
-    outfits.filter((outfit) => outfit.meetsTarget).length >= minMeetsTarget;
+  const meetsTargetCount = (outfits: ScoredOutfit[]): number =>
+    outfits.filter((outfit) => outfit.meetsTarget).length;
 
   let selected = selectDiverseOutfits(ranked, count);
-  if (meetsCount(selected)) return selected;
+  if (meetsTargetCount(selected) >= minMeetsTarget) return selected;
+
+  // Reported bug: a wardrobe that can never produce minMeetsTarget outfits
+  // meeting the weather target at all -- for reasons entirely unrelated to
+  // anchor diversity, e.g. too few bottoms warm enough for today -- made
+  // both escalation phases below climb all the way to `count` anyway,
+  // since relaxing maxPerAnchor/maxPerAccessoryAnchor was the only lever
+  // either loop had, even though relaxing those caps can never change how
+  // many outfits meet the weather target (that's warmthFloor/Ceiling/
+  // windFloor's job, untouched by anything below). The result: every anchor
+  // cap maxed out for nothing, so Today showed the same Top+Shoes in all 6
+  // slots even though the wardrobe had real Bottom/Bag variety a much
+  // lower cap would have kept intact.
+  //
+  // achievableTarget is the most outfits meeting target this wardrobe can
+  // ever produce, at any cap level (the fully-relaxed selection is a valid
+  // upper bound: every cap below it is strictly more restrictive on which
+  // combos survive coreComboKey's dedup, never less). Escalation below
+  // stops as soon as it reaches that ceiling, not the original
+  // minMeetsTarget, so a wardrobe that can only ever meet target 3 times
+  // stops trying at whatever cap first reaches 3 -- often the strict
+  // pass itself -- instead of needlessly maxing out every cap chasing a
+  // floor it was never going to reach.
+  //
+  // A wardrobe that can't meet target even once (achievableTarget 0) is a
+  // different case, not a "stop immediately" one: outfitsFor's own fallback
+  // shows the *whole* returned list once nothing meets target (see its own
+  // doc comment), so escalation must still climb toward `count` there --
+  // achievableCount is that same ceiling for plain outfit count, so this
+  // wardrobe still gets as many closest-available alternatives as it can
+  // support, not just whatever the strict pass alone happened to find.
+  const fullyRelaxed = selectDiverseOutfits(ranked, count, count, count);
+  const achievableTarget = Math.min(minMeetsTarget, meetsTargetCount(fullyRelaxed));
+  // Only the achievableTarget === 0 case switches the goal to plain count --
+  // whenever some nonzero number of outfits CAN meet target, reaching that
+  // number is still the only goal (unchanged from before this fix): trading
+  // away more variety than needed just to also pad the list out to `count`
+  // is exactly the over-escalation this fix exists to stop.
+  const reachedAchievable: (outfits: ScoredOutfit[]) => boolean =
+    achievableTarget > 0
+      ? (outfits) => meetsTargetCount(outfits) >= achievableTarget
+      : (outfits) => outfits.length >= Math.min(count, fullyRelaxed.length);
+
+  if (reachedAchievable(selected)) return selected;
 
   // Phase 1: relax the primary (Bottom/Dress/Outerwear) cap first -- a
   // repeated coat is a worse outcome than a repeated bag, so every way to
   // fix the former is exhausted before the latter is ever allowed to relax.
-  for (let maxPerAnchor = 2; !meetsCount(selected) && maxPerAnchor <= count; maxPerAnchor++) {
+  for (let maxPerAnchor = 2; !reachedAchievable(selected) && maxPerAnchor <= count; maxPerAnchor++) {
     selected = selectDiverseOutfits(ranked, count, maxPerAnchor);
   }
-  if (meetsCount(selected)) return selected;
+  if (reachedAchievable(selected)) return selected;
 
   // Phase 2: primary cap is already at its own ceiling (count) and still
   // insufficient -- now relax the secondary (Bag/Belt) cap.
   for (
     let maxPerAccessoryAnchor = 2;
-    !meetsCount(selected) && maxPerAccessoryAnchor <= count;
+    !reachedAchievable(selected) && maxPerAccessoryAnchor <= count;
     maxPerAccessoryAnchor++
   ) {
     selected = selectDiverseOutfits(ranked, count, count, maxPerAccessoryAnchor);

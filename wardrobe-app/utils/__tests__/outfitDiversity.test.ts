@@ -143,6 +143,22 @@ describe('selectDiverseOutfits: Outerwear, Bag, and Belt anchors', () => {
     expect(withShoes.length).toBe(1);
   });
 
+  it('caps repeated Top the same way it caps Bag, Belt and Shoes', () => {
+    // Reported bug: Top had no cap at all, so the search's own best-ranked
+    // Top (0 warmth contribution, so it ties near-identically regardless of
+    // which Bottom it's paired with) could win every single Bottom's own
+    // slot, making every "diverse" outfit wear the identical sweater.
+    const top = item('T-Shirt', { id: 'top' });
+    const outfits = [
+      outfit([top, item('Pants', { id: 'p1' })]),
+      outfit([top, item('Pants', { id: 'p2' })]),
+    ];
+
+    const selected = selectDiverseOutfits(outfits, 2);
+    const withTop = selected.filter((o) => o.items.some((i) => i.id === 'top'));
+    expect(withTop.length).toBe(1);
+  });
+
   it('does not cap Scarf or Tights repetition', () => {
     const scarf = item('Scarf', { id: 'scarf' });
     const outfits = [
@@ -164,14 +180,16 @@ describe('selectDiverseOutfits: Outerwear, Bag, and Belt anchors', () => {
     // rankedDiverseOutfits' own escalation loop would do in production for a
     // wardrobe with just one warm-enough bottom), a genuinely different coat
     // must no longer collapse into "the same combo" as coreComboKey used to
-    // do before Outerwear joined it.
+    // do before Outerwear joined it. Top is secondary too now, so the shared
+    // top (t1) also needs its own cap relaxed here, or it (not the coat)
+    // would be what blocks the second outfit.
     const top = item('T-Shirt', { id: 't1' });
     const bottom = item('Pants', { id: 'p1' });
     const coatA = item('Coat', { id: 'coat-a' });
     const coatB = item('Coat', { id: 'coat-b' });
     const outfits = [outfit([top, bottom, coatA]), outfit([top, bottom, coatB])];
 
-    const selected = selectDiverseOutfits(outfits, 2, 2);
+    const selected = selectDiverseOutfits(outfits, 2, 2, 2);
     expect(selected).toHaveLength(2);
   });
 
@@ -255,6 +273,60 @@ describe('rankedDiverseOutfits: reported bug -- identical coats/boots not rotati
     );
 
     expect(results).toHaveLength(1);
+  });
+
+  it('spreads Top and Bag/Shoes variety across the shown outfits instead of maxing every cap when the floor is unreachable', () => {
+    // Reported bug, exact shape: a moderately varied wardrobe at a mild
+    // temperature, where fewer than minMeetsTarget outfits could ever meet
+    // the weather target at all (unrelated to anchor diversity -- warmth
+    // math, not caps). The old escalation loop kept relaxing every cap all
+    // the way to `count` chasing a floor it could never reach, ending with
+    // the identical Top and Shoes in all 6 results and only 2 distinct
+    // Bottoms/Bags. Both this fix (stop escalating once the wardrobe's own
+    // achievable ceiling is reached, not the literal floor) and Top joining
+    // SECONDARY_ANCHOR_GROUPS are needed for this to pass.
+    const bottoms = [
+      item('Pants', { inferredWarmth: 1, inferredWind: 0 }),
+      item('Skirt', { inferredWarmth: 0, inferredWind: 0 }),
+      item('Pants', { inferredWarmth: 2, inferredWind: 1 }),
+      item('Skirt', { inferredWarmth: 1, inferredWind: 0 }),
+      item('Pants', { inferredWarmth: 3, inferredWind: 1 }),
+    ];
+    const tops = [
+      item('T-Shirt', { inferredWarmth: 0, inferredWind: 0 }),
+      item('Shirt', { inferredWarmth: 1, inferredWind: 0 }),
+      item('T-Shirt', { inferredWarmth: 0, inferredWind: 0 }),
+      item('Sweater', { inferredWarmth: 2, inferredWind: 1 }),
+      item('Shirt', { inferredWarmth: 1, inferredWind: 0 }),
+    ];
+    const shoes = [
+      item('Shoes', { inferredWarmth: 0, inferredWind: 0 }),
+      item('Shoes', { inferredWarmth: 1, inferredWind: 0 }),
+      item('Boots', { inferredWarmth: 1, inferredWind: 1 }),
+      item('Shoes', { inferredWarmth: 0, inferredWind: 0 }),
+    ];
+    const bags = Array.from({ length: 4 }, () => item('Bag'));
+
+    // Bounds shaped like a real 17°C day: bottom+top+shoes alone can't clear
+    // them (max 3+2+1=6 < 18), so nothing meets target without a coat --
+    // this wardrobe has none, so achievableTarget is 0 and the count-based
+    // branch of the fix is what's under test here.
+    const results = rankedDiverseOutfits(
+      emptyCandidates({ bottoms, tops, shoes, bags }),
+      noDismatches,
+      18,
+      NO_CEILING,
+      7,
+      6,
+      4,
+    );
+
+    const topIdsUsed = new Set(
+      results.map((o) => o.items.find((i) => ['T-Shirt', 'Shirt', 'Sweater'].includes(i.category))?.id),
+    );
+    const bagIdsUsed = new Set(results.map((o) => o.items.find((i) => i.category === 'Bag')?.id));
+    expect(topIdsUsed.size).toBeGreaterThan(1);
+    expect(bagIdsUsed.size).toBeGreaterThan(1);
   });
 });
 

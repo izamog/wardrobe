@@ -17,6 +17,7 @@ import { OutfitCollage } from '../components/OutfitCollage';
 import { useDbQuery } from '../hooks/useDbQuery';
 import { listLoggedOutfitsInRange, removeOutfitLogs } from '../services/items';
 import { withDb } from '../services/database';
+import { useTodayData } from '../contexts/TodayDataContext';
 import {
   CALENDAR_GRID_COLUMNS,
   monthGrid,
@@ -260,6 +261,7 @@ export function CalendarScreen() {
   const months = useMemo(() => monthsAround(new Date(), MONTHS_BEFORE, MONTHS_AFTER), []);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [visibleMonthKey, setVisibleMonthKey] = useState(() => monthKeyForDate(today));
+  const { reload: reloadToday } = useTodayData();
 
   // Populated by whichever MonthPage's own query actually covers a given
   // date — the page for the visible month already fetches every day in it,
@@ -314,6 +316,10 @@ export function CalendarScreen() {
               outfitsCacheRef.current.set(date, []);
               setCacheVersion((v) => v + 1);
               setSelectedDate(null);
+              // wearCount feeds Today's recency ranking -- see
+              // TodayDataContext's own doc comment for why nothing
+              // refreshes its cached candidate pool on its own.
+              reloadToday();
             } catch (e) {
               console.error('Failed to remove outfit:', e);
               Alert.alert('Could not remove', 'That outfit is still logged.');

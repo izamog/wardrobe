@@ -26,6 +26,7 @@ import { parsePurchasedAtMonth } from '../utils/format';
 import type { ItemProposal } from '../utils/proposals';
 import type { RootStackParamList } from '../navigation/types';
 import { useProposalApplier, useImageRefiner, type Stage } from './addItemHooks';
+import { useTodayData } from '../contexts/TodayDataContext';
 
 /** Stable empty set, so the list is not handed a new object on every render when nothing's loading. */
 const EMPTY_FIELDS: ReadonlySet<AttributeField> = new Set();
@@ -262,6 +263,7 @@ function ComposeView({
 
 export function AddItemScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const { reload: reloadToday } = useTodayData();
   const route = useRoute<RouteProp<RootStackParamList, 'AddItem'>>();
 
   const [stage, setStage] = useState<Stage>({ step: 'capture' });
@@ -360,13 +362,17 @@ export function AddItemScreen() {
         withDefaults(values, silent),
         { original, processed: cutoutUriRef.current },
       );
+      // A newly added item is a candidate for Today immediately -- see
+      // TodayDataContext's own doc comment for why nothing refreshes its
+      // cached candidate pool on its own.
+      reloadToday();
       navigation.goBack();
     } catch (e) {
       console.error('Failed to save item:', e);
       Alert.alert('Could not save', 'The item was not added. Please try again.');
       setSaving(false);
     }
-  }, [navigation, silent, values, refinement]);
+  }, [navigation, silent, values, refinement, reloadToday]);
 
   // Discards a bad cutout and falls back to the plain crop -- see
   // ComposeHeader's onKeepPlainPhoto doc comment for why this exists instead

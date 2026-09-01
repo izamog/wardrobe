@@ -12,6 +12,7 @@ import { archiveItems, listItems, setItemFlags } from '../services/items';
 import { withDb } from '../services/database';
 import { ALL_CATEGORIES } from '../utils/categories';
 import { CLOSET_SORT_LABELS, sortItems, type ClosetSort } from '../utils/closetSort';
+import { useTodayData } from '../contexts/TodayDataContext';
 import type { RootStackParamList } from '../navigation/types';
 import type { Category, ClothingItem } from '../types/wardrobe';
 
@@ -449,6 +450,16 @@ export function ClosetScreen() {
 
   const { data: items, error, loading, reload } = useDbQuery((db) => listItems(db, filter), [filter]);
   const sortedItems = useMemo(() => (items ? sortItems(items, sort) : items), [items, sort]);
+  const { reload: reloadToday } = useTodayData();
+  // Delete and the two bulk-mark actions all change whether/how the
+  // selected items show up in Today -- see TodayDataContext's own doc
+  // comment for why nothing refreshes its cached candidate pool on its own.
+  // ClosetFooter only needs one reload to call, so this composes both here
+  // rather than widening its props.
+  const reloadClosetAndToday = async () => {
+    await reload();
+    reloadToday();
+  };
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -490,7 +501,7 @@ export function ClosetScreen() {
         marking={marking}
         setMarking={setMarking}
         exitSelection={exitSelection}
-        reload={reload}
+        reload={reloadClosetAndToday}
         onAddPress={() => navigation.navigate('AddItem', filter ? { category: filter } : undefined)}
       />
     </View>
