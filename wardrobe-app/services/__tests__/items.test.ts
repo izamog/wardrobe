@@ -667,6 +667,19 @@ describe('removeOutfitLogs', () => {
     expect(await listItemsWornOn(db, '2026-08-19')).toEqual(new Set(['top1']));
     expect((await getItem(db, 'top1'))?.wearCount).toBe(1);
   });
+
+  it('rejects a malformed date rather than silently matching nothing', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await logOutfitWorn(db, ['top1'], '2026-08-20', 'log1');
+
+    await expect(removeOutfitLogs(db, 'not-a-date')).rejects.toThrow();
+    await expect(removeOutfitLogs(db, '2026-13-40')).rejects.toThrow();
+
+    // The malformed calls must not have touched the real log.
+    expect(await listItemsWornOn(db, '2026-08-20')).toEqual(new Set(['top1']));
+    expect((await getItem(db, 'top1'))?.wearCount).toBe(1);
+  });
 });
 
 describe('replaceOutfitLog', () => {
@@ -718,6 +731,18 @@ describe('replaceOutfitLog', () => {
     // original 2026-08-20 log and its wearCount credit must still stand.
     expect(await listItemsWornOn(db, '2026-08-20')).toEqual(new Set(['top1']));
     expect((await getItem(db, 'top1'))?.wearCount).toBe(2);
+  });
+
+  it('rejects a malformed date rather than silently matching nothing', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await logOutfitWorn(db, ['top1'], '2026-08-20', 'log1');
+
+    await expect(replaceOutfitLog(db, ['top1'], 'not-a-date')).rejects.toThrow();
+
+    // Nothing should have been cleared or inserted for the real date.
+    expect(await listItemsWornOn(db, '2026-08-20')).toEqual(new Set(['top1']));
+    expect((await getItem(db, 'top1'))?.wearCount).toBe(1);
   });
 });
 

@@ -655,8 +655,13 @@ export async function logOutfitWorn(
  * Removes every outfit logged for `date` and un-credits each item's
  * wearCount to match — the counterpart to logOutfitWorn, for Calendar's
  * "Remove outfit". A no-op (not an error) when nothing was logged that day.
+ *
+ * @throws if `date` isn't a well-formed YYYY-MM-DD date — a malformed value
+ *   would otherwise just match zero Outfit_Logs rows and silently no-op,
+ *   masking a caller bug rather than surfacing it.
  */
 export async function removeOutfitLogs(db: ItemsDatabase, date: string): Promise<void> {
+  if (!isValidDateString(date)) throw new Error('Invalid outfit-log date');
   await db.withTransactionAsync(async () => {
     await clearOutfitLogsForDate(db, date);
   });
@@ -668,6 +673,9 @@ export async function removeOutfitLogs(db: ItemsDatabase, date: string): Promise
  * What Calendar's "Edit outfit" should call: unlike logOutfitWorn, a
  * previously-logged outfit for the same day is scrubbed (and its items'
  * wearCount un-credited) rather than left stacked underneath the new one.
+ *
+ * @throws if `date` isn't a well-formed YYYY-MM-DD date — same reasoning as
+ *   removeOutfitLogs.
  */
 export async function replaceOutfitLog(
   db: ItemsDatabase,
@@ -676,6 +684,7 @@ export async function replaceOutfitLog(
   id: string = Crypto.randomUUID(),
   createdAt: string = new Date().toISOString(),
 ): Promise<void> {
+  if (!isValidDateString(date)) throw new Error('Invalid outfit-log date');
   await db.withTransactionAsync(async () => {
     await clearOutfitLogsForDate(db, date);
     await insertOutfitLog(db, itemIds, date, id, createdAt);
