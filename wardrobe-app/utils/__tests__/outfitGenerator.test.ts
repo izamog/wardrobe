@@ -3,6 +3,7 @@ import { generateClosestOutfits, generateOutfits, sumWarmth, sumWind } from '../
 import { emptyCandidates, item, NO_CEILING, noDismatches, resetSeq } from '../outfitGeneratorTestHelpers';
 import { warmthCeiling, warmthFloor, windFloor } from '../thermal';
 import { estimateWarmth, estimateWind } from '../warmth';
+import { floorAwareCandidates, shoeCandidatesFor } from '../outfitCandidatePools';
 
 beforeEach(() => {
   resetSeq();
@@ -646,9 +647,15 @@ describe('generateClosestOutfits: regression — the cold-weather ceiling has ro
       (outfit) => !outfit.items.some((i) => i.id === polyesterTshirt.id),
     );
 
-    expect(withCoatAndTshirt?.warmth).toBe(24);
+    // 23/21, not the original report's 24/22 -- Shoes no longer contribute
+    // to sumWarmth at all (WARMTH_REGION_WEIGHT's Shoes weight moved from
+    // 0.25 to 0, per later feedback that footwear shouldn't count toward
+    // "how warm is this outfit"), so the boots' own inferredWarmth no
+    // longer adds anything to either total. The regression itself --
+    // both outfits clearing the ceiling -- still holds.
+    expect(withCoatAndTshirt?.warmth).toBe(23);
     expect(withCoatAndTshirt?.meetsTarget).toBe(true);
-    expect(withCoatNoTshirt?.warmth).toBe(22);
+    expect(withCoatNoTshirt?.warmth).toBe(21);
     expect(withCoatNoTshirt?.meetsTarget).toBe(true);
   });
 });
@@ -800,30 +807,26 @@ describe('generateOutfits: regression — warm boots must not be excluded from t
   // fixed for Top and the Bottom/Dress anchor, but Shoes is a *required*
   // slot: excluding the only warm-enough boots from its pool doesn't just
   // drop an optional layer, it fails every branch of the search outright.
-  it('finds an outfit using warm boots when six lighter pairs would otherwise fill the candidate pool', () => {
-    const bottom = item('Pants', { inferredWarmth: 8, inferredWind: 4 });
-    const top = item('Sweater', { inferredWarmth: 8, inferredWind: 2 });
+  //
+  // Tests floorAwareCandidates(shoeCandidatesFor(...)) directly, the
+  // exact pool the Shoes slot in outfitSlots.ts's buildSlots is built
+  // from, rather than routing through a whole-outfit warmth floor via
+  // generateOutfits/sumWarmth -- Shoes no longer contributes to sumWarmth
+  // at all (WARMTH_REGION_WEIGHT's Shoes weight is 0, per later feedback
+  // that footwear shouldn't count toward "how warm is this outfit"), so a
+  // sum-based floor can no longer force the search to require a warmer
+  // pair the way it once could. The candidate-pool logic this regression
+  // is actually about is untouched by that change, since floorAwareCandidates
+  // ranks by each item's own raw inferredWarmth against the passed target,
+  // not through WARMTH_REGION_WEIGHT/sumWarmth.
+  it('includes warm boots in the Shoes candidate pool when six lighter pairs would otherwise fill it', () => {
     const lightShoes = Array.from({ length: 6 }, () => item('Boots', { inferredWarmth: 0, inferredWind: 0 }));
     const warmBoots = item('Boots', { inferredWarmth: 6, inferredWind: 5 });
+    const candidates = emptyCandidates({ shoes: [...lightShoes, warmBoots] });
 
-    const withLightShoes = sumWarmth([top, bottom, lightShoes[0]]);
-    const withWarmBoots = sumWarmth([top, bottom, warmBoots]);
-    // A floor just above the light shoes' own total, that only the warm
-    // boots can reach -- if this assertion ever fails, the fixture's
-    // numbers no longer isolate the bug and need adjusting, not the
-    // assertion below it.
-    const floor = Math.ceil(withLightShoes) + 1;
-    expect(withWarmBoots).toBeGreaterThanOrEqual(floor);
+    const pool = floorAwareCandidates(shoeCandidatesFor(candidates, 6), 6);
 
-    const results = generateOutfits(
-      emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [...lightShoes, warmBoots] }),
-      noDismatches,
-      floor,
-      NO_CEILING,
-      0,
-    );
-
-    expect(results.some((outfit) => outfit.some((i) => i.id === warmBoots.id))).toBe(true);
+    expect(pool.some((i) => i.id === warmBoots.id)).toBe(true);
   });
 });
 

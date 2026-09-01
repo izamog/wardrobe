@@ -23,6 +23,17 @@ import type { CategoryGroup, ClothingItem } from '../types/wardrobe';
  * well-insulated pair of boots offset a torso that was nowhere near warm
  * enough.
  *
+ * Shoes weighted at 0, not just down-weighted: user feedback was that
+ * footwear shouldn't count toward "how warm is this outfit" at all — it
+ * should be picked appropriately for the weather (no sandals in a cold
+ * snap), not treated as a source of warmth the rest of the outfit can lean
+ * on. That weather-appropriateness is a *separate* mechanism from this
+ * table: a required Shoes slot is already filtered by its own warmth floor
+ * in outfitCandidatePools.ts's shoeCandidatesFor/floorAwareCandidates, so
+ * setting this weight to 0 only removes Shoes' ability to help an outfit
+ * clear the *overall* warmth floor via the summed total — cold-weather
+ * footwear selection itself is unaffected.
+ *
  * Belt and Bag are listed for completeness even though their category ceiling
  * in utils/warmth.ts is 0 either way, so their weight can never matter.
  *
@@ -36,7 +47,7 @@ const WARMTH_REGION_WEIGHT: Record<CategoryGroup, number> = {
   Dress: 1,
   Scarf: 0.8,
   Bottom: 0.6,
-  Shoes: 0.25,
+  Shoes: 0,
   Belt: 0.1,
   Bag: 0,
   Tights: 0.15,

@@ -98,6 +98,23 @@ const WARMTH_CEILING_SLACK = 5;
 const COLD_CEILING_BONUS_MAX = 4;
 
 /**
+ * Lowest the ceiling's own gap above a floor of 0 can shrink to, however hot
+ * it gets.
+ *
+ * Reported bug: the ceiling used to stay flat at WARMTH_CEILING_SLACK for
+ * every felt temperature at or above WARMTH_NEUTRAL_TEMP_C, so a warmth-5
+ * item (jeans) read as equally valid at 21°C and 31°C — there was no way
+ * for "further above neutral" to mean "less warmth allowed" the way
+ * "further below neutral" already means "more warmth required" via
+ * WARMTH_UNITS_PER_DEGREE. The gap now narrows above neutral at the same
+ * per-degree rate the floor rises below it (symmetric), down to this
+ * minimum rather than to 0 — a genuinely hot day still needs to leave room
+ * for the lightest real outfit (a T-shirt, shorts and sandals), not reject
+ * every possible combination.
+ */
+const HOT_CEILING_MIN = 2;
+
+/**
  * °C (felt) at or above which wind adds nothing to the wind floor at all.
  *
  * feltTempC is already a wind-chill-adjusted "apparent temperature" (see
@@ -167,11 +184,25 @@ export function warmthFloor(feltTempC: number): number {
   return clamp(Math.max(0, WARMTH_NEUTRAL_TEMP_C - feltTempC) * WARMTH_UNITS_PER_DEGREE, WARMTH_FLOOR_MAX);
 }
 
-/** The most summed, weighted warmth an outfit should have before it's overdressed for today. */
+/**
+ * The most summed, weighted warmth an outfit should have before it's
+ * overdressed for today.
+ *
+ * At or below WARMTH_NEUTRAL_TEMP_C: floor + a flat slack, plus a
+ * cold-weather bonus that grows as the floor does (COLD_CEILING_BONUS_MAX).
+ * Above it: floor is always 0, and the gap itself shrinks the hotter it
+ * gets, at the same per-degree rate the floor rises below neutral, down to
+ * HOT_CEILING_MIN — see that constant's own doc comment for why.
+ */
 export function warmthCeiling(feltTempC: number): number {
   const floor = warmthFloor(feltTempC);
-  const coldBonus = Math.round((floor / WARMTH_FLOOR_MAX) * COLD_CEILING_BONUS_MAX);
-  return floor + WARMTH_CEILING_SLACK + coldBonus;
+  if (feltTempC <= WARMTH_NEUTRAL_TEMP_C) {
+    const coldBonus = Math.round((floor / WARMTH_FLOOR_MAX) * COLD_CEILING_BONUS_MAX);
+    return floor + WARMTH_CEILING_SLACK + coldBonus;
+  }
+  const aboveNeutral = feltTempC - WARMTH_NEUTRAL_TEMP_C;
+  const gap = Math.max(HOT_CEILING_MIN, WARMTH_CEILING_SLACK - aboveNeutral * WARMTH_UNITS_PER_DEGREE);
+  return clamp(gap, WARMTH_CEILING_SLACK);
 }
 
 /**
