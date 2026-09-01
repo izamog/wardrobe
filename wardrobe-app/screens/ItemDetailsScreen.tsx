@@ -5,6 +5,7 @@ import {
   Pressable,
   ScrollView,
   Text,
+  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -13,8 +14,10 @@ import { useNavigation, useRoute, type RouteProp } from '@react-navigation/nativ
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { EmptyState } from '../components/EmptyState';
 import { StoredImage } from '../components/StoredImage';
+import { ItemPhotoBackdrop } from '../components/ItemPhotoBackdrop';
 import { usePhotoCapture } from '../components/PhotoPicker';
 import {
+  MonthYearField,
   MultiSelectField,
   OptionRow,
   PrimaryButton,
@@ -22,20 +25,33 @@ import {
   TextField,
 } from '../components/Form';
 import { useDbQuery } from '../hooks/useDbQuery';
-import { getItem, updateItem, type ItemUpdate } from '../services/items';
-import { removeItem, replaceItemImage } from '../services/itemActions';
+import { archiveItems, getItem, updateItem, type ItemUpdate } from '../services/items';
+import { replaceItemImage } from '../services/itemActions';
 import { withDb } from '../services/database';
 import {
   ALL_CATEGORIES,
+  backlessApplies,
   beltLoopsApply,
+  denierApplies,
   hardwareColorApplies,
   lengthApplies,
   lengthOptionsFor,
+  materialPercentApplies,
   sleeveLengthApplies,
+  thicknessApplies,
 } from '../utils/categories';
-import { ALL_MATERIALS } from '../utils/materials';
+import { ALL_MATERIALS, materialPercentsFrom, reconcileMaterials } from '../utils/materials';
 import { ALL_COLORS, toColorPair } from '../utils/colors';
-import { costPerWear, formatCost, parseCost, parseScale, SCALE_MAX } from '../utils/format';
+import {
+  costPerWear,
+  formatCost,
+  formatPurchasedAtMonth,
+  parseCost,
+  parseDenier,
+  parsePurchasedAtMonth,
+  parseScale,
+  SCALE_MAX,
+} from '../utils/format';
 import { estimateWarmth, estimateWind } from '../utils/warmth';
 import type { RootStackParamList } from '../navigation/types';
 import type {
@@ -44,10 +60,15 @@ import type {
   GarmentLength,
   HardwareColor,
   ItemColor,
+  MaterialEntry,
   SleeveLength,
+  Thickness,
 } from '../types/wardrobe';
 
 const SLEEVE_LENGTHS: readonly SleeveLength[] = ['Sleeveless', 'Short', 'Long'];
+const THICKNESSES: readonly Thickness[] = ['Mesh', 'Light', 'Regular', 'Thick', 'Heavy'];
+const DENIER_MIN = 5;
+const DENIER_MAX = 270;
 
 const HARDWARE_COLORS: readonly HardwareColor[] = ['None', 'Gold', 'Silver', 'Brass', 'Black'];
 
@@ -64,13 +85,19 @@ interface Draft {
   brand: string;
   cost: string;
   isSecondHand: boolean;
+  isWorkAppropriate: boolean;
   /** Held as a list because that is what the picker speaks; split into the two columns on save. */
   colors: ItemColor[];
-  materials: string[];
+  materials: MaterialEntry[];
+  purchasedAt: string;
   hardwareColor: HardwareColor;
   hasBeltLoops: boolean;
   sleeveLength: SleeveLength;
   length: GarmentLength | '';
+  thickness: Thickness;
+  /** Held as a string, same reasoning as inferredWarmth/inferredWind below — see denier's own field in EditForm. */
+  denier: string;
+  backless: boolean;
   inferredWarmth: string;
   inferredWind: string;
 }
@@ -81,14 +108,19 @@ function toDraft(item: ClothingItem): Draft {
     brand: item.brand,
     cost: (item.costMinorUnits / 100).toFixed(2),
     isSecondHand: item.isSecondHand,
+    isWorkAppropriate: item.isWorkAppropriate,
     colors: [item.primaryColor, item.secondaryColor].filter(
       (color): color is ItemColor => color !== '',
     ),
     materials: item.materials,
+    purchasedAt: item.purchasedAt,
     hardwareColor: item.hardwareColor,
     hasBeltLoops: item.hasBeltLoops,
     sleeveLength: item.sleeveLength,
     length: item.length,
+    thickness: item.thickness,
+    denier: item.denier === 0 ? '' : String(item.denier),
+    backless: item.backless,
     inferredWarmth: String(item.inferredWarmth),
     inferredWind: String(item.inferredWind),
   };
@@ -97,9 +129,9 @@ function toDraft(item: ClothingItem): Draft {
 /** One attribute in the read-only view. */
 function ReadRow({ label, value }: { label: string; value: string }) {
   return (
-    <View className="flex-row justify-between items-start py-3 border-b border-slate-100">
-      <Text className="text-sm text-slate-500 mr-4">{label}</Text>
-      <Text className="text-sm font-medium text-slate-900 flex-1 text-right">{value || '—'}</Text>
+    <View className="flex-row justify-between items-start py-3 border-b border-rule">
+      <Text className="text-sm font-sans text-ink-muted mr-4">{label}</Text>
+      <Text className="text-sm font-sans-medium text-ink flex-1 text-right">{value || '—'}</Text>
     </View>
   );
 }
@@ -123,12 +155,32 @@ function buildItemUpdate(draft: Draft): ItemUpdate | { errorTitle: string; error
     };
   }
 
+  const purchasedAt = parsePurchasedAtMonth(draft.purchasedAt);
+  if (purchasedAt === null) {
+    return {
+      errorTitle: 'Check when bought',
+      error: 'Pick a month in the past, or leave it blank.',
+    };
+  }
+
+  const denier = parseDenier(draft.denier);
+  if (denier === null) {
+    return {
+      errorTitle: 'Check denier',
+      error: 'A whole number from 5 to 270, or leave it blank.',
+    };
+  }
+
   return {
     category: draft.category,
     brand: draft.brand.trim() || 'Unknown',
     costMinorUnits,
     isSecondHand: draft.isSecondHand,
-    materials: draft.materials,
+    isWorkAppropriate: draft.isWorkAppropriate,
+    materials: materialPercentApplies(draft.category)
+      ? draft.materials
+      : draft.materials.map((m) => ({ ...m, percent: 0 })),
+    purchasedAt,
     // toColorPair applies the same rules as the CHECK constraints, so the
     // form cannot submit a pair SQLite would reject.
     ...toColorPair(draft.colors),
@@ -143,6 +195,9 @@ function buildItemUpdate(draft: Draft): ItemUpdate | { errorTitle: string; error
     hasBeltLoops: beltLoopsApply(draft.category) ? draft.hasBeltLoops : false,
     sleeveLength: sleeveLengthApplies(draft.category) ? draft.sleeveLength : 'Short',
     length: lengthApplies(draft.category) ? draft.length : '',
+    thickness: thicknessApplies(draft.category) ? draft.thickness : 'Regular',
+    denier: denierApplies(draft.category) ? denier : 0,
+    backless: backlessApplies(draft.category) ? draft.backless : false,
     inferredWarmth,
     inferredWind,
   };
@@ -186,12 +241,44 @@ function EditForm({
         emptyLabel="Select colours"
       />
       <MultiSelectField
-        label="Materials"
+        label="Materials (up to 2)"
         options={ALL_MATERIALS}
-        selected={draft.materials}
-        onChange={(v) => set('materials', v)}
+        selected={draft.materials.map((m) => m.material)}
+        onChange={(names) => set('materials', reconcileMaterials(draft.materials, names))}
         emptyLabel="Select materials"
+        maxSelected={2}
       />
+      {materialPercentApplies(draft.category) &&
+        draft.materials.map((entry) => (
+          <View key={entry.material} className="flex-row items-center justify-between mb-3">
+            <Text className="text-sm font-sans text-ink-muted">{entry.material} %</Text>
+            <View className="bg-paper border border-rule rounded-sm h-11 px-3 justify-center w-20">
+              <TextInput
+                value={entry.percent === 0 ? '' : String(entry.percent)}
+                onChangeText={(text) => {
+                  const parsed = Number(text);
+                  const percent =
+                    text.trim() === '' || !Number.isInteger(parsed) ? 0 : Math.min(100, Math.max(0, parsed));
+                  set(
+                    'materials',
+                    draft.materials.map((m) => (m.material === entry.material ? { ...m, percent } : m)),
+                  );
+                }}
+                keyboardType="number-pad"
+                placeholder="0-100"
+                placeholderTextColor="#6B6259"
+                style={{ lineHeight: 18 }}
+                className="p-0 text-base font-sans-medium text-ink text-right"
+              />
+            </View>
+          </View>
+        ))}
+      {materialPercentApplies(draft.category) && draft.materials.length > 0 && (
+        <Text className="text-xs font-sans text-ink-muted -mt-2 mb-3">
+          Doesn&apos;t need to add up to 100% — leave a material blank if you don&apos;t know its share.
+        </Text>
+      )}
+      <MonthYearField label="Bought" value={draft.purchasedAt} onChange={(v) => set('purchasedAt', v)} />
       {hardwareColorApplies(draft.category) && (
         <OptionRow
           label="Hardware colour"
@@ -216,10 +303,31 @@ function EditForm({
           onChange={(v) => set('length', v)}
         />
       )}
+      {thicknessApplies(draft.category) && (
+        <OptionRow
+          label="Thickness"
+          options={THICKNESSES}
+          value={draft.thickness}
+          onChange={(v) => set('thickness', v)}
+        />
+      )}
+      {denierApplies(draft.category) && (
+        <TextField
+          label={`Denier (${DENIER_MIN}-${DENIER_MAX})`}
+          value={draft.denier}
+          onChangeText={(v) => set('denier', v)}
+          keyboardType="number-pad"
+        />
+      )}
       <SwitchField
         label="Bought second-hand"
         value={draft.isSecondHand}
         onValueChange={(v) => set('isSecondHand', v)}
+      />
+      <SwitchField
+        label="Work appropriate"
+        value={draft.isWorkAppropriate}
+        onValueChange={(v) => set('isWorkAppropriate', v)}
       />
       {beltLoopsApply(draft.category) && (
         <SwitchField
@@ -228,13 +336,20 @@ function EditForm({
           onValueChange={(v) => set('hasBeltLoops', v)}
         />
       )}
+      {backlessApplies(draft.category) && (
+        <SwitchField
+          label="Backless"
+          value={draft.backless}
+          onValueChange={(v) => set('backless', v)}
+        />
+      )}
     </>
   );
 }
 
 function ReadOnlyDetails({ item }: { item: ClothingItem }) {
   return (
-    <View className="bg-white rounded-xl border border-slate-200 px-4 mb-4">
+    <View className="mb-4">
       {/* Shown here, unlike before: with no confirmation anywhere on this
           screen, a saved category change was indistinguishable from one that
           silently failed to save. */}
@@ -245,66 +360,92 @@ function ReadOnlyDetails({ item }: { item: ClothingItem }) {
         label="Colour"
         value={[item.primaryColor, item.secondaryColor].filter(Boolean).join(' / ')}
       />
-      <ReadRow label="Materials" value={item.materials.join(', ')} />
+      <ReadRow
+        label="Materials"
+        value={item.materials
+          .map((m) => (m.percent > 0 ? `${m.material} (${m.percent}%)` : m.material))
+          .join(', ')}
+      />
+      <ReadRow label="Bought" value={formatPurchasedAtMonth(item.purchasedAt)} />
       {hardwareColorApplies(item.category) && <ReadRow label="Hardware" value={item.hardwareColor} />}
       {sleeveLengthApplies(item.category) && (
         <ReadRow label="Sleeves" value={item.sleeveLength} />
       )}
       {lengthApplies(item.category) && <ReadRow label="Length" value={item.length} />}
+      {thicknessApplies(item.category) && <ReadRow label="Thickness" value={item.thickness} />}
+      {denierApplies(item.category) && (
+        <ReadRow label="Denier" value={item.denier === 0 ? '' : String(item.denier)} />
+      )}
       <ReadRow label="Second-hand" value={item.isSecondHand ? 'Yes' : 'No'} />
+      <ReadRow label="Work appropriate" value={item.isWorkAppropriate ? 'Yes' : 'No'} />
       {beltLoopsApply(item.category) && (
         <ReadRow label="Belt loops" value={item.hasBeltLoops ? 'Yes' : 'No'} />
+      )}
+      {backlessApplies(item.category) && (
+        <ReadRow label="Backless" value={item.backless ? 'Yes' : 'No'} />
       )}
     </View>
   );
 }
 
-/** Photo header: the stored image plus, while editing, the button to replace it. */
+/** Photo header: the stored image plus, while editing, the buttons to replace it or open Image adjustments. */
 function PhotoHeader({
   item,
   editing,
   capturing,
   choosePhoto,
+  onAdjustImage,
   windowHeight,
 }: {
   item: ClothingItem;
   editing: boolean;
   capturing: boolean;
   choosePhoto: () => void;
+  onAdjustImage: () => void;
   windowHeight: number;
 }) {
   return (
     <>
       {/* Deliberately not pressable: the photo fills most of the screen, so
           tapping it by accident used to launch the picker and lose the user's
-          place. Replacing a photo goes through the button below and nothing
-          else. */}
+          place. Replacing or adjusting a photo goes through the buttons
+          below and nothing else. */}
       {/* Capped at a third of the screen. At 3:4 full width the photo was most
           of a phone screen, so the attributes the user opened the item to read
           began below the fold. */}
       <View
-        className="bg-white items-center justify-center border-b border-slate-200"
+        className="items-center justify-center border-b border-rule overflow-hidden"
         style={{ height: windowHeight / 3 }}
       >
+        <ItemPhotoBackdrop />
         {capturing ? (
           <ActivityIndicator />
         ) : (
           <StoredImage
             path={item.imagePath}
+            hasBakedMargin={item.imageMarginBaked}
             placeholder="No photo"
-            placeholderClassName="text-slate-500"
+            placeholderClassName="text-ink-muted font-sans"
           />
         )}
       </View>
 
       {editing ? (
-        <View className="px-4 pt-3 bg-white">
+        <View className="px-5 pt-3 bg-white">
           <PrimaryButton
             label={capturing ? 'Working…' : 'Replace image'}
             tone="secondary"
             onPress={choosePhoto}
             disabled={capturing}
           />
+          <View className="mt-2">
+            <PrimaryButton
+              label="Image adjustments"
+              tone="secondary"
+              onPress={onAdjustImage}
+              disabled={capturing}
+            />
+          </View>
         </View>
       ) : null}
     </>
@@ -315,16 +456,17 @@ function PhotoHeader({
 function WearStatsRow({ item }: { item: ClothingItem }) {
   const perWear = costPerWear(item.costMinorUnits, item.wearCount);
   return (
-    <View className="flex-row justify-between px-4 py-3 bg-white border-b border-slate-200">
+    <View className="flex-row justify-between px-4 py-3 bg-paper border-b border-rule">
       <View>
-        <Text className="text-xs uppercase tracking-wide text-slate-500">Worn</Text>
-        <Text className="text-base font-semibold text-slate-900">
+        <Text className="text-xs font-sans uppercase tracking-wide text-ink-muted">Worn</Text>
+        {/* Big statistics numbers: Public Sans 300 — text-base isn't "large" (see design.md's size threshold), so no bump to 400. */}
+        <Text className="text-base font-sans-light text-ink">
           {item.wearCount === 0 ? 'Not yet worn' : `${item.wearCount}×`}
         </Text>
       </View>
       <View className="items-end">
-        <Text className="text-xs uppercase tracking-wide text-slate-500">Cost per wear</Text>
-        <Text className="text-base font-semibold text-slate-900">
+        <Text className="text-xs font-sans uppercase tracking-wide text-ink-muted">Cost per wear</Text>
+        <Text className="text-base font-sans-light text-ink">
           {perWear ?? `${formatCost(item.costMinorUnits)} so far`}
         </Text>
       </View>
@@ -341,19 +483,33 @@ function EstimatesEditor({
   set: <K extends keyof Draft>(key: K, value: Draft[K]) => void;
 }) {
   const resetToEstimate = () => {
+    const materialNames = draft.materials.map((m) => m.material);
     set(
       'inferredWarmth',
-      String(estimateWarmth(draft.category, draft.materials, draft.sleeveLength, draft.length)),
+      String(
+        estimateWarmth(
+          draft.category,
+          materialNames,
+          draft.sleeveLength,
+          draft.length,
+          draft.thickness,
+          parseDenier(draft.denier) ?? 0,
+          materialPercentsFrom(draft.materials),
+          draft.backless,
+        ),
+      ),
     );
     set(
       'inferredWind',
-      String(estimateWind(draft.category, draft.materials, draft.sleeveLength, draft.length)),
+      String(
+        estimateWind(draft.category, materialNames, draft.sleeveLength, draft.length, draft.backless),
+      ),
     );
   };
 
   return (
-    <View className="mt-2 mb-4 p-3 rounded-xl bg-slate-100 border border-slate-200">
-      <Text className="text-xs text-slate-500 mb-3">
+    <View className="mt-2 mb-4 p-3 rounded-sm bg-paper-2">
+      <Text className="text-xs font-sans text-ink-muted mb-3">
         Generated from category and materials when an item is added. Editable here so a wrong
         value — including a stale one from before the estimate changed — can be corrected.
       </Text>
@@ -383,9 +539,9 @@ function EstimatesEditor({
       <Pressable
         onPress={resetToEstimate}
         accessibilityRole="button"
-        className="mt-3 self-start rounded-lg border border-slate-300 bg-white px-3 py-2"
+        className="mt-3 self-start rounded-sm border border-rule bg-paper px-3 py-2"
       >
-        <Text className="text-sm font-medium text-slate-700">↻ Reset to estimate</Text>
+        <Text className="text-sm font-sans-medium text-ink-muted">↻ Reset to estimate</Text>
       </Pressable>
     </View>
   );
@@ -398,12 +554,14 @@ function ActionButtons({
   onSave,
   onDelete,
   navigateToMatches,
+  navigateToOutfits,
 }: {
   itemId: string;
   editing: boolean;
   onSave: () => void;
   onDelete: () => void;
   navigateToMatches: (itemId: string) => void;
+  navigateToOutfits: (itemId: string) => void;
 }) {
   return (
     <>
@@ -414,6 +572,9 @@ function ActionButtons({
       ) : null}
       <View className="mt-3">
         <PrimaryButton label="Matches" onPress={() => navigateToMatches(itemId)} />
+      </View>
+      <View className="mt-3">
+        <PrimaryButton label="Create outfit with item" tone="secondary" onPress={() => navigateToOutfits(itemId)} />
       </View>
       <View className="mt-3">
         <PrimaryButton label="Delete item" tone="danger" onPress={onDelete} />
@@ -513,9 +674,9 @@ export function ItemDetailsScreen() {
           className="px-2 py-1"
         >
           {editing ? (
-            <Text className="text-base font-semibold text-slate-900">Done</Text>
+            <Text className="text-base font-sans-medium text-ink">Done</Text>
           ) : (
-            <Ionicons name="create-outline" size={22} color="#0f172a" />
+            <Ionicons name="create-outline" size={22} color="#1A1714" />
           )}
         </Pressable>
       ),
@@ -525,7 +686,7 @@ export function ItemDetailsScreen() {
   if (error) return <EmptyState title={error} />;
   if (loading && !item) {
     return (
-      <View className="flex-1 items-center justify-center bg-slate-50">
+      <View className="flex-1 items-center justify-center bg-paper">
         <ActivityIndicator />
       </View>
     );
@@ -535,8 +696,26 @@ export function ItemDetailsScreen() {
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
     setDraft((current) => (current ? { ...current, [key]: value } : current));
 
+  // EstimatesEditor is shown even outside `editing` (see its own doc comment),
+  // but ActionButtons' "Save changes" -- and the header's Done-saves button --
+  // only appear once `editing` is true. Without this, resetting or typing a
+  // new warmth/wind value from the read-only view updated `draft` with no way
+  // to persist it: the value showed correctly on screen but was silently
+  // discarded the moment the screen was left, then reappeared unchanged next
+  // visit. Routing its edits through `set` too keeps every write going
+  // through the same single setter, just also opening the session that can
+  // actually save it.
+  const setAndEdit = <K extends keyof Draft>(key: K, value: Draft[K]) => {
+    setEditing(true);
+    set(key, value);
+  };
+
+  // Archives rather than hard-deletes -- same as ClosetScreen's bulk delete
+  // (see confirmAndArchive there), so there is exactly one way to delete an
+  // item and it always goes through the 30-day Archive/restore window, not
+  // two behaviours depending on which screen you delete from.
   function confirmDelete() {
-    Alert.alert('Delete this item?', 'Its match and dismatch records go with it.', [
+    Alert.alert('Delete this item?', 'Deleted items are held for 30 days before being removed for good — you can restore them from Archive until then.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
@@ -545,9 +724,7 @@ export function ItemDetailsScreen() {
           void (async () => {
             if (!item) return;
             try {
-              // Removes the row, its photos and, through the foreign key, its
-              // match and dismatch records.
-              await removeItem({ runQuery: withDb }, item);
+              await withDb((db) => archiveItems(db, [item.id]));
               navigation.goBack();
             } catch (e) {
               console.error('Failed to delete item:', e);
@@ -560,19 +737,20 @@ export function ItemDetailsScreen() {
   }
 
   return (
-    <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="pb-10">
+    <ScrollView className="flex-1 bg-paper" contentContainerClassName="pb-10">
       <PhotoHeader
         item={item}
         editing={editing}
         capturing={capturing}
         choosePhoto={choosePhoto}
+        onAdjustImage={() => navigation.navigate('ImageAdjustments', { itemId })}
         windowHeight={windowHeight}
       />
       <WearStatsRow item={item} />
 
-      <View className="p-4">
+      <View className="p-5">
         {editing ? <EditForm draft={draft} set={set} /> : <ReadOnlyDetails item={item} />}
-        <EstimatesEditor draft={draft} set={set} />
+        <EstimatesEditor draft={draft} set={setAndEdit} />
         <ActionButtons
           itemId={itemId}
           editing={editing}
@@ -586,6 +764,7 @@ export function ItemDetailsScreen() {
           onSave={() => void save()}
           onDelete={confirmDelete}
           navigateToMatches={(id) => navigation.navigate('MatchesBrowser', { itemId: id })}
+          navigateToOutfits={(id) => navigation.navigate('ItemOutfits', { itemId: id })}
         />
       </View>
     </ScrollView>

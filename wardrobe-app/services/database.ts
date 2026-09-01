@@ -36,22 +36,48 @@ export function getDatabase(): Promise<SQLite.SQLiteDatabase> {
 }
 
 /**
- * Runs `fn` against the shared connection.
+ * Runs `fn` against the shared connection, once the schema is up to date.
  *
  * Screens call this rather than getDatabase() so they never hold a connection
  * handle of their own. The callback takes the ItemsDatabase seam, which keeps
  * services/items.ts free of any import of expo-sqlite — that module is
  * therefore testable off-device, and this one stays the single place native
  * SQLite is touched.
+ *
+ * Awaits initDatabase() first (memoized — a no-op await once migrations have
+ * already finished) rather than assuming some other caller already gated on
+ * it. App.tsx no longer blocks rendering the whole app behind a splash until
+ * the database is ready — every screen renders immediately and shows its own
+ * loading state instead — so this is what keeps a screen that queries the
+ * database the moment it mounts from ever reading a not-yet-migrated schema.
  */
 export async function withDb<T>(fn: (db: ItemsDatabase) => Promise<T>): Promise<T> {
+  await initDatabase();
   return fn(await getDatabase());
 }
 
-/** Opens the database if needed and brings its schema up to date. */
-export async function initDatabase(): Promise<void> {
-  const db = await getDatabase();
-  await runMigrations(db);
+let initPromise: Promise<void> | null = null;
+
+/**
+ * Opens the database if needed and brings its schema up to date.
+ *
+ * Memoized the same way getDatabase() is, so a second caller that arrives
+ * while migrations are still running awaits the same promise rather than
+ * re-running them. This lets contexts/TodayDataContext.tsx call it directly
+ * to gate its own database-dependent work on migrations having finished,
+ * without needing App.tsx's own initDatabase() call to be the only caller.
+ */
+export function initDatabase(): Promise<void> {
+  if (!initPromise) {
+    initPromise = (async () => {
+      const db = await getDatabase();
+      await runMigrations(db);
+    })().catch((e: unknown) => {
+      initPromise = null;
+      throw e;
+    });
+  }
+  return initPromise;
 }
 
 // wearCount is intentionally NOT auto-incremented via a SQL trigger, to avoid

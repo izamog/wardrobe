@@ -40,19 +40,20 @@ describe('selectDiverseOutfits', () => {
     const bottomA = item('Pants');
     const topB = item('Sweater');
     const bottomB = item('Skirt');
-    const shoes = item('Shoes');
+    const shoesA = item('Shoes', { id: 'shoes-a' });
+    const shoesB = item('Shoes', { id: 'shoes-b' });
 
     const ranked = [
-      outfit([topA, bottomA, shoes]),
-      outfit([topA, bottomA, item('Boots')]), // near-duplicate of the first
-      outfit([topB, bottomB, shoes]),
+      outfit([topA, bottomA, shoesA]),
+      outfit([topA, bottomA, item('Boots')]), // shares bottomA -- blocked by the primary anchor cap, not a combo dupe
+      outfit([topB, bottomB, shoesB]), // distinct shoe from the first so the Shoes secondary cap doesn't also block it
     ];
 
     const selected = selectDiverseOutfits(ranked, 2);
 
     expect(selected).toHaveLength(2);
-    expect(selected[0].items).toEqual([topA, bottomA, shoes]);
-    expect(selected[1].items).toEqual([topB, bottomB, shoes]);
+    expect(selected[0].items).toEqual([topA, bottomA, shoesA]);
+    expect(selected[1].items).toEqual([topB, bottomB, shoesB]);
   });
 
   it('never repeats a bottom even when nothing else is available to fill count', () => {
@@ -78,9 +79,17 @@ describe('selectDiverseOutfits', () => {
     const dress = item('Dress');
     const top = item('T-Shirt');
     const bottom = item('Pants');
-    const shoes = item('Shoes');
+    // Distinct shoes for each -- Shoes is itself a secondary anchor now
+    // (capped like Bag/Belt), so sharing the same pair here would test that
+    // cap instead of the thing this test is actually about: a shared
+    // *uncapped* accessory (Scarf) never blocking two genuinely different
+    // core combos.
+    const scarf = item('Scarf');
 
-    const ranked = [outfit([dress, shoes]), outfit([top, bottom, shoes])];
+    const ranked = [
+      outfit([dress, item('Shoes', { id: 'shoes-dress' }), scarf]),
+      outfit([top, bottom, item('Shoes', { id: 'shoes-topbottom' }), scarf]),
+    ];
 
     const selected = selectDiverseOutfits(ranked, 10);
 
@@ -122,7 +131,7 @@ describe('selectDiverseOutfits: Outerwear, Bag, and Belt anchors', () => {
     expect(withBag.length).toBe(1);
   });
 
-  it('does not cap Shoes, Scarf, or Tights repetition', () => {
+  it('caps repeated Shoes the same way it caps Bag and Belt', () => {
     const shoes = item('Shoes', { id: 'shoes' });
     const outfits = [
       outfit([item('Pants', { id: 'p1' }), item('T-Shirt', { id: 't1' }), shoes]),
@@ -130,7 +139,90 @@ describe('selectDiverseOutfits: Outerwear, Bag, and Belt anchors', () => {
     ];
 
     const selected = selectDiverseOutfits(outfits, 2);
+    const withShoes = selected.filter((o) => o.items.some((i) => i.id === 'shoes'));
+    expect(withShoes.length).toBe(1);
+  });
+
+  it('does not cap Scarf or Tights repetition', () => {
+    const scarf = item('Scarf', { id: 'scarf' });
+    const outfits = [
+      outfit([item('Pants', { id: 'p1' }), item('T-Shirt', { id: 't1' }), scarf]),
+      outfit([item('Pants', { id: 'p2' }), item('T-Shirt', { id: 't2' }), scarf]),
+    ];
+
+    const selected = selectDiverseOutfits(outfits, 2);
     expect(selected.length).toBe(2);
+  });
+
+  it('treats two outfits sharing a Top+Bottom but differing only by Outerwear as genuinely distinct combos, once the shared Bottom cap allows both through', () => {
+    // Bottom is itself a primary anchor sharing the same cap as Outerwear, so
+    // two outfits pinned to the identical bottom can never both survive the
+    // *default* cap of 1 regardless of coreComboKey -- that's real, correct
+    // behavior (see PRIMARY_ANCHOR_GROUPS), not a shoe/coat concern. This
+    // test isolates the actual fix: once the cap is wide enough to let a
+    // repeated Bottom through at all (maxPerAnchor 2, matching what
+    // rankedDiverseOutfits' own escalation loop would do in production for a
+    // wardrobe with just one warm-enough bottom), a genuinely different coat
+    // must no longer collapse into "the same combo" as coreComboKey used to
+    // do before Outerwear joined it.
+    const top = item('T-Shirt', { id: 't1' });
+    const bottom = item('Pants', { id: 'p1' });
+    const coatA = item('Coat', { id: 'coat-a' });
+    const coatB = item('Coat', { id: 'coat-b' });
+    const outfits = [outfit([top, bottom, coatA]), outfit([top, bottom, coatB])];
+
+    const selected = selectDiverseOutfits(outfits, 2, 2);
+    expect(selected).toHaveLength(2);
+  });
+
+  it('treats two outfits sharing a Top+Bottom but differing only by Shoes as genuinely distinct combos, once the shared Bottom cap allows both through', () => {
+    const top = item('T-Shirt', { id: 't1' });
+    const bottom = item('Pants', { id: 'p1' });
+    const bootsA = item('Boots', { id: 'boots-a' });
+    const bootsB = item('Boots', { id: 'boots-b' });
+    const outfits = [outfit([top, bottom, bootsA]), outfit([top, bottom, bootsB])];
+
+    // Boots isn't the blocker here (each id is fresh, under its own default
+    // secondary cap of 1) -- Bottom's shared primary cap is, so this needs
+    // the same maxPerAnchor relaxation as the Outerwear case above.
+    const selected = selectDiverseOutfits(outfits, 2, 2);
+    expect(selected).toHaveLength(2);
+  });
+});
+
+describe('rankedDiverseOutfits: reported bug -- identical coats/boots not rotating', () => {
+  it('surfaces both functionally-identical coats once escalation is needed to reach the minimum', () => {
+    // The exact real-world shape: one cold-enough bottom, two coats with
+    // identical warmth/wind, MIN_TODAY_OUTFITS-style floor forcing the
+    // primary cap to escalate past 1. Before Outerwear joined CORE_GROUPS,
+    // every outfit built on that one bottom reused whichever coat won a
+    // single per-bottom candidate-pool shuffle -- the other, equally valid
+    // coat never appeared at all, however far the cap escalated.
+    const bottom = item('Pants', { inferredWarmth: 6, inferredWind: 2 });
+    const tops = Array.from({ length: 4 }, () => item('T-Shirt', { inferredWarmth: 2, inferredWind: 0 }));
+    const shoes = Array.from({ length: 4 }, () => item('Boots', { inferredWarmth: 4, inferredWind: 3 }));
+    const coatA = item('Coat', { id: 'coat-a', inferredWarmth: 8, inferredWind: 6 });
+    const coatB = item('Coat', { id: 'coat-b', inferredWarmth: 8, inferredWind: 6 });
+
+    // Warmth/wind floors set so an outfit only meetsTarget WITH a coat
+    // (bottom+top+shoes alone: warmth 12, wind 5 -- both short of the
+    // floors below), the same way a genuinely cold day forces Outerwear to
+    // matter rather than staying purely optional.
+    const results = rankedDiverseOutfits(
+      emptyCandidates({ bottoms: [bottom], tops, shoes, outerwear: [coatA, coatB] }),
+      noDismatches,
+      18,
+      NO_CEILING,
+      7,
+      6,
+      4,
+    );
+
+    const coatIdsUsed = new Set(
+      results.map((o) => o.items.find((i) => i.category === 'Coat')?.id).filter((id): id is string => !!id),
+    );
+    expect(coatIdsUsed.has('coat-a')).toBe(true);
+    expect(coatIdsUsed.has('coat-b')).toBe(true);
   });
 });
 
@@ -181,7 +273,10 @@ describe('rankedDiverseOutfits', () => {
     const woolSweater = item('Sweater', { inferredWarmth: 8, inferredWind: 2 });
     const coat = item('Coat', { inferredWarmth: 10, inferredWind: 6 });
     const tights = item('Tights', { inferredWarmth: 2, inferredWind: 1 });
-    const boots = item('Boots', { inferredWarmth: 3, inferredWind: 8 });
+    // Two boots, not one -- Shoes is now a secondary anchor too (like
+    // Bag/Belt), so a single shared pair would cap the second bottom's
+    // outfit out on its own, unrelated to what this test is actually about.
+    const boots = Array.from({ length: 2 }, () => item('Boots', { inferredWarmth: 3, inferredWind: 8 }));
     // A wide, realistic accessory pool — this is what filled a fixed-size
     // pool with skirt-only ties before jeans was ever reached.
     const bags = Array.from({ length: 4 }, () => item('Bag', {}));
@@ -190,7 +285,7 @@ describe('rankedDiverseOutfits', () => {
     const candidates = emptyCandidates({
       bottoms: [silkSkirt, jeans],
       tops: [sleevelessTop, woolSweater],
-      shoes: [boots],
+      shoes: boots,
       outerwear: [coat],
       tights: [tights],
       bags,
@@ -231,10 +326,13 @@ describe('rankedDiverseOutfits', () => {
     const skirtB = item('Skirt', { inferredWarmth: 6, inferredWind: 2 });
     const skirtC = item('Skirt', { inferredWarmth: 8, inferredWind: 3 });
     const tops = Array.from({ length: 6 }, (_, i) => item('T-Shirt', { inferredWarmth: i, inferredWind: 0 }));
-    const shoes = item('Shoes');
+    // One per bottom -- a single shared pair would trip Shoes' own secondary
+    // cap and block the second/third bottom regardless of this test's actual
+    // subject (the primary Bottom cap).
+    const shoes = Array.from({ length: 3 }, () => item('Shoes'));
 
     const results = rankedDiverseOutfits(
-      emptyCandidates({ bottoms: [skirtA, skirtB, skirtC], tops, shoes: [shoes] }),
+      emptyCandidates({ bottoms: [skirtA, skirtB, skirtC], tops, shoes }),
       noDismatches,
       0,
       100,
@@ -264,10 +362,14 @@ describe('rankedDiverseOutfits', () => {
     const bottomA = item('Pants');
     const bottomB = item('Skirt');
     const tops = Array.from({ length: 4 }, () => item('T-Shirt'));
-    const shoes = item('Shoes');
+    // Four distinct shoes -- enough that reusing each bottom twice (4 total
+    // outfits) never has to reuse the same pair of shoes, so Shoes' own
+    // secondary cap (default 1, unescalated in Phase 1) can't confound what
+    // this test is actually checking (the primary Bottom cap escalation).
+    const shoes = Array.from({ length: 4 }, () => item('Shoes'));
 
     const strict = rankedDiverseOutfits(
-      emptyCandidates({ bottoms: [bottomA, bottomB], tops, shoes: [shoes] }),
+      emptyCandidates({ bottoms: [bottomA, bottomB], tops, shoes }),
       noDismatches,
       0,
       100,
@@ -277,7 +379,7 @@ describe('rankedDiverseOutfits', () => {
     expect(strict).toHaveLength(2);
 
     const relaxed = rankedDiverseOutfits(
-      emptyCandidates({ bottoms: [bottomA, bottomB], tops, shoes: [shoes] }),
+      emptyCandidates({ bottoms: [bottomA, bottomB], tops, shoes }),
       noDismatches,
       0,
       100,

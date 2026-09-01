@@ -3,7 +3,9 @@ import { ActivityIndicator, FlatList, Text, View } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { EmptyState } from '../components/EmptyState';
-import { GRID_COLUMNS, ItemTile, type Badge } from '../components/ItemTile';
+import { ItemPhotoBackdrop } from '../components/ItemPhotoBackdrop';
+import { StoredImage } from '../components/StoredImage';
+import { chunkIntoRows, ItemGridRow, type Badge } from '../components/ItemGrid';
 import { useDbQuery } from '../hooks/useDbQuery';
 import {
   clearCompatibility,
@@ -19,16 +21,18 @@ import type { RootStackParamList } from '../navigation/types';
 import type { ClothingItem, CompatibilityStatus } from '../types/wardrobe';
 
 /**
- * Tapping a tile walks unrated -> MATCH -> DISMATCH -> unrated.
- *
- * Three states need three stops, and returning to unrated matters: a mistap
- * would otherwise be permanent, and "unrated" is not the same as "DISMATCH" to
- * the Phase 5 generator, which only excludes explicit dismatches.
+ * Tapping a tile toggles DISMATCH on or off — an X appears, tapping again
+ * clears it back to unrated. Previously a three-stop cycle (unrated -> MATCH
+ * -> DISMATCH -> unrated); per direct feedback that rolling through a tick
+ * before reaching the X made marking a dismatch two taps rather than one.
+ * MATCH itself hasn't been removed as a status — OutfitMatchScreen's "match
+ * from a photo" flow still writes it, and an item already MATCHed there
+ * still shows that badge here — a tap on this screen just no longer stops
+ * on it: any tap sets DISMATCH outright, from unrated or from an existing
+ * MATCH alike.
  */
 function nextStatus(current: CompatibilityStatus | null): CompatibilityStatus | null {
-  if (current === null) return 'MATCH';
-  if (current === 'MATCH') return 'DISMATCH';
-  return null;
+  return current === 'DISMATCH' ? null : 'DISMATCH';
 }
 
 const badgeFor = (status: CompatibilityStatus | null): Badge =>
@@ -65,7 +69,7 @@ export function MatchesBrowserScreen() {
   if (error) return <EmptyState title={error} />;
   if (loading && !data) {
     return (
-      <View className="flex-1 items-center justify-center bg-slate-50">
+      <View className="flex-1 items-center justify-center bg-paper">
         <ActivityIndicator />
       </View>
     );
@@ -87,26 +91,39 @@ export function MatchesBrowserScreen() {
   }
 
   return (
-    <View className="flex-1 bg-slate-50">
-      <Text className="px-4 py-3 text-sm text-slate-500 bg-white border-b border-slate-200">
-        Tap to cycle: unrated → match → dismatch.
-      </Text>
+    <View className="flex-1 bg-paper">
+      {/* A small reminder of what's being dismatched against — the header's
+          own title already names the item's brand, but a thumbnail is what
+          actually lets you recognise it while scanning the grid below,
+          without having to read back up to the title each time. */}
+      <View className="flex-row items-center px-4 py-3 bg-paper border-b border-rule">
+        <View className="w-11 h-11 rounded-sm overflow-hidden mr-3">
+          <ItemPhotoBackdrop />
+          <StoredImage
+            path={data.item.imagePath}
+            hasBakedMargin={data.item.imageMarginBaked}
+            placeholder=""
+          />
+        </View>
+        <Text className="flex-1 text-sm font-sans text-ink-muted">
+          Tap an item to mark it a dismatch against {data.item.brand}. Tap again to remove it.
+        </Text>
+      </View>
       <FlatList
-        data={data.candidates}
-        keyExtractor={(candidate) => candidate.id}
-        numColumns={GRID_COLUMNS}
-        contentContainerClassName="p-2 grow"
+        data={chunkIntoRows(data.candidates)}
+        keyExtractor={(row) => row[0]?.id ?? 'empty'}
+        contentContainerClassName="grow"
         ListEmptyComponent={
           <EmptyState
             title="Nothing to match against yet"
             detail="Add items in other categories first."
           />
         }
-        renderItem={({ item: candidate }) => (
-          <ItemTile
-            item={candidate}
-            badge={badgeFor(data.verdicts.get(candidate.id) ?? null)}
-            onPress={() => void toggle(candidate.id)}
+        renderItem={({ item: row }) => (
+          <ItemGridRow
+            items={row}
+            badgeFor={(candidate) => badgeFor(data.verdicts.get(candidate.id) ?? null)}
+            onItemPress={(candidate) => void toggle(candidate.id)}
           />
         )}
       />

@@ -37,6 +37,7 @@ function item(overrides: Partial<ClothingItem> = {}): ClothingItem {
     wearCount: 0,
     createdAt: '',
     archivedAt: '',
+    isWorkAppropriate: false,
     ...overrides,
   };
 }

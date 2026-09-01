@@ -63,6 +63,7 @@ interface ClothingItemRow {
   wearCount: number;
   createdAt: string;
   archivedAt: string;
+  isWorkAppropriate: number;
 }
 
 /**
@@ -189,6 +190,7 @@ export function rowToItem(row: ClothingItemRow): ClothingItem {
     wearCount: row.wearCount,
     createdAt: row.createdAt,
     archivedAt: row.archivedAt,
+    isWorkAppropriate: row.isWorkAppropriate === 1,
   };
 }
 
@@ -210,7 +212,7 @@ export type ItemUpdate = Partial<Omit<ClothingItem, 'id' | 'wearCount' | 'create
 
 const ITEM_COLUMNS = `id, imagePath, originalImagePath, imageMarginBaked, category, brand, costMinorUnits, isSecondHand,
   purchasedAt, materials, primaryColor, secondaryColor, hardwareColor, hasBeltLoops, sleeveLength, length,
-  thickness, denier, backless, inferredWarmth, inferredWind, wearCount, createdAt, archivedAt`;
+  thickness, denier, backless, inferredWarmth, inferredWind, wearCount, createdAt, archivedAt, isWorkAppropriate`;
 
 /**
  * Inserts an item and returns it as stored.
@@ -227,7 +229,7 @@ export async function insertItem(
 ): Promise<ClothingItem> {
   await db.runAsync(
     `INSERT INTO ClothingItems (${ITEM_COLUMNS})
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       item.imagePath,
@@ -253,6 +255,7 @@ export async function insertItem(
       0,
       createdAt,
       '',
+      item.isWorkAppropriate ? 1 : 0,
     ],
   );
   return {
@@ -404,6 +407,7 @@ const UPDATE_ENCODERS: {
   backless: (v) => (v ? 1 : 0),
   inferredWarmth: (v) => v,
   inferredWind: (v) => v,
+  isWorkAppropriate: (v) => (v ? 1 : 0),
 };
 
 export async function updateItem(
@@ -560,6 +564,34 @@ export async function listItemsWornOn(db: ItemsDatabase, date: string): Promise<
   return worn;
 }
 
+/** Inserts one Outfit_Logs row and credits each item's wearCount — the shared body of logOutfitWorn and replaceOutfitLog. Caller must already be inside a transaction. */
+async function insertOutfitLog(
+  db: ItemsDatabase,
+  itemIds: readonly string[],
+  date: string,
+  id: string,
+  createdAt: string,
+): Promise<void> {
+  await db.runAsync(
+    'INSERT INTO Outfit_Logs (id, date, itemIds, collageImageUri, createdAt) VALUES (?, ?, ?, ?, ?)',
+    [id, date, JSON.stringify(itemIds), '', createdAt],
+  );
+  for (const itemId of itemIds) {
+    await db.runAsync('UPDATE ClothingItems SET wearCount = wearCount + 1 WHERE id = ?', [itemId]);
+  }
+}
+
+/** Deletes every Outfit_Logs row for `date` and un-credits each item's wearCount by one per occurrence — the shared body of removeOutfitLogs and replaceOutfitLog. Caller must already be inside a transaction. clamped at 0 (max(...,0)) rather than assuming the invariant always holds, per this codebase's defensive-programming convention. */
+async function clearOutfitLogsForDate(db: ItemsDatabase, date: string): Promise<void> {
+  const rows = await db.getAllAsync<{ itemIds: string }>('SELECT itemIds FROM Outfit_Logs WHERE date = ?', [date]);
+  for (const row of rows) {
+    for (const itemId of parseStringArrayColumn(row.itemIds)) {
+      await db.runAsync('UPDATE ClothingItems SET wearCount = MAX(wearCount - 1, 0) WHERE id = ?', [itemId]);
+    }
+  }
+  await db.runAsync('DELETE FROM Outfit_Logs WHERE date = ?', [date]);
+}
+
 /**
  * Records an outfit as worn on `date`, and credits each of its items with one
  * more wear.
@@ -569,6 +601,13 @@ export async function listItemsWornOn(db: ItemsDatabase, date: string): Promise<
  * exact shape sketched (but never wired up) in services/database.ts's
  * pre-Phase-5 TODO comment. wearCount is intentionally not a SQL trigger; see
  * that comment for why.
+ *
+ * Adds a new log row alongside any already logged for `date` rather than
+ * replacing them — see listItemsWornOn's "unions items across multiple
+ * outfits logged the same day" test for why that's intentional (e.g. a
+ * morning outfit and a separate evening change). A UI that means "replace
+ * what's shown for this single day" (Calendar's "Edit outfit") wants
+ * replaceOutfitLog instead, not this function.
  */
 export async function logOutfitWorn(
   db: ItemsDatabase,
@@ -578,13 +617,38 @@ export async function logOutfitWorn(
   createdAt: string = new Date().toISOString(),
 ): Promise<void> {
   await db.withTransactionAsync(async () => {
-    await db.runAsync(
-      'INSERT INTO Outfit_Logs (id, date, itemIds, collageImageUri, createdAt) VALUES (?, ?, ?, ?, ?)',
-      [id, date, JSON.stringify(itemIds), '', createdAt],
-    );
-    for (const itemId of itemIds) {
-      await db.runAsync('UPDATE ClothingItems SET wearCount = wearCount + 1 WHERE id = ?', [itemId]);
-    }
+    await insertOutfitLog(db, itemIds, date, id, createdAt);
+  });
+}
+
+/**
+ * Removes every outfit logged for `date` and un-credits each item's
+ * wearCount to match — the counterpart to logOutfitWorn, for Calendar's
+ * "Remove outfit". A no-op (not an error) when nothing was logged that day.
+ */
+export async function removeOutfitLogs(db: ItemsDatabase, date: string): Promise<void> {
+  await db.withTransactionAsync(async () => {
+    await clearOutfitLogsForDate(db, date);
+  });
+}
+
+/**
+ * Replaces whatever was logged for `date` with this single outfit, in one
+ * transaction — the clear and the insert either both land or neither does.
+ * What Calendar's "Edit outfit" should call: unlike logOutfitWorn, a
+ * previously-logged outfit for the same day is scrubbed (and its items'
+ * wearCount un-credited) rather than left stacked underneath the new one.
+ */
+export async function replaceOutfitLog(
+  db: ItemsDatabase,
+  itemIds: readonly string[],
+  date: string,
+  id: string = Crypto.randomUUID(),
+  createdAt: string = new Date().toISOString(),
+): Promise<void> {
+  await db.withTransactionAsync(async () => {
+    await clearOutfitLogsForDate(db, date);
+    await insertOutfitLog(db, itemIds, date, id, createdAt);
   });
 }
 

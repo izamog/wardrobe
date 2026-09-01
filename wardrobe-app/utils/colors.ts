@@ -3,35 +3,37 @@ import type { ItemColor } from '../types/wardrobe';
 /**
  * The colour vocabulary, in picker order.
  *
- * Ordered by family rather than alphabetically: someone looking for a shade of
- * blue scans to the blues, and near-neighbours sit together so a near-miss is
- * still a short move. Mirrored by CHECK constraints in services/migrations.ts.
+ * Alphabetical, same reasoning as ALL_MATERIALS in utils/materials.ts: a
+ * findable order, rather than one that reflects how someone once grouped
+ * shades by family. Mirrored by CHECK constraints in services/migrations.ts.
  *
  * 'Multi' is a statement that no single colour describes the garment, which is
- * why it cannot be combined with a second colour — see canCombineColors.
+ * why it cannot be combined with a second colour — see canCombineColors. It
+ * sorts alphabetically with the rest rather than being pinned last, same as
+ * every other entry.
  */
 export const ALL_COLORS: readonly ItemColor[] = [
-  'Black',
-  'Grey',
-  'White',
-  'Cream',
   'Beige',
-  'Tan',
+  'Black',
+  'Blue',
   'Brown',
   'Burgundy',
-  'Red',
-  'Pink',
-  'Orange',
-  'Yellow',
-  'Olive',
-  'Green',
-  'Teal',
-  'Blue',
-  'Navy',
-  'Purple',
+  'Cream',
   'Gold',
-  'Silver',
+  'Green',
+  'Grey',
   'Multi',
+  'Navy',
+  'Olive',
+  'Orange',
+  'Pink',
+  'Purple',
+  'Red',
+  'Silver',
+  'Tan',
+  'Teal',
+  'White',
+  'Yellow',
 ];
 
 const COLOR_SET: ReadonlySet<string> = new Set(ALL_COLORS);

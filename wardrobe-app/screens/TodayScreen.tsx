@@ -1,17 +1,21 @@
-import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, Switch, Text, View } from 'react-native';
+import Slider from '@react-native-community/slider';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { EmptyState } from '../components/EmptyState';
+import { OutfitCollage } from '../components/OutfitCollage';
 import { StoredImage } from '../components/StoredImage';
-import { currentLocation } from '../services/location';
-import { fetchTodayForecast, type DailyForecast } from '../services/weather';
-import { generateClosestTodayOutfits } from '../services/outfitGenerator';
-import { getLatestLoggedOutfit, logOutfitWorn } from '../services/items';
+import { useTodayData, outfitsFor } from '../contexts/TodayDataContext';
+import type { DailyForecast } from '../services/weather';
+import { logOutfitWorn } from '../services/items';
 import { withDb } from '../services/database';
 import { warmthCeiling, warmthFloor, windFloor } from '../utils/thermal';
 import type { ScoredOutfit } from '../utils/outfitGenerator';
+import { LEG_WARMTH_FLOOR_FRACTION, TORSO_WARMTH_FLOOR_FRACTION, legWarmth, torsoWarmth } from '../utils/outfitScoring';
+import { PREFERRED_ACCESSORY_GROUPS } from '../utils/outfitDedup';
+import { CATEGORY_GROUP } from '../utils/categories';
 import { todayDateString } from '../utils/date';
 import type { RootStackParamList } from '../navigation/types';
 import type { ClothingItem } from '../types/wardrobe';
@@ -21,66 +25,19 @@ import type { ClothingItem } from '../types/wardrobe';
  *
  * Location -> forecast -> thermal bounds -> generated outfits, in that
  * order, with each step's own honest failure state rather than a spinner
- * that never resolves. See services/location.ts, services/weather.ts,
- * utils/thermal.ts and services/outfitGenerator.ts for the pieces this
- * screen only assembles.
+ * that never resolves. The actual fetch (and the initial, real-forecast
+ * outfitsFor call — see contexts/TodayDataContext.tsx) lives in
+ * contexts/TodayDataContext, loaded once at app launch, not on this screen's
+ * focus; this screen only renders whatever state that provider is holding,
+ * and only calls outfitsFor itself for the troubleshooting slider's
+ * overridden values. See services/location.ts, services/weather.ts,
+ * utils/thermal.ts and services/outfitGenerator.ts for the pieces the
+ * provider assembles.
  */
-
-type LoadState =
-  | { step: 'loading' }
-  | { step: 'location-denied' }
-  | { step: 'weather-unavailable' }
-  | {
-      step: 'ready';
-      today: string;
-      forecast: DailyForecast;
-      warmthFloor: number;
-      warmthCeiling: number;
-      windFloor: number;
-      /**
-       * Every outfit the search space could build, ranked closest to today's
-       * bounds first — real matches sort first among themselves (distance 0),
-       * so this is "the recommendation and its alternatives" when enough
-       * exist, and "the closest the wardrobe could get" when they don't,
-       * without needing two separate searches or two separate empty states.
-       * See generateClosestTodayOutfits.
-       */
-      outfits: ScoredOutfit[];
-      wornToday: ClothingItem[];
-    };
-
-async function loadToday(): Promise<LoadState> {
-  const location = await currentLocation();
-  if (!location.ok) {
-    // 'unavailable' (no fix, GPS off) is folded into the same message as a
-    // denied permission: either way there is nothing to retry without the
-    // user doing something outside the app.
-    return { step: 'location-denied' };
-  }
-
-  const today = todayDateString();
-  const forecast = await fetchTodayForecast(location.coords, today);
-  if (!forecast) return { step: 'weather-unavailable' };
-
-  const bounds = {
-    warmthFloor: warmthFloor(forecast.feltTempC),
-    warmthCeiling: warmthCeiling(forecast.feltTempC),
-    windFloor: windFloor(forecast.windSpeedKph, forecast.feltTempC),
-  };
-  const { outfits, wornToday } = await withDb(async (db) => {
-    const [generated, worn] = await Promise.all([
-      generateClosestTodayOutfits(db, { ...bounds, today }),
-      getLatestLoggedOutfit(db, today),
-    ]);
-    return { outfits: generated, wornToday: worn };
-  });
-
-  return { step: 'ready', today, forecast, ...bounds, outfits, wornToday };
-}
 
 function LocationDeniedState() {
   return (
-    <View className="flex-1 bg-slate-50">
+    <View className="flex-1 bg-paper">
       <EmptyState
         title="Location needed"
         detail="Wardrobe uses your location to fetch today's forecast. You can turn it on in Settings."
@@ -89,9 +46,9 @@ function LocationDeniedState() {
         <Pressable
           onPress={() => void Linking.openSettings()}
           accessibilityRole="button"
-          className="rounded-xl py-3.5 items-center bg-slate-900"
+          className="rounded-sm py-3.5 items-center bg-ink"
         >
-          <Text className="text-white font-semibold">Open Settings</Text>
+          <Text className="text-paper font-sans-medium">Open Settings</Text>
         </Pressable>
       </View>
     </View>
@@ -100,15 +57,15 @@ function LocationDeniedState() {
 
 function RetryState({ title, detail, onRetry }: { title: string; detail: string; onRetry: () => void }) {
   return (
-    <View className="flex-1 bg-slate-50">
+    <View className="flex-1 bg-paper">
       <EmptyState title={title} detail={detail} />
       <View className="p-4">
         <Pressable
           onPress={onRetry}
           accessibilityRole="button"
-          className="rounded-xl py-3.5 items-center bg-slate-900"
+          className="rounded-sm py-3.5 items-center bg-ink"
         >
-          <Text className="text-white font-semibold">Retry</Text>
+          <Text className="text-paper font-sans-medium">Retry</Text>
         </Pressable>
       </View>
     </View>
@@ -127,16 +84,15 @@ function ForecastSummary({
   windFloor: number;
 }) {
   return (
-    <View className="bg-white rounded-2xl border border-slate-200 p-5">
-      <Text className="text-xs uppercase tracking-wide text-slate-500">Today</Text>
-      <Text className="text-3xl font-bold text-slate-900 mt-1">
-        {Math.round(forecast.tempC)}°C
-      </Text>
-      <Text className="text-sm text-slate-500">
+    <View className="bg-paper-2 rounded-sm p-5">
+      <Text className="text-xs font-sans uppercase tracking-wide text-ink-muted">Today</Text>
+      {/* Big statistics number, above the large-size threshold: Public Sans 400, not 300. */}
+      <Text className="text-4xl font-sans text-ink mt-1">{Math.round(forecast.tempC)}°C</Text>
+      <Text className="text-sm font-sans text-ink-muted">
         Feels like {Math.round(forecast.feltTempC)}°C · {Math.round(forecast.windSpeedKph)}kph wind
       </Text>
-      <View className="h-px bg-slate-200 my-4" />
-      <Text className="text-sm text-slate-500">
+      <View className="h-px bg-rule my-4" />
+      <Text className="text-sm font-sans text-ink-muted">
         Warmth needs to land between {warmthFloor} and {warmthCeiling} · Wind needs at least{' '}
         {windFloor}
       </Text>
@@ -144,10 +100,20 @@ function ForecastSummary({
           summed, weighted total (utils/thermal.ts), which routinely runs
           past 10 once more than one garment counts toward it — they aren't
           on the same 0-10 scale a single item's own score is. */}
-      <Text className="text-xs text-slate-500 mt-1">
+      <Text className="text-xs font-sans text-ink-muted mt-1">
         Both are outfit totals, not a 0-10 score — a warmth floor of 0 means no extra layer is
         needed today, and the ceiling is what stops warm enough from becoming too warm.
       </Text>
+    </View>
+  );
+}
+
+/** A single toggle: when on, Today's recommendations are built only from items marked work appropriate — see outfitsFor's workAppropriateOnly parameter. */
+function WorkAppropriateToggle({ value, onValueChange }: { value: boolean; onValueChange: (v: boolean) => void }) {
+  return (
+    <View className="flex-row items-center justify-between bg-paper-2 rounded-sm px-5 py-4 mt-3">
+      <Text className="text-sm font-sans-medium text-ink">Work appropriate only</Text>
+      <Switch value={value} onValueChange={onValueChange} />
     </View>
   );
 }
@@ -171,19 +137,49 @@ function OutfitThumbnail({
   showScores?: boolean;
 }) {
   return (
+    // Borderless, same as ItemGrid's photo cells and OutfitCollage — see design.md's
+    // box-in-box rule.
     <Pressable onPress={onPress} accessibilityRole="button" className="w-16 mr-2">
-      <View className="aspect-[3/4] rounded-lg overflow-hidden bg-white border border-slate-200">
-        <StoredImage path={item.imagePath} placeholder="No photo" />
+      <View className="aspect-[3/4] overflow-hidden bg-paper">
+        <StoredImage path={item.imagePath} hasBakedMargin={item.imageMarginBaked} placeholder="No photo" />
       </View>
-      <Text className="text-xs text-slate-500 mt-1" numberOfLines={1}>
+      <Text className="text-xs font-sans text-ink-muted mt-1" numberOfLines={1}>
         {item.category}
       </Text>
       {showScores && (
-        <Text className="text-xs text-slate-500" numberOfLines={1}>
+        <Text className="text-xs font-sans text-ink-muted" numberOfLines={1}>
           W{item.inferredWarmth} · Wd{item.inferredWind}
         </Text>
       )}
     </Pressable>
+  );
+}
+
+/**
+ * The collage plus the same per-item thumbnails OutfitThumbnail already
+ * renders individually tappable — the collage overlaps pieces too much to
+ * make each one its own reliable tap target, so the thumbnail row underneath
+ * is what stays tappable to an item's own detail screen, always visible
+ * rather than behind a tap.
+ */
+export function CollageWithThumbnails({
+  items,
+  onItemPress,
+  showScores = false,
+}: {
+  items: readonly ClothingItem[];
+  onItemPress: (itemId: string) => void;
+  showScores?: boolean;
+}) {
+  return (
+    <View>
+      <OutfitCollage items={items} />
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mt-3">
+        {items.map((item) => (
+          <OutfitThumbnail key={item.id} item={item} onPress={() => onItemPress(item.id)} showScores={showScores} />
+        ))}
+      </ScrollView>
+    </View>
   );
 }
 
@@ -198,15 +194,69 @@ function TodayOutfitBanner({
   onItemPress: (itemId: string) => void;
 }) {
   return (
-    <View className="bg-emerald-50 rounded-2xl border border-emerald-200 p-4 mb-4">
-      <Text className="text-xs uppercase tracking-wide text-emerald-700">Wearing today · {today}</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mt-3">
-        {outfit.map((item) => (
-          <OutfitThumbnail key={item.id} item={item} onPress={() => onItemPress(item.id)} />
-        ))}
-      </ScrollView>
+    <View className="border-b border-rule pb-4 mb-4">
+      <Text className="text-xs font-sans-medium uppercase tracking-wide text-accent mb-3">Wearing today · {today}</Text>
+      <CollageWithThumbnails items={outfit} onItemPress={onItemPress} />
     </View>
   );
+}
+
+/**
+ * The warmth/wind totals shown alongside this can each look fully on-target
+ * while the outfit still fails to meet it — meetsTarget also requires the
+ * leg and torso regions to each independently clear their own share of
+ * warmthFloor (see meetsRegionFloors in outfitScoring.ts), which has no
+ * other visible number. Surfacing it here is what turns "why is this only a
+ * runner-up when the totals look right" into something the region breakdown
+ * actually answers, instead of a total that looks fine hiding which body
+ * part it's short on. Only rendered for a card that doesn't meet target —
+ * see OutfitCard.
+ */
+function RegionShortfall({ items, warmthFloor }: { items: readonly ClothingItem[]; warmthFloor: number }) {
+  const legTarget = warmthFloor * LEG_WARMTH_FLOOR_FRACTION;
+  const torsoTarget = warmthFloor * TORSO_WARMTH_FLOOR_FRACTION;
+  const legs = legWarmth(items);
+  const torso = torsoWarmth(items);
+  return (
+    <Text className="text-xs font-sans text-amber-700 mt-1">
+      Legs {legs.toFixed(1)} (needs {legTarget.toFixed(1)}+) · Torso {torso.toFixed(1)} (needs{' '}
+      {torsoTarget.toFixed(1)}+)
+    </Text>
+  );
+}
+
+/** The badge text for an OutfitCard — split out to keep OutfitCard's own complexity down. */
+function outfitCardLabel(meetsTarget: boolean, rank: number): string {
+  if (meetsTarget) return rank === 0 ? 'Best match' : `Runner-up ${rank}`;
+  return rank === 0 ? 'Closest available (short of target)' : `Runner-up ${rank} (short of target)`;
+}
+
+/** How many Bag/Scarf/Tights items an outfit carries — see PREFERRED_ACCESSORY_GROUPS. */
+function accessoryCount(items: readonly ClothingItem[]): number {
+  return items.filter((item) => PREFERRED_ACCESSORY_GROUPS.has(CATEGORY_GROUP[item.category])).length;
+}
+
+/**
+ * A reason for a Runner-up card whose Warmth/Wind line reads identically to
+ * the Best match's — the exact case those visible totals give no reason for
+ * (reported confusion: "why is this only a runner-up when the numbers look
+ * the same"). Both outfits meeting today's target already means they're
+ * tied at distance 0 from the weather bounds (see distanceFromBounds in
+ * outfitScoring.ts — a met floor/ceiling/wind/region target each contribute
+ * 0), so accessory count — the next tie-break generateClosestOutfits'
+ * ranking actually applies (see outfitGenerator.ts's sort) — is the only
+ * thing left that could have decided the order. Only called for a card that
+ * meets target and isn't itself the best match; RegionShortfall already
+ * covers the short-of-target case.
+ */
+function whySameNumbersRankedBelowBest(outfit: ScoredOutfit, best: ScoredOutfit): string | null {
+  if (outfit.warmth !== best.warmth || outfit.wind !== best.wind) return null;
+  const short = accessoryCount(best.items) - accessoryCount(outfit.items);
+  if (short > 0) {
+    const noun = short === 1 ? 'an accessory (bag, scarf or tights)' : `${short} more preferred accessories`;
+    return `Same warmth and wind as the best match — it adds ${noun} this one doesn't.`;
+  }
+  return 'Same warmth and wind as the best match — shown as an equally valid alternative.';
 }
 
 /**
@@ -225,6 +275,7 @@ function TodayOutfitBanner({
 function OutfitCard({
   outfit,
   rank,
+  best,
   warmthFloor,
   warmthCeiling,
   windFloor,
@@ -234,6 +285,8 @@ function OutfitCard({
 }: {
   outfit: ScoredOutfit;
   rank: number;
+  /** The rank-0 outfit shown in this grid — see whySameNumbersRankedBelowBest. */
+  best: ScoredOutfit;
   warmthFloor: number;
   warmthCeiling: number;
   windFloor: number;
@@ -242,45 +295,41 @@ function OutfitCard({
   onItemPress: (itemId: string) => void;
 }) {
   const { meetsTarget } = outfit;
+  const whyBelowBest = rank > 0 && meetsTarget ? whySameNumbersRankedBelowBest(outfit, best) : null;
   const isTopMatch = meetsTarget && rank === 0;
-  const label = meetsTarget
-    ? rank === 0
-      ? 'Best match'
-      : `Runner-up ${rank}`
-    : rank === 0
-      ? 'Closest available (short of target)'
-      : `Runner-up ${rank} (short of target)`;
+  const label = outfitCardLabel(meetsTarget, rank);
+  // No card chrome (see design.md's box-in-box rule) — outfits are
+  // separated by whitespace and a hairline rule beneath each, not by a
+  // bordered white box around an already-bordered collage.
   return (
-    <View
-      className={`bg-white rounded-2xl border p-4 mb-3 ${meetsTarget ? 'border-emerald-400 border-2' : 'border-slate-200'}`}
-    >
+    <View style={{ width: '48%' }} className="pb-4 mb-4 border-b border-rule">
       <View className="flex-row items-center mb-2">
-        {isTopMatch && <Ionicons name="star" size={12} color="#059669" style={{ marginRight: 4 }} />}
+        {isTopMatch && <Ionicons name="star" size={12} color="#6B1F2A" style={{ marginRight: 4 }} />}
         <Text
-          className={`text-xs font-semibold uppercase tracking-wide ${meetsTarget ? 'text-emerald-600' : 'text-slate-500'}`}
+          className={`text-xs font-sans uppercase tracking-wide ${meetsTarget ? 'text-accent' : 'text-ink-muted'}`}
         >
           {label}
         </Text>
       </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        {outfit.items.map((item) => (
-          <OutfitThumbnail key={item.id} item={item} onPress={() => onItemPress(item.id)} showScores />
-        ))}
-      </ScrollView>
-      {/* An outfit's total is a body-region-weighted sum, so it can land on a
-          fraction — rounded here for display only, the real comparison
-          against the bounds uses the exact value. */}
-      <Text className="text-xs text-slate-500 mt-2">
-        Warmth {Math.round(outfit.warmth)} (needs {warmthFloor}-{warmthCeiling}) · Wind{' '}
-        {Math.round(outfit.wind)} (needs {windFloor}+)
+      <CollageWithThumbnails items={outfit.items} onItemPress={onItemPress} showScores />
+      {/* One decimal place, not rounded to a whole number: a whole-number
+          display let a real shortfall (e.g. 6.6 against a windFloor of 7)
+          read as "meets it" once both sides rounded to the same integer —
+          a reported source of confusion about why a card wasn't a Best
+          match despite the numbers looking exactly right. */}
+      <Text className="text-xs font-sans text-ink-muted mt-2">
+        Warmth {outfit.warmth.toFixed(1)} (needs {warmthFloor}-{warmthCeiling}) · Wind {outfit.wind.toFixed(1)} (needs{' '}
+        {windFloor}+)
       </Text>
+      {!meetsTarget && <RegionShortfall items={outfit.items} warmthFloor={warmthFloor} />}
+      {whyBelowBest && <Text className="text-xs font-sans text-ink-muted mt-1">{whyBelowBest}</Text>}
       <Pressable
         onPress={onWear}
         disabled={wearing}
         accessibilityRole="button"
-        className={`rounded-xl py-3 items-center mt-3 ${wearing ? 'bg-slate-300' : 'bg-emerald-600'}`}
+        className={`rounded-sm py-3 items-center mt-3 ${wearing ? 'bg-rule' : 'bg-accent'}`}
       >
-        <Text className="text-white font-semibold">{wearing ? 'Saving…' : 'Wear this outfit'}</Text>
+        <Text className="text-paper font-sans-medium">{wearing ? 'Saving…' : 'Wear this outfit'}</Text>
       </Pressable>
     </View>
   );
@@ -295,17 +344,200 @@ function NoOutfitState() {
   );
 }
 
+/** The recommended outfits, two per row — split out of TodayScreen to keep its own complexity down. */
+function OutfitGrid({
+  outfits,
+  bounds,
+  wearingIndex,
+  onWear,
+  onItemPress,
+}: {
+  outfits: ScoredOutfit[];
+  bounds: { warmthFloor: number; warmthCeiling: number; windFloor: number };
+  wearingIndex: number | null;
+  onWear: (outfit: readonly ClothingItem[], index: number) => void;
+  onItemPress: (itemId: string) => void;
+}) {
+  return (
+    <View className="flex-row flex-wrap justify-between">
+      {outfits.map((outfit, index) => (
+        <OutfitCard
+          key={outfit.items.map((item) => item.id).join('|')}
+          outfit={outfit}
+          rank={index}
+          best={outfits[0]}
+          warmthFloor={bounds.warmthFloor}
+          warmthCeiling={bounds.warmthCeiling}
+          windFloor={bounds.windFloor}
+          wearing={wearingIndex === index}
+          onWear={() => onWear(outfit.items, index)}
+          onItemPress={onItemPress}
+        />
+      ))}
+    </View>
+  );
+}
+
+/**
+ * Lets the slider values sit a bit apart from the real forecast without
+ * running off into nonsense — an unbounded slider drags is where a bogus
+ * warmth/wind computation would actually come from, not from thermal.ts's own
+ * math, which is fine at any input.
+ */
+const FELT_TEMP_MIN_C = -15;
+const FELT_TEMP_MAX_C = 35;
+const WIND_MIN_KPH = 0;
+const WIND_MAX_KPH = 80;
+
+/**
+ * The feels-like temperature and wind sliders that drive outfitsFor below —
+ * "what would today's recommendation be at a different temperature or wind
+ * speed", for troubleshooting a surprising or empty result without waiting
+ * for the weather to actually change. Collapsed by default so it doesn't
+ * compete with the actual recommendation for attention.
+ *
+ * onFeltTempChange/onWindChange only fire once a drag ends (Slider's
+ * onSlidingComplete), not on every tick of the drag (onValueChange) —
+ * generateClosestOutfits is a full, uncapped search of the whole candidate
+ * space (see its own doc comment in utils/outfitGenerator.ts), and running
+ * it dozens of times a second while a finger moves across the slider is what
+ * made dragging feel laggy. live* below is purely a local display value so
+ * the label and thumb still track the finger in real time; it's kept in sync
+ * with the committed feltTempC/windSpeedKph whenever those change from
+ * elsewhere (a reset, or the initial forecast load).
+ */
+function TroubleshootPanel({
+  feltTempC,
+  windSpeedKph,
+  isOverridden,
+  onFeltTempChange,
+  onWindChange,
+  onReset,
+}: {
+  feltTempC: number;
+  windSpeedKph: number;
+  isOverridden: boolean;
+  onFeltTempChange: (value: number) => void;
+  onWindChange: (value: number) => void;
+  onReset: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [liveFeltTempC, setLiveFeltTempC] = useState(feltTempC);
+  const [liveWindSpeedKph, setLiveWindSpeedKph] = useState(windSpeedKph);
+
+  useEffect(() => setLiveFeltTempC(feltTempC), [feltTempC]);
+  useEffect(() => setLiveWindSpeedKph(windSpeedKph), [windSpeedKph]);
+
+  return (
+    <View className="border-t border-rule pt-4 mt-4">
+      <Pressable
+        onPress={() => setOpen((o) => !o)}
+        accessibilityRole="button"
+        className="flex-row items-center justify-between"
+      >
+        <View className="flex-row items-center">
+          <Text className="text-sm font-sans-medium text-ink">Troubleshoot</Text>
+          {isOverridden && (
+            <View className="ml-2 rounded-full bg-accent px-2 py-0.5">
+              <Text className="text-xs font-sans-medium text-paper">Active</Text>
+            </View>
+          )}
+        </View>
+        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color="#6B6259" />
+      </Pressable>
+
+      {open && (
+        <View className="mt-4">
+          <Text className="text-xs font-sans text-ink-muted mb-5">
+            Drag either slider to see how today&apos;s recommendations would change at a different
+            feels-like temperature or wind speed — this doesn&apos;t change the actual forecast.
+          </Text>
+
+          <View className="flex-row items-center justify-between mb-1">
+            <Text className="text-xs font-sans text-ink-muted">Feels like</Text>
+            <Text className="text-xs font-sans-medium text-ink-muted">{Math.round(liveFeltTempC)}°C</Text>
+          </View>
+          <Slider
+            minimumValue={FELT_TEMP_MIN_C}
+            maximumValue={FELT_TEMP_MAX_C}
+            step={1}
+            value={liveFeltTempC}
+            onValueChange={setLiveFeltTempC}
+            onSlidingComplete={onFeltTempChange}
+            minimumTrackTintColor="#6B1F2A"
+            accessibilityLabel="Feels-like temperature"
+          />
+
+          <View className="flex-row items-center justify-between mb-1 mt-4">
+            <Text className="text-xs font-sans text-ink-muted">Wind</Text>
+            <Text className="text-xs font-sans-medium text-ink-muted">{Math.round(liveWindSpeedKph)}kph</Text>
+          </View>
+          <Slider
+            minimumValue={WIND_MIN_KPH}
+            maximumValue={WIND_MAX_KPH}
+            step={1}
+            value={liveWindSpeedKph}
+            onValueChange={setLiveWindSpeedKph}
+            onSlidingComplete={onWindChange}
+            minimumTrackTintColor="#6B1F2A"
+            accessibilityLabel="Wind speed"
+          />
+
+          {isOverridden && (
+            <Pressable onPress={onReset} accessibilityRole="button" className="mt-4 items-center">
+              <Text className="text-xs font-sans-medium text-accent">Reset to today&apos;s forecast</Text>
+            </Pressable>
+          )}
+        </View>
+      )}
+    </View>
+  );
+}
+
 export function TodayScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const [state, setState] = useState<LoadState>({ step: 'loading' });
+  const { state, reload: reloadTodayData, setWornToday } = useTodayData();
   const [wearingIndex, setWearingIndex] = useState<number | null>(null);
+  // null means "use the real forecast" — see effectiveFeltTempC/effectiveWindSpeedKph.
+  const [feltTempOverride, setFeltTempOverride] = useState<number | null>(null);
+  const [windOverride, setWindOverride] = useState<number | null>(null);
+  // Screen-local, not persisted: a filter this deliberate is worth re-choosing
+  // each visit rather than silently narrowing recommendations from a toggle
+  // set days ago and forgotten about.
+  const [workAppropriateOnly, setWorkAppropriateOnly] = useState(false);
 
   const reload = useCallback(() => {
-    setState({ step: 'loading' });
-    void loadToday().then(setState);
-  }, []);
+    setFeltTempOverride(null);
+    setWindOverride(null);
+    reloadTodayData();
+  }, [reloadTodayData]);
 
-  useFocusEffect(reload);
+  const isReady = state.step === 'ready';
+  const effectiveFeltTempC = feltTempOverride ?? (isReady ? state.forecast.feltTempC : 0);
+  const effectiveWindSpeedKph = windOverride ?? (isReady ? state.forecast.windSpeedKph : 0);
+  const isOverridden = feltTempOverride !== null || windOverride !== null;
+
+  const bounds = useMemo(
+    () => ({
+      warmthFloor: warmthFloor(effectiveFeltTempC),
+      warmthCeiling: warmthCeiling(effectiveFeltTempC),
+      windFloor: windFloor(effectiveWindSpeedKph, effectiveFeltTempC),
+    }),
+    [effectiveFeltTempC, effectiveWindSpeedKph],
+  );
+
+  // The common case (no slider override, filter off) reads the ranking the
+  // provider already computed in the background — see
+  // TodayLoadState.initialOutfits' own doc comment for why this screen must
+  // not run outfitsFor itself on every mount. A slider drag or turning the
+  // work-appropriate filter on both need a fresh call, for the same reason:
+  // either one changes what outfitsFor would return versus what the
+  // provider precomputed.
+  const outfits = useMemo(() => {
+    if (!isReady) return { shown: [], hasAnyOutfit: false };
+    if (!isOverridden && !workAppropriateOnly) return state.initialOutfits;
+    return outfitsFor(state.todayCandidates, effectiveFeltTempC, effectiveWindSpeedKph, workAppropriateOnly);
+  }, [isReady, isOverridden, workAppropriateOnly, state, effectiveFeltTempC, effectiveWindSpeedKph]);
 
   const openItem = useCallback(
     (itemId: string) => navigation.navigate('ItemDetails', { itemId }),
@@ -316,7 +548,11 @@ export function TodayScreen() {
     setWearingIndex(index);
     try {
       await withDb((db) => logOutfitWorn(db, outfit.map((item) => item.id), todayDateString()));
-      reload();
+      // Not reload(): that resets state to 'loading' and re-fetches location,
+      // weather and every candidate outfit, which flashes the whole screen
+      // back to a spinner just to reflect one write. Only wornToday actually
+      // needs to change here.
+      setWornToday([...outfit]);
     } catch (e) {
       console.error('Failed to log outfit as worn:', e);
       Alert.alert('Could not save', 'That outfit was not logged as worn.');
@@ -327,7 +563,7 @@ export function TodayScreen() {
 
   if (state.step === 'loading') {
     return (
-      <View className="flex-1 items-center justify-center bg-slate-50">
+      <View className="flex-1 items-center justify-center bg-paper">
         <ActivityIndicator />
       </View>
     );
@@ -343,37 +579,54 @@ export function TodayScreen() {
       />
     );
   }
+  if (state.step === 'error') {
+    return (
+      <RetryState
+        title="Something went wrong"
+        detail="Today's outfits couldn't be loaded. Try again."
+        onRetry={reload}
+      />
+    );
+  }
 
   return (
-    <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4">
+    <ScrollView className="flex-1 bg-paper" contentContainerClassName="p-4">
       {state.wornToday.length > 0 && (
         <TodayOutfitBanner today={state.today} outfit={state.wornToday} onItemPress={openItem} />
       )}
 
       <ForecastSummary
         forecast={state.forecast}
-        warmthFloor={state.warmthFloor}
-        warmthCeiling={state.warmthCeiling}
-        windFloor={state.windFloor}
+        warmthFloor={warmthFloor(state.forecast.feltTempC)}
+        warmthCeiling={warmthCeiling(state.forecast.feltTempC)}
+        windFloor={windFloor(state.forecast.windSpeedKph, state.forecast.feltTempC)}
+      />
+
+      <WorkAppropriateToggle value={workAppropriateOnly} onValueChange={setWorkAppropriateOnly} />
+
+      <TroubleshootPanel
+        feltTempC={effectiveFeltTempC}
+        windSpeedKph={effectiveWindSpeedKph}
+        isOverridden={isOverridden}
+        onFeltTempChange={setFeltTempOverride}
+        onWindChange={setWindOverride}
+        onReset={() => {
+          setFeltTempOverride(null);
+          setWindOverride(null);
+        }}
       />
 
       <View className="mt-4">
-        {state.outfits.length === 0 ? (
+        {outfits.shown.length === 0 ? (
           <NoOutfitState />
         ) : (
-          state.outfits.map((outfit, index) => (
-            <OutfitCard
-              key={outfit.items.map((item) => item.id).join('|')}
-              outfit={outfit}
-              rank={index}
-              warmthFloor={state.warmthFloor}
-              warmthCeiling={state.warmthCeiling}
-              windFloor={state.windFloor}
-              wearing={wearingIndex === index}
-              onWear={() => void wearOutfit(outfit.items, index)}
-              onItemPress={openItem}
-            />
-          ))
+          <OutfitGrid
+            outfits={outfits.shown}
+            bounds={bounds}
+            wearingIndex={wearingIndex}
+            onWear={wearOutfit}
+            onItemPress={openItem}
+          />
         )}
       </View>
     </ScrollView>

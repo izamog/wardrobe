@@ -1,8 +1,8 @@
 import { ALL_CATEGORIES, lengthOptionsFor } from './categories';
 import { ALL_COLORS, toColorPair } from './colors';
 import { ALL_MATERIALS } from './materials';
-import { SCALE_MAX } from './format';
-import type { Category, GarmentLength, HardwareColor, ItemColor, SleeveLength } from '../types/wardrobe';
+import { MAX_COST_MINOR_UNITS, parsePurchasedAtMonth, SCALE_MAX } from './format';
+import type { Category, GarmentLength, HardwareColor, ItemColor, SleeveLength, Thickness } from '../types/wardrobe';
 
 /**
  * What a spoken description was understood to say.
@@ -24,8 +24,22 @@ export interface ItemProposal {
   hasBeltLoops?: boolean;
   sleeveLength?: SleeveLength;
   length?: GarmentLength;
+  /**
+   * Validated the same way every other field here is, but services/voice.ts's
+   * extraction schema does not ask the model for thickness, denier or
+   * backless yet — a spoken description cannot currently propose any of the
+   * three, however clearly it implies one ("a mesh backless top"). Present
+   * here, and correctly parsed if a caller ever does supply them, so adding
+   * them to the schema later is a services/voice.ts change alone, not a type
+   * or validation change too.
+   */
+  thickness?: Thickness;
+  denier?: number;
+  backless?: boolean;
   inferredWarmth?: number;
   inferredWind?: number;
+  /** "YYYY-MM", the same shape the month picker writes — see parsePurchasedAtMonth. */
+  purchasedAt?: string;
 }
 
 /**
@@ -36,11 +50,12 @@ export interface ItemProposal {
  */
 const MAX_BRAND_LENGTH = 60;
 
-/** £100,000. Above this the model has misheard a year, a phone number or a size. */
-const MAX_COST_MINOR_UNITS = 10_000_000;
-
 const HARDWARE_COLORS: readonly HardwareColor[] = ['Gold', 'Silver', 'Brass', 'Black', 'None'];
 const SLEEVE_LENGTHS: readonly SleeveLength[] = ['Sleeveless', 'Short', 'Long'];
+const THICKNESSES: readonly Thickness[] = ['Mesh', 'Light', 'Regular', 'Thick', 'Heavy'];
+/** Same bounds as denier's own CHECK constraint in services/migrations.ts. */
+const DENIER_MIN = 5;
+const DENIER_MAX = 270;
 
 /**
  * Finds `value` in a vocabulary, ignoring case and surrounding space.
@@ -109,6 +124,9 @@ function parseColors(value: unknown): { primaryColor?: ItemColor; secondaryColor
   };
 }
 
+/** An item may carry at most this many materials — see MultiSelectField's maxSelected in components/Form.tsx. */
+export const MAX_MATERIALS = 2;
+
 function parseMaterialList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
 
@@ -119,7 +137,11 @@ function parseMaterialList(value: unknown): string[] | undefined {
   }
   if (matched.size === 0) return undefined;
 
-  return ALL_MATERIALS.filter((material) => matched.has(material));
+  // A spoken description naming three or more materials still only keeps the
+  // first MAX_MATERIALS in ALL_MATERIALS' own order — matched is unordered, so
+  // filtering ALL_MATERIALS first is what makes "first" mean something
+  // consistent rather than depending on Set iteration order.
+  return ALL_MATERIALS.filter((material) => matched.has(material)).slice(0, MAX_MATERIALS);
 }
 
 /**
@@ -140,6 +162,19 @@ function parseBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
 }
 
+/**
+ * Reads a denier value, rejecting rather than clamping — unlike
+ * parseScaleEstimate's warmth/wind estimates, denier is a real garment
+ * label the model either heard correctly or did not, so a wildly
+ * out-of-range answer (negative, or absurdly large) is more likely a
+ * misheard number than a true denier worth keeping a distorted version of.
+ */
+function parseDenier(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  const rounded = Math.round(value);
+  return rounded >= DENIER_MIN && rounded <= DENIER_MAX ? rounded : undefined;
+}
+
 /** Brand, category, materials and hardware colour — the identity fields. */
 function applyIdentityFields(source: Record<string, unknown>, proposal: ItemProposal): void {
   const brand = parseBrand(source.brand);
@@ -157,6 +192,9 @@ function applyIdentityFields(source: Record<string, unknown>, proposal: ItemProp
   const sleeveLength = matchVocabulary(source.sleeveLength, SLEEVE_LENGTHS);
   if (sleeveLength !== null) proposal.sleeveLength = sleeveLength;
 
+  const thickness = matchVocabulary(source.thickness, THICKNESSES);
+  if (thickness !== null) proposal.thickness = thickness;
+
   // Pants and Skirt each have their own length vocabulary (see
   // GarmentLength), so — unlike sleeveLength, one flat list — this can only
   // be checked once category is known. category is required in the
@@ -165,6 +203,14 @@ function applyIdentityFields(source: Record<string, unknown>, proposal: ItemProp
   if (category !== null) {
     const length = matchVocabulary(source.length, lengthOptionsFor(category));
     if (length !== null) proposal.length = length;
+  }
+
+  // Rejects malformed shape the same way every other field here does — an
+  // empty string means "the description implied no timeframe", which is the
+  // same as not proposing the field at all, so both become undefined.
+  if (typeof source.purchasedAt === 'string') {
+    const purchasedAt = parsePurchasedAtMonth(source.purchasedAt);
+    if (purchasedAt) proposal.purchasedAt = purchasedAt;
   }
 }
 
@@ -178,6 +224,12 @@ function applyQuantityFields(source: Record<string, unknown>, proposal: ItemProp
 
   const hasBeltLoops = parseBoolean(source.hasBeltLoops);
   if (hasBeltLoops !== undefined) proposal.hasBeltLoops = hasBeltLoops;
+
+  const backless = parseBoolean(source.backless);
+  if (backless !== undefined) proposal.backless = backless;
+
+  const denier = parseDenier(source.denier);
+  if (denier !== undefined) proposal.denier = denier;
 
   const inferredWarmth = parseScaleEstimate(source.inferredWarmth);
   if (inferredWarmth !== undefined) proposal.inferredWarmth = inferredWarmth;

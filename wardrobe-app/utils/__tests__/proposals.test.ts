@@ -113,9 +113,11 @@ describe('parseExtraction: colours', () => {
     // Multi carries almost no signal for matching; Red carries a lot. It also
     // keeps Multi out of the secondary column, which the schema forbids.
     expect(parseExtraction({ colors: ['Multi', 'Red'] })).toEqual({ primaryColor: 'Red' });
+    // Blue sorts before Red in ALL_COLORS' alphabetical order, so it lands in
+    // the primary column — vocabulary order, not the order named here.
     expect(parseExtraction({ colors: ['Multi', 'Red', 'Blue'] })).toEqual({
-      primaryColor: 'Red',
-      secondaryColor: 'Blue',
+      primaryColor: 'Blue',
+      secondaryColor: 'Red',
     });
   });
 
@@ -149,6 +151,15 @@ describe('parseExtraction: category, materials and hardware', () => {
 
   it('treats an all-unknown material list as nothing heard', () => {
     expect(parseExtraction({ materials: ['unobtainium'] }).materials).toBeUndefined();
+  });
+
+  it('keeps only the first two materials, in vocabulary order, when more are named', () => {
+    // Cotton, Silk and Wool are all valid entries — vocabulary order is what
+    // decides which two survive, not the order they were spoken in.
+    expect(parseExtraction({ materials: ['wool', 'cotton', 'silk'] }).materials).toEqual([
+      'Cotton',
+      'Silk',
+    ]);
   });
 
   it('reads hardware colour only from its own smaller vocabulary', () => {
@@ -212,6 +223,21 @@ describe('parseExtraction: booleans and estimates', () => {
   it('drops a non-numeric estimate', () => {
     expect(parseExtraction({ inferredWarmth: 'warm' }).inferredWarmth).toBeUndefined();
     expect(parseExtraction({ inferredWind: Number.NaN }).inferredWind).toBeUndefined();
+  });
+});
+
+describe('parseExtraction: purchasedAt', () => {
+  it('accepts a well-formed "YYYY-MM" the model computed', () => {
+    expect(parseExtraction({ purchasedAt: '2024-03' }).purchasedAt).toBe('2024-03');
+  });
+
+  it('drops a malformed value rather than storing garbage', () => {
+    expect(parseExtraction({ purchasedAt: 'a couple of years ago' }).purchasedAt).toBeUndefined();
+  });
+
+  it('treats "not heard" and an explicit empty string the same way', () => {
+    expect(parseExtraction({ purchasedAt: '' }).purchasedAt).toBeUndefined();
+    expect(parseExtraction({}).purchasedAt).toBeUndefined();
   });
 });
 

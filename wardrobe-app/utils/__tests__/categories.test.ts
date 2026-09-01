@@ -7,7 +7,9 @@ import {
   hardwareColorApplies,
   lengthApplies,
   lengthOptionsFor,
+  materialPercentApplies,
   sleeveLengthApplies,
+  thicknessApplies,
 } from '../categories';
 import { canLayerEitherWay } from '../layering';
 import type { Category } from '../../types/wardrobe';
@@ -83,12 +85,15 @@ describe('getComplementaryCategories', () => {
       'Coat',
       'Dress',
       'Pants',
+      'Leggings',
       'Skirt',
       'Shoes',
+      'Boots',
       'Sandals',
       'Belt',
       'Bag',
       'Scarf',
+      'Tights',
     ]);
   });
 
@@ -111,9 +116,17 @@ describe('getComplementaryCategories: Dress', () => {
   it('never pairs a dress with a plain top or with any bottom', () => {
     expect(getComplementaryCategories('Dress')).not.toContain('Top');
     expect(getComplementaryCategories('Dress')).not.toContain('Pants');
+    expect(getComplementaryCategories('Dress')).not.toContain('Leggings');
+    expect(getComplementaryCategories('Dress')).not.toContain('Skirt');
     // Symmetric: from Top and Bottom's own side too.
     expect(getComplementaryCategories('Top')).not.toContain('Dress');
     expect(getComplementaryCategories('Pants')).not.toContain('Dress');
+    expect(getComplementaryCategories('Leggings')).not.toContain('Dress');
+  });
+
+  it('pairs a dress with tights', () => {
+    expect(getComplementaryCategories('Dress')).toContain('Tights');
+    expect(getComplementaryCategories('Tights')).toContain('Dress');
   });
 
   it('pairs a dress with a t-shirt or shirt worn underneath it', () => {
@@ -183,8 +196,8 @@ describe('attribute applicability', () => {
     expect(ALL_CATEGORIES.filter(hardwareColorApplies)).toEqual(['Belt', 'Bag']);
   });
 
-  it('asks for belt loops on bottoms only', () => {
-    expect(ALL_CATEGORIES.filter(beltLoopsApply)).toEqual(['Pants']);
+  it('asks for belt loops on Pants and Skirt only', () => {
+    expect(ALL_CATEGORIES.filter(beltLoopsApply)).toEqual(['Pants', 'Skirt']);
   });
 
   it('asks for sleeve length on Top-group, Outerwear-group and Dress categories only', () => {
@@ -200,11 +213,11 @@ describe('attribute applicability', () => {
     ]);
   });
 
-  it('asks for length on Bottom and Skirt only', () => {
-    expect(ALL_CATEGORIES.filter(lengthApplies)).toEqual(['Pants', 'Skirt']);
+  it('asks for length on Dress, Pants, Leggings and Skirt only', () => {
+    expect(ALL_CATEGORIES.filter(lengthApplies)).toEqual(['Dress', 'Pants', 'Leggings', 'Skirt']);
   });
 
-  it('gives Bottom and Skirt their own, non-overlapping length vocabularies', () => {
+  it('gives Pants and Skirt their own, non-overlapping length vocabularies', () => {
     const bottomLengths = lengthOptionsFor('Pants');
     const skirtLengths = lengthOptionsFor('Skirt');
 
@@ -213,8 +226,48 @@ describe('attribute applicability', () => {
     expect(bottomLengths.some((l) => (skirtLengths as readonly string[]).includes(l))).toBe(false);
   });
 
+  it("gives Leggings its own length vocabulary, reusing Pants' and Skirt's own string values", () => {
+    // Reuses shared values deliberately -- see LeggingsLength's own doc
+    // comment in types/wardrobe.ts for why that's correct, not an oversight.
+    expect(lengthOptionsFor('Leggings')).toEqual(['Short', 'Knee-length', 'Capri', 'Long']);
+  });
+
   it('returns no length options for a category length does not apply to', () => {
     expect(lengthOptionsFor('Top')).toEqual([]);
     expect(lengthApplies('Top')).toBe(false);
+  });
+
+  it('excludes Tights, Leggings, Belt, Bag and the Shoes group from thickness', () => {
+    expect(ALL_CATEGORIES.filter(thicknessApplies)).toEqual([
+      'T-Shirt',
+      'Top',
+      'Shirt',
+      'Cardigan',
+      'Sweater',
+      'Jacket',
+      'Coat',
+      'Dress',
+      'Pants',
+      'Skirt',
+      'Scarf',
+    ]);
+  });
+
+  it('excludes Belt, Bag and the Shoes group from material percentages, but keeps Tights and Leggings', () => {
+    expect(ALL_CATEGORIES.filter(materialPercentApplies)).toEqual([
+      'T-Shirt',
+      'Top',
+      'Shirt',
+      'Cardigan',
+      'Sweater',
+      'Jacket',
+      'Coat',
+      'Dress',
+      'Pants',
+      'Leggings',
+      'Skirt',
+      'Scarf',
+      'Tights',
+    ]);
   });
 });

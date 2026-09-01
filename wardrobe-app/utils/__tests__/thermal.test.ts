@@ -35,12 +35,22 @@ describe('warmthCeiling', () => {
     expect(warmthCeiling(25)).toBeLessThan(10);
   });
 
-  it('stays generously above the floor on a cold day, so bundling up is never penalised', () => {
-    // The gap is a named constant (WARMTH_CEILING_SLACK); this pins down
-    // that a cold ceiling is not clamped back down toward its floor.
+  it('stays above the floor on a cold day, so bundling up is never penalised', () => {
     const coldFloor = warmthFloor(-15);
     const coldCeiling = warmthCeiling(-15);
-    expect(coldCeiling).toBeGreaterThan(coldFloor + 3);
+    expect(coldCeiling).toBeGreaterThan(coldFloor);
+  });
+
+  it('widens its gap above the floor as it gets colder, so a real layering system still fits', () => {
+    // The gap (WARMTH_CEILING_SLACK plus a coldness-scaled bonus, capped at
+    // COLD_CEILING_BONUS_MAX) stays flat at 5 from the neutral temperature
+    // up -- a hot day is exactly as tight as before -- and only widens below
+    // it, where a base layer, mid-layer and outerwear genuinely need more
+    // total room than a single hot-day garment does.
+    const mildGap = warmthCeiling(20) - warmthFloor(20);
+    const coldGap = warmthCeiling(-15) - warmthFloor(-15);
+    expect(mildGap).toBe(5);
+    expect(coldGap).toBeGreaterThan(mildGap);
   });
 });
 

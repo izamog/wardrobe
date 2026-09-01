@@ -100,9 +100,9 @@ function ChoiceButton({ label, onPress }: { label: string; onPress: () => void }
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      className="rounded-xl py-3.5 items-center bg-slate-900 mb-3"
+      className="rounded-sm py-3.5 items-center bg-ink mb-3"
     >
-      <Text className="text-white font-semibold text-base">{label}</Text>
+      <Text className="text-paper font-sans-medium text-base">{label}</Text>
     </Pressable>
   );
 }
@@ -122,7 +122,7 @@ export function PhotoSourceChooser({ onPicked }: { onPicked: (image: PreparedIma
     return (
       <View className="items-center py-10">
         <ActivityIndicator />
-        <Text className="text-slate-500 mt-3">Preparing…</Text>
+        <Text className="text-ink-muted font-sans mt-3">Preparing…</Text>
       </View>
     );
   }
@@ -143,7 +143,7 @@ export function RawPhotoSourceChooser({ onPicked }: { onPicked: (image: PickedIm
     return (
       <View className="items-center py-10">
         <ActivityIndicator />
-        <Text className="text-slate-500 mt-3">Preparing…</Text>
+        <Text className="text-ink-muted font-sans mt-3">Preparing…</Text>
       </View>
     );
   }
@@ -168,12 +168,12 @@ export function PhotoPreview({
 }) {
   return (
     <View>
-      <View className="aspect-square rounded-2xl overflow-hidden bg-slate-200 mb-4">
+      <View className="aspect-square rounded-sm overflow-hidden bg-paper-2 mb-4">
         <Image source={{ uri }} className="w-full h-full" resizeMode="cover" />
       </View>
       <ChoiceButton label="Use this photo" onPress={onAccept} />
       <Pressable onPress={onRetake} accessibilityRole="button" className="py-3 items-center">
-        <Text className="text-slate-500 font-medium">Take another</Text>
+        <Text className="text-ink-muted font-sans-medium">Take another</Text>
       </Pressable>
     </View>
   );

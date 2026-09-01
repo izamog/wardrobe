@@ -9,6 +9,7 @@ import { rankedDiverseOutfits } from '../utils/outfitDiversity';
 import type { ScoredOutfit } from '../utils/outfitGenerator';
 import { todayDateString } from '../utils/date';
 import type { ClothingItem } from '../types/wardrobe';
+import type { OutfitCandidates } from '../utils/outfitGenerator';
 
 /** The most outfits the Today screen ever recommends at once. */
 const TODAY_OUTFIT_COUNT = 6;
@@ -71,14 +72,33 @@ export interface TodayOutfits {
  * slider supplies; both are just different bounds over the same
  * already-fetched candidate pools, not two different features.
  */
+/** Narrows every slot's candidate pool to items marked work appropriate — see outfitsFor's workAppropriateOnly parameter. */
+function filterWorkAppropriate(candidates: OutfitCandidates): OutfitCandidates {
+  const only = (items: readonly ClothingItem[]) => items.filter((item) => item.isWorkAppropriate);
+  return {
+    bottoms: only(candidates.bottoms),
+    tops: only(candidates.tops),
+    shoes: only(candidates.shoes),
+    outerwear: only(candidates.outerwear),
+    scarves: only(candidates.scarves),
+    belts: only(candidates.belts),
+    bags: only(candidates.bags),
+    tights: only(candidates.tights),
+  };
+}
+
 export function outfitsFor(
   todayCandidates: TodayCandidates | null,
   feltTempC: number,
   windSpeedKph: number,
+  workAppropriateOnly: boolean = false,
 ): TodayOutfits {
   if (!todayCandidates) return { shown: [], hasAnyOutfit: false };
+  const candidates = workAppropriateOnly
+    ? filterWorkAppropriate(todayCandidates.candidates)
+    : todayCandidates.candidates;
   const diverse = rankedDiverseOutfits(
-    todayCandidates.candidates,
+    candidates,
     todayCandidates.dismatchedKeys,
     warmthFloor(feltTempC),
     warmthCeiling(feltTempC),

@@ -67,6 +67,42 @@ describe('outfitsFor', () => {
   });
 });
 
+describe('outfitsFor workAppropriateOnly', () => {
+  it('excludes items not marked work appropriate when the filter is on', () => {
+    const bottom = item('Pants', { inferredWarmth: 3, inferredWind: 2, isWorkAppropriate: true });
+    const casualTop = item('T-Shirt', { inferredWarmth: 2, inferredWind: 1 });
+    const workTop = item('Shirt', { id: 'work-top', inferredWarmth: 2, inferredWind: 1, isWorkAppropriate: true });
+    const shoes = item('Shoes', { inferredWarmth: 1, inferredWind: 1, isWorkAppropriate: true });
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [casualTop, workTop], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const result = outfitsFor(candidates, 20, 0, true);
+
+    expect(result.hasAnyOutfit).toBe(true);
+    expect(result.shown.every((outfit) => outfit.items.every((i) => i.isWorkAppropriate))).toBe(true);
+    expect(result.shown.some((outfit) => outfit.items.some((i) => i.id === 'work-top'))).toBe(true);
+  });
+
+  it('reports no outfit when nothing in the wardrobe is marked work appropriate', () => {
+    const bottom = item('Pants', { inferredWarmth: 3, inferredWind: 2 });
+    const top = item('T-Shirt', { inferredWarmth: 2, inferredWind: 1 });
+    const shoes = item('Shoes', { inferredWarmth: 1, inferredWind: 1 });
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    expect(outfitsFor(candidates, 20, 0, true).hasAnyOutfit).toBe(false);
+    // Confirms the filter is what's excluding them, not some other change --
+    // the same wardrobe builds a real outfit with the filter off.
+    expect(outfitsFor(candidates, 20, 0, false).hasAnyOutfit).toBe(true);
+  });
+});
+
 describe('outfitsFor threads wornDaysAgo into rankedDiverseOutfits', () => {
   it('passes todayCandidates.wornDaysAgo through', () => {
     const wornBag = item('Bag', { id: 'worn-bag' });

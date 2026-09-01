@@ -23,6 +23,7 @@ export const item = (
       | 'thickness'
       | 'denier'
       | 'backless'
+      | 'isWorkAppropriate'
     >
   > = {},
 ): ClothingItem => {
@@ -52,6 +53,7 @@ export const item = (
     wearCount: 0,
     createdAt: 'now',
     archivedAt: '',
+    isWorkAppropriate: false,
     ...overrides,
   };
 };

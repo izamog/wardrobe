@@ -58,41 +58,18 @@ export function VoiceBar({
   // Guards against a press-in that is still preparing when the finger lifts,
   // which would otherwise stop a recorder that had not started.
   const startingRef = useRef(false);
+  // Set when the finger lifts while startingRef is still true: `stage` is
+  // still 'idle' at that point (the setState from start() hasn't landed
+  // yet), so stopAndIngest would otherwise see nothing to stop and no-op,
+  // leaving the recorder running unattended on a fast tap. start() checks
+  // this once recording actually begins and stops immediately if it's set.
+  const stopRequestedRef = useRef(false);
 
   useEffect(() => {
     void setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
   }, []);
 
-  const start = useCallback(async () => {
-    if (stage !== 'idle' || startingRef.current) return;
-    startingRef.current = true;
-    try {
-      const permission = await AudioModule.requestRecordingPermissionsAsync();
-      if (!permission.granted) {
-        Alert.alert(
-          'Microphone needed',
-          'Wardrobe needs the microphone to hear your description. You can turn it on in Settings.',
-          [
-            { text: 'Not now', style: 'cancel' },
-            { text: 'Open Settings', onPress: () => void Linking.openSettings() },
-          ],
-        );
-        return;
-      }
-      await recorder.prepareToRecordAsync();
-      recorder.record();
-      setStage('recording');
-    } catch (e) {
-      console.error('Could not start recording:', e);
-      Alert.alert('Could not start recording', 'Please try again.');
-    } finally {
-      startingRef.current = false;
-    }
-  }, [recorder, stage]);
-
-  const stopAndIngest = useCallback(async () => {
-    if (stage !== 'recording') return;
-
+  const doStopAndIngest = useCallback(async () => {
     let uri: string | null = null;
     try {
       await recorder.stop();
@@ -118,7 +95,49 @@ export function VoiceBar({
       discardRecording(uri);
       setStage('idle');
     }
-  }, [onProposal, onTranscript, pipeline, recorder, stage]);
+  }, [onProposal, onTranscript, pipeline, recorder]);
+
+  const start = useCallback(async () => {
+    if (stage !== 'idle' || startingRef.current) return;
+    startingRef.current = true;
+    stopRequestedRef.current = false;
+    try {
+      const permission = await AudioModule.requestRecordingPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert(
+          'Microphone needed',
+          'Wardrobe needs the microphone to hear your description. You can turn it on in Settings.',
+          [
+            { text: 'Not now', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => void Linking.openSettings() },
+          ],
+        );
+        return;
+      }
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      setStage('recording');
+      if (stopRequestedRef.current) {
+        // The button was already released before recording actually began —
+        // honour that now instead of leaving the mic recording unattended.
+        void doStopAndIngest();
+      }
+    } catch (e) {
+      console.error('Could not start recording:', e);
+      Alert.alert('Could not start recording', 'Please try again.');
+    } finally {
+      startingRef.current = false;
+    }
+  }, [recorder, stage, doStopAndIngest]);
+
+  const stopAndIngest = useCallback(() => {
+    if (startingRef.current) {
+      stopRequestedRef.current = true;
+      return;
+    }
+    if (stage !== 'recording') return;
+    void doStopAndIngest();
+  }, [doStopAndIngest, stage]);
 
   const busy = stage === 'transcribing' || stage === 'extracting';
   const seconds = Math.floor((recorderState.durationMillis ?? 0) / 1000);
@@ -126,7 +145,7 @@ export function VoiceBar({
 
   return (
     <View
-      className="flex-row items-center px-4 pt-3 bg-white border-t border-slate-200"
+      className="flex-row items-center px-4 pt-3 bg-paper"
       // The home indicator sits over anything drawn at the very bottom, which
       // put the microphone half under it. The inset comes from the device, so
       // this is right on every model; the extra 12 keeps it comfortably clear
@@ -137,11 +156,11 @@ export function VoiceBar({
         {busy ? (
           <BouncingDots />
         ) : stage === 'recording' ? (
-          <Text className="text-sm font-medium text-slate-900">Listening… {seconds}s</Text>
+          <Text className="text-sm font-sans-medium text-ink">Listening… {seconds}s</Text>
         ) : (
           <>
-            <Text className="text-sm font-medium text-slate-900">Describe your item</Text>
-            <Text className="text-xs text-slate-500 mt-0.5">
+            <Text className="text-sm font-sans-medium text-ink">Describe your item</Text>
+            <Text className="text-xs font-sans text-ink-muted mt-0.5">
               Brand, cost, colour, new or second-hand
             </Text>
           </>
@@ -155,13 +174,13 @@ export function VoiceBar({
         accessibilityRole="button"
         accessibilityLabel="Hold to describe this item"
         className={`w-16 h-16 rounded-full items-center justify-center ${
-          stage === 'recording' ? 'bg-rose-600' : busy ? 'bg-slate-200' : 'bg-slate-900'
+          stage === 'recording' ? 'bg-rose-600' : busy ? 'bg-rule' : 'bg-ink'
         }`}
       >
         {/* No glyph while recording: the button turning red is the whole
             message, and an icon on top of it just competes. */}
         {stage === 'recording' ? null : (
-          <Ionicons name="mic" size={28} color={busy ? '#94a3b8' : '#ffffff'} />
+          <Ionicons name="mic" size={28} color={busy ? '#6B6259' : '#ffffff'} />
         )}
       </Pressable>
     </View>

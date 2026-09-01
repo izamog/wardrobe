@@ -1,6 +1,13 @@
 import * as Crypto from 'expo-crypto';
 import { deleteStoredImage, persistItemImage } from './images';
-import { deleteItem, insertItem, updateItem, type ItemsDatabase, type NewClothingItem } from './items';
+import {
+  deleteItem,
+  insertItem,
+  listExpiredArchivedItems,
+  updateItem,
+  type ItemsDatabase,
+  type NewClothingItem,
+} from './items';
 import { removeBackground } from './backgroundRemoval';
 import type { ClothingItem } from '../types/wardrobe';
 
@@ -46,8 +53,12 @@ export interface ItemActionDeps {
   removeBackground?: BackgroundRemover;
 }
 
-/** The fields the add form collects. The photo and the identity are added here. */
-export type ItemDraft = Omit<NewClothingItem, 'imagePath' | 'originalImagePath'>;
+/**
+ * The fields the add form collects. The photo, the identity, and whether the
+ * cutout came out with a baked margin are all decided here from the outcome
+ * of background removal, not by the caller.
+ */
+export type ItemDraft = Omit<NewClothingItem, 'imagePath' | 'originalImagePath' | 'imageMarginBaked'>;
 
 /**
  * The photo a create/replace call has to work with.
@@ -110,10 +121,11 @@ export async function createItem(
 
   const cutoutUri = photo.processed !== undefined ? photo.processed : await removeBg(photo.original);
   const imagePath = cutoutUri ? images.persist(cutoutUri, id, '.png') : originalImagePath;
+  const imageMarginBaked = cutoutUri !== null;
 
   try {
     return await deps.runQuery((db) =>
-      insertItem(db, { ...draft, imagePath, originalImagePath }, id),
+      insertItem(db, { ...draft, imagePath, originalImagePath, imageMarginBaked }, id),
     );
   } catch (e) {
     removeImages(images, originalImagePath, imagePath);
@@ -136,6 +148,89 @@ export async function removeItem(deps: ItemActionDeps, item: ClothingItem): Prom
   await deps.runQuery((db) => deleteItem(db, item.id));
 
   removeImages(images, item.imagePath, item.originalImagePath);
+}
+
+/**
+ * Persists an already-edited image (a flip or a manual crop — see
+ * flipStoredPhoto/cropStoredPhoto in services/images.ts) as the item's new
+ * imagePath, and removes the old file once the row points at the new one.
+ *
+ * Deliberately narrower than replaceItemImage: those two edits work on the
+ * photo already shown, not a fresh pick, so there is no new originalImagePath
+ * and no background-removal attempt to make — only imagePath moves. New path,
+ * not an overwrite, for the same image-cache reason persistItemImage's own
+ * doc comment gives.
+ *
+ * `marginBaked` defaults to the item's current value, which is correct for a
+ * flip: flipping preserves the whole canvas, margin included. A manual crop
+ * is different — cropStoredPhoto trims the framed canvas's raw pixels by
+ * arbitrary insets, which can (and often does) cut away the baked margin —
+ * so ImageAdjustmentsScreen must pass `marginBaked: false` explicitly rather than rely on
+ * this default. See imageMarginBaked's doc comment in types/wardrobe.ts.
+ *
+ * @throws if the row could not be updated, after discarding the new file.
+ */
+export async function editItemImage(
+  deps: ItemActionDeps,
+  item: ClothingItem,
+  newUri: string,
+  { marginBaked = item.imageMarginBaked }: { marginBaked?: boolean } = {},
+): Promise<void> {
+  const images = deps.images ?? deviceImages;
+  const extension = item.imagePath.endsWith('.png') ? '.png' : '.jpg';
+  const imagePath = images.persist(newUri, item.id, extension);
+
+  try {
+    await deps.runQuery((db) => updateItem(db, item.id, { imagePath, imageMarginBaked: marginBaked }));
+  } catch (e) {
+    removeImages(images, imagePath);
+    throw e;
+  }
+
+  removeImages(images, item.imagePath);
+}
+
+/** How long a bulk-deleted item sits in the archive before it is permanently removed. */
+export const ARCHIVE_RETENTION_DAYS = 30;
+
+/**
+ * Permanently removes every item whose archive grace period has passed —
+ * the other half of the Closet's bulk-delete: archiveItems (services/items.ts)
+ * only ever sets a timestamp, this is what actually deletes rows and files
+ * once ARCHIVE_RETENTION_DAYS has elapsed.
+ *
+ * Called once at app startup (see App.tsx), not on a timer: a wardrobe app
+ * only needs this to have run by the time the Archive screen or an outfit
+ * search reads the database, not to fire the moment a retention period ends
+ * while the app happens to be closed.
+ *
+ * Reuses removeItem per expired item rather than a bulk SQL delete, so each
+ * one takes the same row-then-files ordering and the same file cleanup any
+ * other deletion gets — see removeItem's own doc comment for why that order
+ * matters. A failure partway (a locked db, a filesystem error) leaves the
+ * remaining expired items to be swept on the next launch rather than losing
+ * track of them.
+ *
+ * @returns how many items were purged.
+ */
+export async function purgeExpiredArchivedItems(
+  deps: ItemActionDeps,
+  now: Date = new Date(),
+): Promise<number> {
+  const cutoff = new Date(now);
+  cutoff.setDate(cutoff.getDate() - ARCHIVE_RETENTION_DAYS);
+
+  const expired = await deps.runQuery((db) => listExpiredArchivedItems(db, cutoff.toISOString()));
+  // Each item's row-delete + file-removal is independent of every other's —
+  // nothing here shares state across items, and a failure on one (already
+  // logged and swallowed by removeItem's caller contract) must not block the
+  // rest: a leftover item is simply swept again next launch. allSettled, not
+  // Promise.all, so one rejection can't cut the sweep short.
+  const results = await Promise.allSettled(expired.map((item) => removeItem(deps, item)));
+  for (const result of results) {
+    if (result.status === 'rejected') console.error('Failed to purge an expired archived item:', result.reason);
+  }
+  return expired.length;
 }
 
 /**
@@ -163,9 +258,12 @@ export async function replaceItemImage(
 
   const cutoutUri = photo.processed !== undefined ? photo.processed : await removeBg(photo.original);
   const imagePath = cutoutUri ? images.persist(cutoutUri, item.id, '.png') : originalImagePath;
+  const imageMarginBaked = cutoutUri !== null;
 
   try {
-    await deps.runQuery((db) => updateItem(db, item.id, { imagePath, originalImagePath }));
+    await deps.runQuery((db) =>
+      updateItem(db, item.id, { imagePath, originalImagePath, imageMarginBaked }),
+    );
   } catch (e) {
     removeImages(images, originalImagePath, imagePath);
     throw e;

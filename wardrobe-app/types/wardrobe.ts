@@ -18,6 +18,7 @@ export type CategoryGroup =
   | 'Belt'
   | 'Bag'
   | 'Scarf'
+  | 'Tights'
   | 'Dress';
 
 /**
@@ -27,6 +28,11 @@ export type CategoryGroup =
  * types — vests, camisoles, tanks, plain jersey tops. It layers like a base
  * layer, which is what distinguishes it from 'T-Shirt' only by cut.
  *
+ * 'Shirt' is specifically a button-up upper-body garment — a blouse counts as
+ * a Shirt. 'Top' is everything upper-body that is neither 'Shirt' nor
+ * 'T-Shirt': no buttons, no t-shirt cut. See services/voice.ts and
+ * services/vision.ts for where this line is drawn for AI-assisted entry.
+ *
  * 'Dress' replaces a Top and a Bottom at once rather than sitting in either
  * slot: it may be layered under a Cardigan, Sweater, Jacket or Coat, and over
  * a T-Shirt or Shirt, but never paired with a plain Top or any Bottom — see
@@ -35,10 +41,17 @@ export type CategoryGroup =
  *
  * 'Pants' and 'Skirt' are the two Bottom-group categories — 'Pants' covers
  * trousers, jeans and shorts (anything below the waist that isn't a skirt).
- * They share the 'Bottom' CategoryGroup (see CATEGORY_GROUP in
- * utils/categories.ts), which is the "Bottoms" umbrella: two sibling
- * categories competing for the same outfit slot, the same relationship
- * 'Shoes' and 'Sandals' already have.
+ * 'Leggings' is a third: distinct from 'Pants' because it carries none of the
+ * cut/fabric assumptions "Pants" does, but it fills the same outfit slot —
+ * they share the 'Bottom' CategoryGroup (see CATEGORY_GROUP in
+ * utils/categories.ts), which is the "Bottoms" umbrella: sibling categories
+ * competing for the same outfit slot, the same relationship 'Shoes',
+ * 'Sandals' and 'Boots' already have.
+ *
+ * 'Tights' is its own category and its own CategoryGroup rather than folded
+ * into 'Bottom': unlike Pants/Leggings/Skirt it is not itself an outfit's
+ * bottom layer, it is legwear worn *with* a Skirt or Dress — see
+ * utils/categories.ts for how that keeps it from competing with them.
  *
  * Each member here has a matching entry in the category CHECK constraint in
  * services/migrations.ts. Adding one means adding a migration.
@@ -53,12 +66,15 @@ export type Category =
   | 'Coat'
   | 'Dress'
   | 'Pants'
+  | 'Leggings'
   | 'Skirt'
   | 'Shoes'
+  | 'Boots'
   | 'Sandals'
   | 'Belt'
   | 'Bag'
-  | 'Scarf';
+  | 'Scarf'
+  | 'Tights';
 
 /**
  * Metal finish of an item's hardware (buckles, zips, clasps).
@@ -140,7 +156,52 @@ export type PantsLength = 'Short' | 'Mid-length' | 'Capri' | 'Cropped' | 'Long';
  */
 export type SkirtLength = 'Mini' | 'Knee-length' | 'Midi' | 'Maxi';
 
-export type GarmentLength = PantsLength | SkirtLength;
+/**
+ * How long a pair of leggings is. Shares 'Short'/'Capri'/'Long' with
+ * PantsLength and 'Knee-length' with SkirtLength rather than minting its own
+ * distinct labels — see LENGTH_WARMTH_ADJUSTMENT's own comment in
+ * utils/warmth.ts for why reusing those values is deliberate, not an
+ * oversight.
+ *
+ * Each member here has a matching entry in the length CHECK constraint in
+ * services/migrations.ts. Adding one means adding a migration.
+ */
+export type LeggingsLength = 'Short' | 'Knee-length' | 'Capri' | 'Long';
+
+export type GarmentLength = PantsLength | SkirtLength | LeggingsLength;
+
+/**
+ * How thick a garment's fabric is, independent of category or material — a
+ * mesh tank and a heavy cable-knit jumper are both 'Top'-group items with no
+ * warmth-relevant material tagged, and the category/material system alone
+ * can't tell them apart. Applies to every category (see
+ * THICKNESS_WARMTH_ADJUSTMENT in utils/warmth.ts), unlike sleeveLength or
+ * length, which only mean something for specific categories — 'Regular' is
+ * the neutral migration default, the same role 'Short' plays for
+ * sleeveLength.
+ *
+ * Each member here has a matching entry in the thickness CHECK constraint in
+ * services/migrations.ts. Adding one means adding a migration.
+ */
+export type Thickness = 'Mesh' | 'Light' | 'Regular' | 'Thick' | 'Heavy';
+
+/**
+ * One material tagged on an item, with how much of it the user says the
+ * garment is made of.
+ *
+ * `percent` need not sum to 100 across an item's materials — a user who
+ * knows "mostly cotton, some elastane" but not the exact ratio can leave
+ * elastane's percent at 0 (not recorded) without having to also invent a
+ * number for cotton to make the two add up. 0 means "not recorded", the
+ * same convention denier and costMinorUnits use, not "0% of the garment" —
+ * see utils/warmth.ts's materialAdjustment, which excludes a 0-percent
+ * entry from the weighted average entirely rather than treating it as a
+ * material that contributes nothing.
+ */
+export interface MaterialEntry {
+  material: string;
+  percent: number;
+}
 
 export type CompatibilityStatus = 'MATCH' | 'DISMATCH';
 
@@ -165,6 +226,17 @@ export interface ClothingItem {
    * item. See services/backgroundRemoval.ts and services/itemActions.ts.
    */
   originalImagePath: string;
+  /**
+   * Whether imagePath's own pixels already have background-framer's margin
+   * baked in (see background-framer/frame.py) — true for a fresh
+   * background-removal cutout, false for a plain photo or one whose margin a
+   * manual crop (services/images.ts's cropStoredPhoto) has since trimmed
+   * away. components/StoredImage.tsx reads this to decide whether to add its
+   * own display-time margin on top; getting it wrong either doubles the
+   * margin or renders the garment flush to the tile's edge. A flip does not
+   * change this — see services/itemActions.ts's editItemImage.
+   */
+  imageMarginBaked: boolean;
   category: Category;
   brand: string;
   /**
@@ -174,8 +246,22 @@ export interface ClothingItem {
    */
   costMinorUnits: number;
   isSecondHand: boolean;
-  /** Stored as a JSON array string in SQLite; parse on read, stringify on write. */
-  materials: string[];
+  /**
+   * Free text describing when the item was bought — "a few years ago", "March
+   * 2022", or '' when not recorded. Deliberately not a parsed date: most
+   * owners don't know an exact purchase date, and a field that demanded one
+   * would either reject an honest answer or invite a fabricated exact one.
+   */
+  purchasedAt: string;
+  /**
+   * At most MAX_MATERIALS entries (see utils/proposals.ts), each an
+   * ALL_MATERIALS name paired with an optional percentage — see
+   * MaterialEntry's own doc comment for why percent is 0 (not required to
+   * sum to 100) rather than a normalized share. Stored as a JSON array
+   * string in SQLite; parse on read, stringify on write — see
+   * services/items.ts's decodeMaterials/encodeMaterials.
+   */
+  materials: MaterialEntry[];
   /**
    * The garment's main colour, or '' when not recorded.
    *
@@ -202,6 +288,24 @@ export interface ClothingItem {
    * "not yet known" rather than a guessed default.
    */
   length: GarmentLength | '';
+  /** How thick the fabric is — applies to every category. 'Regular' is the neutral default. */
+  thickness: Thickness;
+  /**
+   * Denier, only meaningful where denierApplies(category) — see
+   * utils/categories.ts (currently just Tights). 0 means "not recorded";
+   * real deniers never go this low, so it's a safe, honest sentinel the same
+   * way length uses '' — see denier's own CHECK in services/migrations.ts
+   * for why it's a numeric sentinel rather than an empty string.
+   */
+  denier: number;
+  /**
+   * Whether this Top or Dress has an open back — see backlessApplies in
+   * utils/categories.ts. Drives clearsBacklessRule in utils/pairs.ts: a
+   * backless item can't be layered with a T-Shirt, Shirt, Top, Sweater or
+   * Cardigan (any of those would show through, or defeat the point of an
+   * open-back design), but a Jacket or Coat over it is fine.
+   */
+  backless: boolean;
   /**
    * How warm the garment is, 0-10.
    *
@@ -215,6 +319,21 @@ export interface ClothingItem {
   inferredWind: number;
   wearCount: number;
   createdAt: string;
+  /**
+   * '' for an ordinary, listed item; otherwise the ISO timestamp a bulk
+   * delete archived it at. listItems and listItemsInCategories in
+   * services/items.ts both exclude archived rows automatically. See
+   * services/itemActions.ts's purgeExpiredArchivedItems for the 30-day
+   * permanent-deletion sweep this timestamp feeds.
+   */
+  archivedAt: string;
+  /**
+   * Whether this item is appropriate to wear to work. Set by the user on the
+   * add/edit form, never inferred. Drives Today's work-appropriate filter
+   * (see TodayDataContext.tsx) — when it's on, only items with this true are
+   * offered to the outfit search at all.
+   */
+  isWorkAppropriate: boolean;
 }
 
 export interface ItemCompatibility {

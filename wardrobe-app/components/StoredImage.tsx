@@ -11,11 +11,20 @@ import { FramedImage } from './FramedImage';
  */
 export function StoredImage({
   path,
+  hasBakedMargin,
   placeholder,
-  placeholderClassName = 'text-slate-500 text-xs',
+  placeholderClassName = 'text-ink-muted text-xs font-sans',
   resizeMode = 'contain',
 }: {
   path: string;
+  /**
+   * The item's own imageMarginBaked (types/wardrobe.ts) — whether path's
+   * pixels already carry background-framer's baked margin. Omit only for a
+   * pair member that isn't a real stored item (e.g. OutfitMatchScreen's ''
+   * placeholder path), where there is nothing to look up; every real item
+   * should pass its own field through rather than rely on the default.
+   */
+  hasBakedMargin?: boolean;
   placeholder: string;
   placeholderClassName?: string;
   /** 'contain' by default: a garment shown whole matters more than a filled tile. */
@@ -39,15 +48,14 @@ export function StoredImage({
 
   if (!uri || failed) return <Text className={placeholderClassName}>{placeholder}</Text>;
 
-  // A .png is a background-removal cutout, which background-framer already
-  // crops to the garment and frames onto a margined canvas server-side (see
+  // hasBakedMargin true means background-framer already cropped the garment
+  // and framed it onto a margined canvas server-side (see
   // background-framer/frame.py) -- adding FramedImage's own margin on top
-  // would double it. A .jpg is the plain photo (no cutout produced, or
-  // background removal unset/failed), which still needs the display-time
-  // margin, since nothing has framed it. Items saved before this split
-  // existed may have an unframed .png from the old client-side crop; those
-  // show with no margin until the photo is replaced or the item re-saved.
-  const margin = path.endsWith('.png') ? 0 : undefined;
+  // would double it. Anything else (a plain photo, or a cutout a manual crop
+  // has since trimmed the baked margin off of — see imageMarginBaked's doc
+  // comment in types/wardrobe.ts) still needs the display-time margin, since
+  // nothing framed it, or nothing to trust framed it any more.
+  const margin = hasBakedMargin ? 0 : undefined;
 
   return <FramedImage uri={uri} resizeMode={resizeMode} margin={margin} onError={() => setFailed(true)} />;
 }

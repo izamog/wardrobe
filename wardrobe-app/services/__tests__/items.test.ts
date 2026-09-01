@@ -30,6 +30,8 @@ import {
   listRatedPairKeys,
   logOutfitWorn,
   recentWearDays,
+  removeOutfitLogs,
+  replaceOutfitLog,
   restoreItem,
   rowToItem,
   setCompatibility,
@@ -98,6 +100,7 @@ const draft = (overrides: Partial<NewClothingItem> = {}): NewClothingItem => ({
   brand: 'Unbranded',
   costMinorUnits: 0,
   isSecondHand: false,
+  isWorkAppropriate: false,
   purchasedAt: '',
   materials: [],
   hardwareColor: 'None',
@@ -203,6 +206,7 @@ describe('rowToItem', () => {
       wearCount: 0,
       createdAt: 'now',
       archivedAt: '',
+      isWorkAppropriate: 0,
     });
 
     expect(item.isSecondHand).toBe(true);
@@ -235,6 +239,7 @@ describe('rowToItem', () => {
       wearCount: 0,
       createdAt: 'now',
       archivedAt: '',
+      isWorkAppropriate: 0,
     };
     expect(rowToItem({ ...base, materials: 'not json' }).materials).toEqual([]);
     expect(rowToItem({ ...base, materials: '{"a":1}' }).materials).toEqual([]);
@@ -269,6 +274,7 @@ describe('rowToItem', () => {
       wearCount: 0,
       createdAt: 'now',
       archivedAt: '',
+      isWorkAppropriate: 0,
     };
     expect(
       rowToItem({ ...base, materials: '[{"material":"wool","percent":250}]' }).materials,
@@ -609,6 +615,108 @@ describe('listItemsWornOn / logOutfitWorn', () => {
     // the wear it started to record.
     expect(await listItemsWornOn(db, '2026-08-21')).toEqual(new Set());
     expect((await getItem(db, 'top1'))?.wearCount).toBe(1);
+  });
+});
+
+describe('removeOutfitLogs', () => {
+  it('scrubs the logged outfit and decrements wearCount for each item', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await insertItem(db, draft({ category: 'Pants' }), 'bottom1');
+    await logOutfitWorn(db, ['top1', 'bottom1'], '2026-08-20', 'log1');
+
+    await removeOutfitLogs(db, '2026-08-20');
+
+    expect(await listItemsWornOn(db, '2026-08-20')).toEqual(new Set());
+    expect((await getItem(db, 'top1'))?.wearCount).toBe(0);
+    expect((await getItem(db, 'bottom1'))?.wearCount).toBe(0);
+  });
+
+  it('decrements once per occurrence when an item appears in multiple logs that day', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Pants' }), 'bottom1');
+    await logOutfitWorn(db, ['bottom1'], '2026-08-20', 'log1');
+    await logOutfitWorn(db, ['bottom1'], '2026-08-20', 'log2');
+    expect((await getItem(db, 'bottom1'))?.wearCount).toBe(2);
+
+    await removeOutfitLogs(db, '2026-08-20');
+
+    expect((await getItem(db, 'bottom1'))?.wearCount).toBe(0);
+  });
+
+  it('never drops wearCount below zero', async () => {
+    const db = await freshDb();
+    const top = await insertItem(db, draft({ category: 'Top' }), 'top1');
+    expect(top.wearCount).toBe(0);
+
+    // Nothing logged for this date -- a no-op, not a negative wearCount.
+    await removeOutfitLogs(db, '2026-08-20');
+
+    expect((await getItem(db, 'top1'))?.wearCount).toBe(0);
+  });
+
+  it('leaves other dates and their wearCount untouched', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await logOutfitWorn(db, ['top1'], '2026-08-19', 'log-before');
+    await logOutfitWorn(db, ['top1'], '2026-08-20', 'log-target');
+
+    await removeOutfitLogs(db, '2026-08-20');
+
+    expect(await listItemsWornOn(db, '2026-08-19')).toEqual(new Set(['top1']));
+    expect((await getItem(db, 'top1'))?.wearCount).toBe(1);
+  });
+});
+
+describe('replaceOutfitLog', () => {
+  it('replaces a previously-logged outfit rather than stacking a second one', async () => {
+    // Reported bug: LogOutfitScreen's "Edit outfit" called logOutfitWorn
+    // again on save, which -- correctly, per logOutfitWorn's own "unions
+    // multiple outfits logged the same day" contract -- added a *second* log
+    // row on top of the first instead of replacing it, double-crediting
+    // wearCount for every re-picked item. replaceOutfitLog is what the
+    // "edit a single day's outfit" UI should call instead.
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    await insertItem(db, draft({ category: 'Pants' }), 'bottom1');
+    await insertItem(db, draft({ category: 'Sweater' }), 'top2');
+    await logOutfitWorn(db, ['top1', 'bottom1'], '2026-08-20', 'log1');
+
+    await replaceOutfitLog(db, ['top2', 'bottom1'], '2026-08-20', 'log2');
+
+    expect(await listItemsWornOn(db, '2026-08-20')).toEqual(new Set(['top2', 'bottom1']));
+    // top1 was dropped by the edit -- its earlier credit is scrubbed, not left dangling.
+    expect((await getItem(db, 'top1'))?.wearCount).toBe(0);
+    // bottom1 was re-picked -- exactly one credit, not two.
+    expect((await getItem(db, 'bottom1'))?.wearCount).toBe(1);
+    expect((await getItem(db, 'top2'))?.wearCount).toBe(1);
+  });
+
+  it('behaves like a plain log when nothing was previously logged that day', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+
+    await replaceOutfitLog(db, ['top1'], '2026-08-20', 'log1');
+
+    expect(await listItemsWornOn(db, '2026-08-20')).toEqual(new Set(['top1']));
+    expect((await getItem(db, 'top1'))?.wearCount).toBe(1);
+  });
+
+  it('rolls back the whole replace if the insert half fails', async () => {
+    const db = await freshDb();
+    await insertItem(db, draft({ category: 'Top' }), 'top1');
+    // 'dup-log' is logged on a *different* date, so replaceOutfitLog's own
+    // clear (scoped to 2026-08-20) never touches it -- it survives to make
+    // the insert's id collide once replaceOutfitLog tries to reuse it below.
+    await logOutfitWorn(db, ['top1'], '2026-08-19', 'dup-log');
+    await logOutfitWorn(db, ['top1'], '2026-08-20', 'log-original');
+
+    await expect(replaceOutfitLog(db, ['top1'], '2026-08-20', 'dup-log')).rejects.toThrow();
+
+    // The clear must not have landed without its paired insert -- the
+    // original 2026-08-20 log and its wearCount credit must still stand.
+    expect(await listItemsWornOn(db, '2026-08-20')).toEqual(new Set(['top1']));
+    expect((await getItem(db, 'top1'))?.wearCount).toBe(2);
   });
 });
 

@@ -3,7 +3,6 @@ import type { Category } from '../types/wardrobe';
 
 export type TabParamList = {
   Closet: undefined;
-  Match: undefined;
   Today: undefined;
   Calendar: undefined;
 };
@@ -17,5 +16,10 @@ export type RootStackParamList = {
   AddItem: { category?: Category } | undefined;
   ItemDetails: { itemId: string };
   MatchesBrowser: { itemId: string };
+  ItemOutfits: { itemId: string };
   OutfitMatch: undefined;
+  Archive: undefined;
+  ImageAdjustments: { itemId: string };
+  /** date is YYYY-MM-DD — the Calendar day being logged or re-logged. */
+  LogOutfit: { date: string };
 };

@@ -96,6 +96,7 @@ function extractionSchema() {
       'length',
       'inferredWarmth',
       'inferredWind',
+      'purchasedAt',
     ],
     properties: {
       brand: { type: ['string', 'null'] },
@@ -105,7 +106,7 @@ function extractionSchema() {
       // from any description of a garment even when none is stated.
       category: { type: 'string', enum: [...ALL_CATEGORIES] },
       isSecondHand: { type: ['boolean', 'null'] },
-      materials: { type: 'array', items: { type: 'string', enum: [...ALL_MATERIALS] } },
+      materials: { type: 'array', items: { type: 'string', enum: [...ALL_MATERIALS] }, maxItems: 2 },
       hardwareColor: nullableEnum(['Gold', 'Silver', 'Brass', 'Black', 'None']),
       hasBeltLoops: { type: ['boolean', 'null'] },
       sleeveLength: nullableEnum(['Sleeveless', 'Short', 'Long']),
@@ -126,16 +127,24 @@ function extractionSchema() {
       ]),
       inferredWarmth: { type: ['number', 'null'] },
       inferredWind: { type: ['number', 'null'] },
+      // Not an enum: a free "YYYY-MM" the model computes from today's date —
+      // see EXTRACTION_INSTRUCTIONS. utils/proposals.ts checks the shape,
+      // same as every other field here; structured output guarantees a
+      // string, not that it parses.
+      purchasedAt: { type: ['string', 'null'] },
     },
   };
 }
 
-const EXTRACTION_INSTRUCTIONS = [
+const EXTRACTION_INSTRUCTIONS_BASE = [
   'You extract clothing attributes from a spoken description of a single garment.',
   'Return null for anything the description does not state or clearly imply.',
   'Do not guess a brand or a price: those are facts, and a wrong one is worse than none.',
   'category is the exception — always choose the closest one, inferring it from the',
   'garment described even when the speaker never names a category.',
+  'Shirt means a button-up upper-body garment specifically — a blouse counts as a',
+  'Shirt. Top means any other upper-body garment that is not a Shirt and not a',
+  'T-Shirt: a vest, camisole, tank or plain jersey top with no buttons.',
   'costInPounds is the amount paid, in pounds, as a decimal number.',
   'sleeveLength is Sleeveless, Short or Long, only for a garment with a bodice or an',
   'arm hole — return null for anything else, and null if the description does not say.',
@@ -148,6 +157,28 @@ const EXTRACTION_INSTRUCTIONS = [
   'other field. The app already estimates both from category and material on its own,',
   'so leaving them null when nothing was said is the correct answer, not a missed one.',
 ].join(' ');
+
+/**
+ * Built per call, not a module-level constant like the base instructions
+ * above — it has to name today's actual date so the model can turn a
+ * relative duration ("a couple of years ago", "last spring") into a concrete
+ * month, the same way a person would work it out.
+ */
+function extractionInstructions(today: Date): string {
+  const todayIso = today.toISOString().slice(0, 10);
+  return [
+    EXTRACTION_INSTRUCTIONS_BASE,
+    `purchasedAt is the month the item was bought, as a "YYYY-MM" string, computed`,
+    `relative to today's date (${todayIso}). Only return one when the description`,
+    'actually implies a time frame — a stated month and year, a season ("last spring"),',
+    'or a rough duration ("a couple of years ago", "a few months back") — rounding a',
+    'vague duration to the nearest month. When only a month is stated with no year',
+    "(\"I bought it in May\"), infer the year as the most recent occurrence of that",
+    "month at or before today — this year's if that month has already started this",
+    'year, last year\'s otherwise. Return null when the description says nothing',
+    'about when it was bought.',
+  ].join(' ');
+}
 
 /**
  * Reads item attributes out of a transcript.
@@ -166,7 +197,7 @@ export async function extractItemAttributes(transcript: string): Promise<ItemPro
       body: JSON.stringify({
         model,
         messages: [
-          { role: 'system', content: EXTRACTION_INSTRUCTIONS },
+          { role: 'system', content: extractionInstructions(new Date()) },
           { role: 'user', content: transcript },
         ],
         response_format: {

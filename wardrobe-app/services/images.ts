@@ -8,9 +8,10 @@ import {
   resolveImagePath,
 } from '../utils/imagePaths';
 import { resizeTargetFor } from '../utils/imageSizing';
-import { cropRectFor, type CropRect } from '../utils/cropGeometry';
+import { cropRectFor, cropRectFromInsets, type CropRect, type EdgeInsets } from '../utils/cropGeometry';
 import { detectGarment } from './vision';
 import { removeBackground } from './backgroundRemoval';
+import { probeImageDimensions } from './imageProbe';
 
 /**
  * The one module that touches the camera, the photo library and the disk.
@@ -271,6 +272,72 @@ export async function refineCapturedImage(picked: PickedImage): Promise<RefinedI
       detectedHasBeltLoops: null,
     };
   }
+}
+
+/**
+ * Whether a stored image's path or uri is a PNG — a background-removal
+ * cutout (see StoredImage.tsx) rather than a plain photo. Flip and manual
+ * crop both need this to preserve the source's format: re-encoding a cutout
+ * as JPEG discards its transparency outright.
+ */
+function isPng(uriOrPath: string): boolean {
+  return uriOrPath.toLowerCase().endsWith('.png');
+}
+
+/**
+ * Flips a stored photo horizontally or vertically, returning a new temporary
+ * uri — persisting it as the item's new imagePath is the caller's job (see
+ * itemActions.ts's editItemImage), the same division of labour every other
+ * function in this file keeps between producing pixels and writing files.
+ */
+export async function flipStoredPhoto(
+  sourceUri: string,
+  axis: 'horizontal' | 'vertical',
+): Promise<string> {
+  const format = isPng(sourceUri) ? ImageManipulator.SaveFormat.PNG : ImageManipulator.SaveFormat.JPEG;
+  const context = ImageManipulator.ImageManipulator.manipulate(sourceUri);
+  context.flip(axis);
+  const image = await context.renderAsync();
+  const saved = await image.saveAsync({ compress: IMAGE_QUALITY, format });
+  return saved.uri;
+}
+
+/**
+ * Rotates a stored photo 90° clockwise, returning a new temporary uri — same
+ * division of labour as flipStoredPhoto: this only produces pixels, the
+ * caller (itemActions.ts's editItemImage) persists them. Repeat taps compose
+ * to 180°/270° through repeated calls rather than this taking an arbitrary
+ * angle; a garment photo only ever needs squaring up to the nearest right
+ * angle, not fine-grained rotation.
+ */
+export async function rotateStoredPhoto(sourceUri: string): Promise<string> {
+  const format = isPng(sourceUri) ? ImageManipulator.SaveFormat.PNG : ImageManipulator.SaveFormat.JPEG;
+  const context = ImageManipulator.ImageManipulator.manipulate(sourceUri);
+  context.rotate(90);
+  const image = await context.renderAsync();
+  const saved = await image.saveAsync({ compress: IMAGE_QUALITY, format });
+  return saved.uri;
+}
+
+/**
+ * Crops a stored photo to the given edge insets (see EdgeInsets in
+ * utils/cropGeometry.ts) — the manual "trim a bad background-removal edge"
+ * step, distinct from renderCrop's automatic box-based crop during capture.
+ *
+ * Needs the source's own dimensions to turn fractional insets into pixels,
+ * which is what probeImageDimensions is for (see its own doc comment) —
+ * shared with services/backgroundRemoval.ts's capForUpload, not duplicated.
+ */
+export async function cropStoredPhoto(sourceUri: string, insets: EdgeInsets): Promise<string> {
+  const format = isPng(sourceUri) ? ImageManipulator.SaveFormat.PNG : ImageManipulator.SaveFormat.JPEG;
+  const { width, height } = await probeImageDimensions(sourceUri);
+  const rect = cropRectFromInsets(insets, width, height);
+
+  const context = ImageManipulator.ImageManipulator.manipulate(sourceUri);
+  if (rect.width > 0 && rect.height > 0) context.crop(rect);
+  const image = await context.renderAsync();
+  const saved = await image.saveAsync({ compress: IMAGE_QUALITY, format });
+  return saved.uri;
 }
 
 function itemImageDirectory(): Directory {

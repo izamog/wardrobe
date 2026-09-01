@@ -18,7 +18,7 @@ const TRAVEL = 5;
  * Uses the built-in Animated with the native driver, so it keeps moving while
  * JavaScript is busy handling the response.
  */
-export function BouncingDots({ color = '#0f172a' }: { color?: string }) {
+export function BouncingDots({ color = '#1A1714' }: { color?: string }) {
   // Created once: re-creating the values each render would restart every loop
   // and the dots would never fall out of step with each other.
   const values = useRef(

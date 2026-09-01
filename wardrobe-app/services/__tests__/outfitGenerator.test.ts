@@ -83,6 +83,7 @@ const draft = (overrides: Partial<NewClothingItem> = {}): NewClothingItem => ({
   brand: 'Unbranded',
   costMinorUnits: 0,
   isSecondHand: false,
+  isWorkAppropriate: false,
   purchasedAt: '',
   materials: [],
   hardwareColor: 'None',
@@ -279,7 +280,11 @@ describe('generateOutfitsWithItem', () => {
     await insertItem(db, draft({ category: 'Skirt', hasBeltLoops: true }), 'bottom2', '2026-08-01T00:00:00Z');
     await insertItem(db, draft({ category: 'T-Shirt' }), 'top1', '2026-08-01T00:00:00Z');
     await insertItem(db, draft({ category: 'Shirt' }), 'top2', '2026-08-01T00:00:00Z');
+    // Two pairs of shoes, not one -- Shoes is itself a secondary anchor now
+    // (capped like Bag/Belt), so a single shared pair would cap bottom2's
+    // outfit out on its own, unrelated to what this test is actually about.
     await insertItem(db, draft({ category: 'Shoes' }), 'shoes1', '2026-08-01T00:00:00Z');
+    await insertItem(db, draft({ category: 'Shoes' }), 'shoes2', '2026-08-01T00:00:00Z');
     await insertItem(db, draft({ category: 'Belt' }), 'the-belt', '2026-08-01T00:00:00Z');
     const belt = (await getItem(db, 'the-belt'))!;
 

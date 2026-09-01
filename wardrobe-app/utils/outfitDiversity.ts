@@ -14,8 +14,22 @@ import type { CategoryGroup } from '../types/wardrobe';
  * is a distinct, valid combination.
  */
 
-/** The body-region groups that define an outfit's identity for this purpose — not Shoes, Outerwear or any accessory, which are what two "different" results here are allowed to vary by. */
-const CORE_GROUPS: ReadonlySet<CategoryGroup> = new Set<CategoryGroup>(['Top', 'Bottom', 'Dress']);
+/**
+ * The body-region groups that define an outfit's identity for this purpose.
+ *
+ * Outerwear and Shoes joined Top/Bottom/Dress here after a reported bug: two
+ * outfits sharing the same Top+Bottom but wearing a different (functionally
+ * identical) coat, or a different pair of boots, used to collapse to "the
+ * same combo" — only the first-ranked coat/boots pairing ever survived this
+ * function's dedup, so a second coat or a second and third boot the user
+ * owned could never appear even once, regardless of PRIMARY_ANCHOR_GROUPS'/
+ * SECONDARY_ANCHOR_GROUPS' own caps below, which only ever get a chance to
+ * run on the combos that make it past this dedup in the first place. Scarf,
+ * Belt, Bag and Tights remain outside CORE_GROUPS — those still vary freely
+ * within what counts as "the same" recommendation, subject only to
+ * SECONDARY_ANCHOR_GROUPS' own cap for Bag/Belt/Shoes.
+ */
+const CORE_GROUPS: ReadonlySet<CategoryGroup> = new Set<CategoryGroup>(['Top', 'Bottom', 'Dress', 'Outerwear', 'Shoes']);
 
 /** The Top/Bottom/Dress items an outfit is built around, as a stable, order-independent key — see CORE_GROUPS. */
 function coreComboKey(outfit: ScoredOutfit): string {
@@ -60,12 +74,19 @@ const PRIMARY_ANCHOR_GROUPS: ReadonlySet<CategoryGroup> = new Set<CategoryGroup>
  * The groups tracked as a "secondary" anchor -- capped independently of
  * PRIMARY_ANCHOR_GROUPS, and only relaxed once the primary cap has already
  * reached its own ceiling (see rankedDiverseOutfits' escalation loop). A
- * repeated bag or belt is a milder version of the same "same outfit twice"
- * complaint the primary tier exists for, but strictly less bad than a
- * repeated bottom or coat — so every way to fix the primary tier is
- * exhausted before this tier is ever allowed to relax.
+ * repeated bag, belt or pair of shoes is a milder version of the same "same
+ * outfit twice" complaint the primary tier exists for, but strictly less bad
+ * than a repeated bottom, dress or coat — so every way to fix the primary
+ * tier is exhausted before this tier is ever allowed to relax.
+ *
+ * Shoes joined Bag/Belt here for the same reason Outerwear joined
+ * CORE_GROUPS above: once Shoes started counting toward combo identity, a
+ * wardrobe with several equally-warm boots could otherwise fill the whole
+ * result list with boot variants of a single Top+Bottom pairing before a
+ * genuinely different Bottom was ever tried — this cap is what keeps that in
+ * check, exactly the way it already does for a repeated Bag.
  */
-const SECONDARY_ANCHOR_GROUPS: ReadonlySet<CategoryGroup> = new Set<CategoryGroup>(['Bag', 'Belt']);
+const SECONDARY_ANCHOR_GROUPS: ReadonlySet<CategoryGroup> = new Set<CategoryGroup>(['Bag', 'Belt', 'Shoes']);
 
 /** Every primary-anchor item id present in this outfit -- almost always exactly one (the Bottom/Dress anchor the search picks), plus Outerwear when present. */
 function primaryAnchorIds(outfit: ScoredOutfit): string[] {

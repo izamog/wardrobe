@@ -26,24 +26,76 @@
 /** °C at or above which no extra warmth is needed at all. */
 const WARMTH_NEUTRAL_TEMP_C = 20;
 
-/** How much the warmth floor rises per °C colder than neutral. */
-const WARMTH_UNITS_PER_DEGREE = 0.6;
+/**
+ * How much the warmth floor rises per °C colder than neutral.
+ *
+ * Raised from an earlier 0.6, then 0.95: at 0.95, a jeans + wool sweater +
+ * long-sleeve T-shirt base layer + boots outfit (14 summed, weighted warmth)
+ * exactly cleared the floor at 5°C felt on its own — reported as a coat
+ * being withheld from an outfit that needed one, because there was no
+ * shortfall left for a coat to close (see WARMTH_CEILING_SLACK below for why
+ * that made the coat actively *too warm* rather than merely unnecessary).
+ * 1.2 pushes the floor at 5°C from 14 to 18, so that same sweater+T-shirt
+ * combination (still 14) falls genuinely short, and a coat becomes the thing
+ * that actually closes the gap rather than something with no gap left to
+ * close.
+ */
+const WARMTH_UNITS_PER_DEGREE = 1.2;
 
-/** Highest the warmth floor can reach, however cold it gets. */
-const WARMTH_FLOOR_MAX = 16;
+/**
+ * Highest the warmth floor can reach, however cold it gets.
+ *
+ * Raised from an earlier 16, then 30, in step with WARMTH_UNITS_PER_DEGREE
+ * above, so the cap still only starts binding around the same kind of
+ * extreme-cold felt temperature it did before (roughly -12°C and colder)
+ * rather than clawing back most of the increase right where it matters.
+ */
+const WARMTH_FLOOR_MAX = 38;
 
 /**
  * How far above its own floor the warmth ceiling sits.
  *
  * Flat, not proportional — which is what keeps the ceiling meaningful at
- * both ends. At a floor of 0 (hot day) a ceiling of floor + 6 = 6 is tight
- * enough to reject a genuinely warm piece on its own. At a floor of 16
- * (extreme cold) the same +6 gives a ceiling of 22, comfortably above what
- * a fully bundled outfit sums to — real cold weather has no meaningful
- * "too warm" failure mode the way a hot day does, and the flat slack is
- * what keeps the ceiling from fighting the floor instead of the weather.
+ * both ends. Narrowed from an earlier 6: that much slack meant an outfit
+ * could clear the floor by a wide margin and still read as "within range"
+ * rather than "overdressed," part of the same habitual-overwarmth pattern
+ * WARMTH_UNITS_PER_DEGREE above addresses.
+ *
+ * Not narrowed all the way to 3: a torso item warm enough to clear its own
+ * region floor (see REGION_WARMTH_FLOOR_FRACTION in outfitScoring.ts) plus
+ * a bottom clearing its own, plus shoes, already costs on the order of 7 in
+ * the weighted sum before any Outerwear is even added — a 3-wide band left
+ * no room at all for a Jacket or Coat's own baseline on top of that once a
+ * real base layer was already required, which made genuinely cold or windy
+ * weather (where a coat is exactly what's needed) impossible to satisfy at
+ * all rather than merely strict. 5 keeps the band meaningfully tighter than
+ * the original 6 while leaving an Outerwear layer room to actually fit.
+ *
+ * This is the floor's own baseline slack, not the whole gap — see
+ * COLD_CEILING_BONUS_MAX below for the part that grows in cold weather.
  */
-const WARMTH_CEILING_SLACK = 6;
+const WARMTH_CEILING_SLACK = 5;
+
+/**
+ * Extra ceiling slack added on top of WARMTH_CEILING_SLACK as it gets
+ * colder — 0 at/above WARMTH_NEUTRAL_TEMP_C, rising to this maximum once
+ * warmthFloor itself is maxed out (WARMTH_FLOOR_MAX).
+ *
+ * Reported bug: a jeans + wool sweater + long-sleeve T-shirt base layer +
+ * boots + coat outfit at 5°C (24 summed, weighted warmth) sat 1 point above
+ * a flat floor+5 ceiling of 23 — the exact outfit a coat was added *to*
+ * close a floor shortfall was itself rejected as overdressed, and so was the
+ * same outfit with the base layer dropped (22, inside the flat ceiling, but
+ * only by luck of that particular combination). A flat slack applies the
+ * same tightness to a hot day, where it is doing real work rejecting a
+ * single warm garment on its own (see warmthCeiling's stays-tight test), and
+ * to a cold one, where a genuine layering system — base layer, mid-layer,
+ * outerwear — legitimately needs more total room than a single hot-day
+ * garment does. Scaling only the cold end leaves the hot-day case exactly as
+ * tight as before (this term is 0 there) while giving cold weather the
+ * extra room a real coat-plus-layers outfit needs.
+ */
+const COLD_CEILING_BONUS_MAX = 4;
 
 /**
  * °C (felt) at or above which wind adds nothing to the wind floor at all.
@@ -71,11 +123,31 @@ const WIND_NEUTRAL_TEMP_C = 15;
  */
 const WIND_COLDNESS_SPAN_C = 15;
 
-/** kph at or above which the wind floor stops rising, before the coldness scaling is applied. */
-const WIND_FLOOR_MAX_KPH = 45;
+/**
+ * kph at or above which the wind floor stops rising, before the coldness
+ * scaling is applied.
+ *
+ * Raised from an earlier 45: at anything below full coldness scaling (which
+ * only reaches 1 at WIND_COLDNESS_SPAN_C degrees below neutral), the discount
+ * applied before this cap meant a 45kph gust and an 80kph gale produced
+ * close to the same floor once both were capped at the same 45 — a real
+ * strong-gale day and a merely blustery one asked for the same wind
+ * protection. 80 lets a genuine gale still be distinguished from a breeze
+ * after the coldness scaling below.
+ */
+const WIND_FLOOR_MAX_KPH = 80;
 
-/** How much the (coldness-scaled) wind floor rises per kph. */
-const WIND_UNITS_PER_KPH = 0.25;
+/**
+ * How much the (coldness-scaled) wind floor rises per kph.
+ *
+ * Raised from an earlier 0.25, which — combined with the old 45kph cap —
+ * let a cold, genuinely gale-force day (10°C felt, 80kph) demand only a
+ * floor of 4 out of a possible 12: comfortably cleared by a single jacket
+ * while a bare-legged skirt and open sandals sat alongside it. 0.4 with the
+ * higher cap above pushes the same conditions close to the maximum, which is
+ * what a strong gale should actually require.
+ */
+const WIND_UNITS_PER_KPH = 0.4;
 
 /** Highest the wind floor can reach, however cold and windy it gets. */
 const WIND_FLOOR_MAX = 12;
@@ -97,7 +169,9 @@ export function warmthFloor(feltTempC: number): number {
 
 /** The most summed, weighted warmth an outfit should have before it's overdressed for today. */
 export function warmthCeiling(feltTempC: number): number {
-  return warmthFloor(feltTempC) + WARMTH_CEILING_SLACK;
+  const floor = warmthFloor(feltTempC);
+  const coldBonus = Math.round((floor / WARMTH_FLOOR_MAX) * COLD_CEILING_BONUS_MAX);
+  return floor + WARMTH_CEILING_SLACK + coldBonus;
 }
 
 /**

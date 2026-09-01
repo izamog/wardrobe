@@ -1,4 +1,4 @@
-import { PantsLength, Category, CategoryGroup, GarmentLength, SkirtLength } from '../types/wardrobe';
+import { PantsLength, Category, CategoryGroup, GarmentLength, LeggingsLength, SkirtLength } from '../types/wardrobe';
 import { canLayerEitherWay } from './layering';
 
 // Must list every member of the Category union. Adding a category to the type
@@ -15,12 +15,15 @@ export const ALL_CATEGORIES: Category[] = [
   'Coat',
   'Dress',
   'Pants',
+  'Leggings',
   'Skirt',
   'Shoes',
+  'Boots',
   'Sandals',
   'Belt',
   'Bag',
   'Scarf',
+  'Tights',
 ];
 
 /**
@@ -46,12 +49,15 @@ export const CATEGORY_GROUP: Record<Category, CategoryGroup> = {
   Coat: 'Outerwear',
   Dress: 'Dress',
   Pants: 'Bottom',
+  Leggings: 'Bottom',
   Skirt: 'Bottom',
   Shoes: 'Shoes',
+  Boots: 'Shoes',
   Sandals: 'Shoes',
   Belt: 'Belt',
   Bag: 'Bag',
   Scarf: 'Scarf',
+  Tights: 'Tights',
 };
 
 /**
@@ -131,9 +137,9 @@ export function hardwareColorApplies(category: Category): boolean {
   return category === 'Belt' || category === 'Bag';
 }
 
-/** Whether belt loops are worth recording. Only Pants have them, and only Pants make a belt wearable. */
+/** Whether belt loops are worth recording. Pants and Skirt can both have them, and only those make a belt wearable. */
 export function beltLoopsApply(category: Category): boolean {
-  return category === 'Pants';
+  return category === 'Pants' || category === 'Skirt';
 }
 
 /**
@@ -152,21 +158,73 @@ export const PANTS_LENGTHS: readonly PantsLength[] = ['Short', 'Mid-length', 'Ca
 /** Skirt's own length vocabulary — see SkirtLength in types/wardrobe.ts. */
 export const SKIRT_LENGTHS: readonly SkirtLength[] = ['Mini', 'Knee-length', 'Midi', 'Maxi'];
 
+/** Leggings' own length vocabulary — see LeggingsLength in types/wardrobe.ts. */
+export const LEGGINGS_LENGTHS: readonly LeggingsLength[] = ['Short', 'Knee-length', 'Capri', 'Long'];
+
 /**
  * Whether length is worth recording for this category, and if so, which
- * vocabulary applies — Pants and Skirt each have their own, not a shared
- * one (see the GarmentLength doc comment). Empty for every other category:
- * nothing else in the wardrobe has a "length" question worth asking.
+ * vocabulary applies — Pants and Leggings each have their own, not a shared
+ * one (see the GarmentLength doc comment). Skirt and Dress share the same
+ * hem-length vocabulary (Mini/Knee-length/Midi/Maxi — see LENGTH_WARMTH_
+ * ADJUSTMENT's own "Skirt vocabulary" comment in utils/warmth.ts, which
+ * already treats the two as equivalent for warmth/wind purposes). Empty for
+ * every other category: nothing else in the wardrobe has a "length"
+ * question worth asking.
  */
 export function lengthOptionsFor(category: Category): readonly GarmentLength[] {
   if (category === 'Pants') return PANTS_LENGTHS;
-  if (category === 'Skirt') return SKIRT_LENGTHS;
+  if (category === 'Leggings') return LEGGINGS_LENGTHS;
+  if (category === 'Skirt' || category === 'Dress') return SKIRT_LENGTHS;
   return [];
 }
 
 /** Whether length is worth recording for this category at all. */
 export function lengthApplies(category: Category): boolean {
   return lengthOptionsFor(category).length > 0;
+}
+
+/** Whether denier is worth recording — sheer-to-opaque legwear is the only category it describes. */
+export function denierApplies(category: Category): boolean {
+  return category === 'Tights';
+}
+
+/**
+ * Whether thickness is worth recording.
+ *
+ * Excluded where a more specific warmth signal already covers the same
+ * ground or the category has no meaningful "how thick is the fabric"
+ * question: Tights has denier for exactly this (a separate, finer-grained
+ * scale — see denierApplies and denierWarmthAdjustment in utils/warmth.ts),
+ * Leggings has no such scale of its own but was asked to drop thickness
+ * regardless, and Belt/Bag/the Shoes group are accessories with no fabric
+ * thickness to speak of in the first place.
+ */
+export function thicknessApplies(category: Category): boolean {
+  if (category === 'Tights' || category === 'Leggings' || category === 'Belt' || category === 'Bag') {
+    return false;
+  }
+  return CATEGORY_GROUP[category] !== 'Shoes';
+}
+
+/**
+ * Whether a material's percentage share is worth recording, as opposed to
+ * just which materials are present. Accessories (Belt, Bag, the Shoes group)
+ * are usually one dominant material with no meaningful blend to weight —
+ * see materialAdjustment's own doc comment in utils/warmth.ts for what the
+ * percentage actually drives.
+ */
+export function materialPercentApplies(category: Category): boolean {
+  if (category === 'Belt' || category === 'Bag') return false;
+  return CATEGORY_GROUP[category] !== 'Shoes';
+}
+
+/**
+ * Whether "backless" is worth recording — a Top or a Dress, the two
+ * categories that can actually have an open back to speak of. Drives
+ * clearsBacklessRule in utils/pairs.ts once set.
+ */
+export function backlessApplies(category: Category): boolean {
+  return category === 'Top' || category === 'Dress';
 }
 
 /**

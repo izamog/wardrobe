@@ -1,25 +1,405 @@
-import React from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Pressable,
+  Text,
+  View,
+  type ViewToken,
+  useWindowDimensions,
+} from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { BottomBar } from '../components/BottomBar';
+import { OutfitCollage } from '../components/OutfitCollage';
+import { useDbQuery } from '../hooks/useDbQuery';
+import { listLoggedOutfitsInRange, removeOutfitLogs } from '../services/items';
+import { withDb } from '../services/database';
+import {
+  CALENDAR_GRID_COLUMNS,
+  monthGrid,
+  monthKeyForDate,
+  monthLabelForKey,
+  monthsAround,
+  type MonthDay,
+} from '../utils/calendarGrid';
+import { todayDateString } from '../utils/date';
+import { formatLongDate } from '../utils/format';
+import type { RootStackParamList } from '../navigation/types';
+import type { ClothingItem } from '../types/wardrobe';
+
+/** How far back/forward the horizontally-paged list reaches from the month containing today. */
+const MONTHS_BEFORE = 60;
+const MONTHS_AFTER = 60;
+
+// Hoisted rather than created inline in the component: FlatList requires
+// viewabilityConfig to keep the same identity across renders, or it throws.
+const VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 50 };
+
+/** The first and last calendar date (inclusive) of a "YYYY-MM" month key. */
+function monthDateRange(monthKey: string): [string, string] {
+  const [year, month] = monthKey.split('-').map(Number);
+  const lastDay = new Date(year, month, 0).getDate(); // day 0 of next month = last day of this one
+  return [`${monthKey}-01`, `${monthKey}-${String(lastDay).padStart(2, '0')}`];
+}
 
 /**
- * Placeholder for outfit logging and wardrobe analytics (Phase 6).
- *
- * Outfit_Logs is written to now — Phase 5's Today tab logs a row (and credits
- * each item's wearCount) whenever "Wear this outfit" is tapped — but nothing
- * reads it back yet. A month grid or a stat pulled from real rows still
- * belongs to Phase 6 (which is also where the project moves off Expo Go);
- * showing one here early would be guessing at layout, not displaying data.
+ * One grid cell: the day-of-month number, and (only for a day that actually
+ * falls in the page's own month) the day's collage if anything was logged.
+ * A leading/trailing day borrowed from the adjacent month just to fill out
+ * the 6-row grid is shown dimmed and inert instead — no collage query ran
+ * for it (MonthPage only fetches its own month's range), and tapping it
+ * would open a DaySheet for a date this page never loaded.
+ */
+function CalendarCell({
+  day,
+  items,
+  isToday,
+  isSelected,
+  onPress,
+}: {
+  day: MonthDay;
+  items: readonly ClothingItem[];
+  isToday: boolean;
+  isSelected: boolean;
+  onPress: () => void;
+}) {
+  const dayOfMonth = Number(day.date.slice(-2));
+  const hasOutfit = items.length > 0;
+
+  if (!day.inMonth) {
+    return (
+      <View style={{ width: `${100 / CALENDAR_GRID_COLUMNS}%` }} className="p-1">
+        <View className="aspect-[3/4] p-1">
+          <Text className="text-xs font-sans-light text-ink-muted/40">{dayOfMonth}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  // Calendar numbers (design.md § Typography): Public Sans 400 for today,
+  // the selected day, and any day with a logged outfit — past or future
+  // otherwise reads the same, Public Sans 300, muted grey.
+  const weightClass = isToday || isSelected || hasOutfit ? 'font-sans' : 'font-sans-light';
+  const colorClass = isSelected ? 'text-accent' : isToday ? 'text-ink' : 'text-ink-muted';
+  // Borderless per design.md's box-in-box rule — OutfitCollage already draws
+  // its own edge, so this cell doesn't wrap it in a second bordered
+  // rectangle. today/selected state reads through the day number's color
+  // and a hairline underline instead of a ring around the whole cell.
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      style={{ width: `${100 / CALENDAR_GRID_COLUMNS}%` }}
+      className="p-1"
+    >
+      <View className="aspect-[3/4] overflow-hidden bg-paper">
+        {items.length > 0 ? (
+          <OutfitCollage items={items} />
+        ) : (
+          <View className="flex-1 items-center justify-center" />
+        )}
+        <Text className={`absolute top-0.5 left-1 text-xs ${weightClass} ${colorClass}`}>
+          {dayOfMonth}
+        </Text>
+        {(isToday || isSelected) && (
+          <View className={`absolute bottom-0 left-1 right-1 h-px ${isSelected ? 'bg-accent' : 'bg-ink'}`} />
+        )}
+      </View>
+    </Pressable>
+  );
+}
+
+function WeekdayHeader() {
+  const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  return (
+    <View className="flex-row px-2 bg-paper">
+      {WEEKDAY_LABELS.map((label) => (
+        <Text
+          key={label}
+          style={{ width: `${100 / CALENDAR_GRID_COLUMNS}%` }}
+          className="text-center text-xs font-sans-medium text-ink-muted py-1"
+        >
+          {label}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * One month's full 6-row grid (see monthGrid), with its own data fetch
+ * scoped to just that month's date range — FlatList only mounts pages near
+ * the visible one, so this keeps query cost proportional to what's actually
+ * on screen, the same way the previous per-week rows did.
+ */
+function MonthPage({
+  monthKey,
+  today,
+  selectedDate,
+  onDayPress,
+  onOutfitsLoaded,
+}: {
+  monthKey: string;
+  today: string;
+  selectedDate: string | null;
+  onDayPress: (date: string) => void;
+  /** Reports this page's own fetch up to CalendarScreen, so tapping a visible day never re-queries a range this page already has. */
+  onOutfitsLoaded: (outfitsByDate: ReadonlyMap<string, ClothingItem[]>) => void;
+}) {
+  const [start, end] = useMemo(() => monthDateRange(monthKey), [monthKey]);
+  const { data: outfitsByDate } = useDbQuery((db) => listLoggedOutfitsInRange(db, start, end), [start, end]);
+  const grid = useMemo(() => monthGrid(monthKey), [monthKey]);
+
+  useEffect(() => {
+    if (outfitsByDate) onOutfitsLoaded(outfitsByDate);
+  }, [outfitsByDate, onOutfitsLoaded]);
+
+  return (
+    <View>
+      {grid.map((week, i) => (
+        <View key={i} className="flex-row px-1">
+          {week.map((day) => (
+            <CalendarCell
+              key={day.date}
+              day={day}
+              items={outfitsByDate?.get(day.date) ?? []}
+              isToday={day.date === today}
+              isSelected={day.date === selectedDate}
+              onPress={() => onDayPress(day.date)}
+            />
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * The panel that appears under a tapped day. If the day already has an
+ * outfit logged, it shows that outfit; otherwise it's a prompt to log one.
+ * Either way it's a fixed bottom sheet, not a full-screen modal, so a stray
+ * tap while scrolling doesn't leave the calendar.
+ */
+function DaySheet({
+  date,
+  items,
+  onLogOutfit,
+  onRemoveOutfit,
+  onDismiss,
+}: {
+  date: string;
+  items: readonly ClothingItem[];
+  onLogOutfit: () => void;
+  onRemoveOutfit: () => void;
+  onDismiss: () => void;
+}) {
+  const hasOutfit = items.length > 0;
+  return (
+    <BottomBar className="rounded-t-3xl shadow-lg">
+      <View className="flex-row items-center justify-between mb-3">
+        <Text className="text-base font-sans-medium text-ink flex-1 mr-2" numberOfLines={1}>
+          {formatLongDate(date)}
+        </Text>
+        <Pressable onPress={onDismiss} accessibilityRole="button" accessibilityLabel="Dismiss" hitSlop={10}>
+          <Ionicons name="close" size={22} color="#6B6259" />
+        </Pressable>
+      </View>
+      {hasOutfit && (
+        <>
+          <Text className="text-xs font-sans uppercase tracking-wide text-ink-muted mb-2">Worn that day</Text>
+          <View className="w-32 self-center mb-4">
+            <OutfitCollage items={items} />
+          </View>
+        </>
+      )}
+      <Pressable onPress={onLogOutfit} accessibilityRole="button" className="rounded-sm py-3.5 items-center bg-ink">
+        <Text className="text-paper font-sans-medium">{hasOutfit ? 'Edit outfit' : 'Log outfit'}</Text>
+      </Pressable>
+      {hasOutfit && (
+        // Outlined, not filled -- this palette is deliberately neutral (see
+        // tailwind.config.js), so "destructive" is signalled by weight
+        // (outline vs. the solid "Edit outfit" above), not by introducing a
+        // red the rest of the app never uses.
+        <Pressable
+          onPress={onRemoveOutfit}
+          accessibilityRole="button"
+          className="rounded-sm py-3.5 items-center mt-2 border border-ink"
+        >
+          <Text className="text-ink font-sans-medium">Remove outfit</Text>
+        </Pressable>
+      )}
+    </BottomBar>
+  );
+}
+
+/**
+ * A regular monthly calendar — MONTHS_BEFORE/MONTHS_AFTER months either side
+ * of today's, each a full 6-row month page (see utils/calendarGrid.ts)
+ * flipped between horizontally, one page per screen width. Opens on the
+ * month containing today. Tapping a day surfaces DaySheet rather than
+ * navigating straight there; "Log outfit" (or "Edit outfit") in that sheet
+ * is the only way into LogOutfitScreen.
  */
 export function CalendarScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const { width: windowWidth } = useWindowDimensions();
+  const today = todayDateString();
+  const months = useMemo(() => monthsAround(new Date(), MONTHS_BEFORE, MONTHS_AFTER), []);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [visibleMonthKey, setVisibleMonthKey] = useState(() => monthKeyForDate(today));
+
+  // Populated by whichever MonthPage's own query actually covers a given
+  // date — the page for the visible month already fetches every day in it,
+  // so a day tap reads from here instead of re-querying a range that's
+  // already loaded. A plain ref (not state) because writes happen on every
+  // MonthPage mount/refetch and only the read after a tap needs to see
+  // current data; cacheVersion is the one state bump that makes that read
+  // re-render.
+  const outfitsCacheRef = useRef(new Map<string, ClothingItem[]>());
+  const [cacheVersion, setCacheVersion] = useState(0);
+
+  const onOutfitsLoaded = useCallback((outfitsByDate: ReadonlyMap<string, ClothingItem[]>) => {
+    for (const [date, items] of outfitsByDate) outfitsCacheRef.current.set(date, items);
+    setCacheVersion((v) => v + 1);
+  }, []);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- cacheVersion is a read trigger, not a real dependency of the lookup itself
+  const selectedDateItems = useMemo(
+    () => (selectedDate ? (outfitsCacheRef.current.get(selectedDate) ?? []) : []),
+    [selectedDate, cacheVersion],
+  );
+
+  const onDayPress = (date: string) => setSelectedDate((current) => (current === date ? null : date));
+  const openLogOutfit = () => {
+    if (!selectedDate) return;
+    navigation.navigate('LogOutfit', { date: selectedDate });
+    setSelectedDate(null);
+  };
+
+  const confirmRemoveOutfit = () => {
+    if (!selectedDate) return;
+    const date = selectedDate;
+    Alert.alert('Remove this outfit?', 'This clears it from the calendar and undoes the wear it counted toward each item.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              await withDb((db) => removeOutfitLogs(db, date));
+              // Patched locally, not re-fetched -- same reasoning as
+              // onOutfitsLoaded above: the write only changes this one
+              // date's entry, so there's nothing a full requery would find
+              // that setting it to empty here doesn't already reflect.
+              outfitsCacheRef.current.set(date, []);
+              setCacheVersion((v) => v + 1);
+              setSelectedDate(null);
+            } catch (e) {
+              console.error('Failed to remove outfit:', e);
+              Alert.alert('Could not remove', 'That outfit is still logged.');
+            }
+          })();
+        },
+      },
+    ]);
+  };
+
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+    const visible = viewableItems[0];
+    if (typeof visible?.item === 'string') setVisibleMonthKey(visible.item);
+  }).current;
+
+  // useWindowDimensions can report a stale/zero width for a frame or two on
+  // the very first render — this app no longer waits behind an app-launch
+  // splash before mounting (see § Startup in design.md), so the Calendar
+  // screen can now be the first thing to mount at all, before the native
+  // bridge has delivered a real measurement. A page width computed from that
+  // bad value would make FlatList's one-shot initialScrollIndex jump land on
+  // the wrong page and leave the true content unrendered at the wrong
+  // horizontal offset until a manual swipe forced a remeasure — the same
+  // failure mode the previous per-week vertical grid had. Not mounting the
+  // FlatList at all until the width is real avoids it outright.
+  const pageWidth = windowWidth;
+  const widthReady = pageWidth > 0;
+
+  const getItemLayout = useCallback(
+    (_data: ArrayLike<string> | null | undefined, index: number) => ({
+      length: pageWidth,
+      offset: pageWidth * index,
+      index,
+    }),
+    [pageWidth],
+  );
+
+  const listRef = useRef<FlatList<string>>(null);
+  const onScrollToIndexFailed = useCallback(
+    ({ index }: { index: number }) => {
+      requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: false }));
+    },
+    [],
+  );
+
   return (
-    <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4">
-      <View className="bg-white rounded-2xl border border-slate-200 p-5">
-        <Text className="text-base font-semibold text-slate-900">Nothing to show yet</Text>
-        <Text className="text-sm text-slate-500 mt-2">
-          Phase 6 adds the month grid, outfit collages, and the cost-per-wear and second-hand
-          stats, reading from the outfits you have already logged on the Today tab.
-        </Text>
-      </View>
-    </ScrollView>
+    <View className="flex-1 bg-paper">
+      <Text className="px-3 pt-2 pb-1 text-xs font-sans-medium uppercase tracking-wide text-ink-muted">
+        {monthLabelForKey(visibleMonthKey)}
+      </Text>
+      <WeekdayHeader />
+      {widthReady ? (
+        <FlatList
+          ref={listRef}
+          data={months}
+          keyExtractor={(m) => m}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          initialScrollIndex={MONTHS_BEFORE}
+          // initialScrollIndex is a post-mount imperative jump and can lose
+          // the race against the very first paint (the failure mode this
+          // component used to have before the widthReady guard above: the
+          // list would render starting from index 0 and briefly report that
+          // as the viewable item before the jump landed, which is why the
+          // header used to flash the wrong month and the page looked blank
+          // until a manual swipe forced a remeasure). contentOffset instead
+          // positions the list correctly for the very first frame, with no
+          // jump required.
+          contentOffset={{ x: MONTHS_BEFORE * pageWidth, y: 0 }}
+          getItemLayout={getItemLayout}
+          onScrollToIndexFailed={onScrollToIndexFailed}
+          onViewableItemsChanged={onViewableItemsChanged}
+          viewabilityConfig={VIEWABILITY_CONFIG}
+          initialNumToRender={1}
+          windowSize={3}
+          renderItem={({ item }) => (
+            <View style={{ width: pageWidth }}>
+              <MonthPage
+                monthKey={item}
+                today={today}
+                selectedDate={selectedDate}
+                onDayPress={onDayPress}
+                onOutfitsLoaded={onOutfitsLoaded}
+              />
+            </View>
+          )}
+        />
+      ) : (
+        <View className="flex-1 items-center justify-center p-10">
+          <ActivityIndicator />
+        </View>
+      )}
+      {selectedDate && (
+        <DaySheet
+          date={selectedDate}
+          items={selectedDateItems}
+          onLogOutfit={openLogOutfit}
+          onRemoveOutfit={confirmRemoveOutfit}
+          onDismiss={() => setSelectedDate(null)}
+        />
+      )}
+    </View>
   );
 }
