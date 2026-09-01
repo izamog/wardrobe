@@ -197,6 +197,11 @@ export function generateClosestOutfits(
   windFloor: number,
   maxResults: number = DEFAULT_MAX_OUTFITS,
   wornDaysAgo: ReadonlyMap<string, number> = new Map(),
+  options: {
+    anchorPool?: readonly ClothingItem[];
+    includeWarmthAccessories?: boolean;
+    topCandidatesOverride?: readonly ClothingItem[];
+  } = {},
 ): ScoredOutfit[] {
   const needsScarf = warmthFloor >= SCARF_PREFERRED_WARMTH_FLOOR;
   const all: ScoredOutfit[] = [];
@@ -220,9 +225,18 @@ export function generateClosestOutfits(
     if (slot.preferred) searchSlots(slots, slotIndex + 1);
   }
 
-  for (const bottom of floorAwareCandidates(bottomCandidatesFor(candidates, warmthFloor), warmthFloor, wornDaysAgo)) {
+  const anchorPool =
+    options.anchorPool ?? floorAwareCandidates(bottomCandidatesFor(candidates, warmthFloor), warmthFloor, wornDaysAgo);
+
+  for (const bottom of anchorPool) {
     chosen.push(bottom);
-    searchSlots(buildSlots(candidates, bottom, warmthFloor, needsScarf, bottom.hasBeltLoops, wornDaysAgo), 0);
+    searchSlots(
+      buildSlots(candidates, bottom, warmthFloor, needsScarf, bottom.hasBeltLoops, wornDaysAgo, {
+        includeWarmthAccessories: options.includeWarmthAccessories,
+        topCandidatesOverride: options.topCandidatesOverride,
+      }),
+      0,
+    );
     chosen.pop();
   }
 

@@ -826,3 +826,72 @@ describe('generateOutfits: regression — warm boots must not be excluded from t
     expect(results.some((outfit) => outfit.some((i) => i.id === warmBoots.id))).toBe(true);
   });
 });
+
+describe('generateClosestOutfits anchorPool override', () => {
+  it('searches exactly the given anchorPool instead of computing its own', () => {
+    const overrideBottom = item('Pants', { id: 'override-bottom' });
+    const realBottom = item('Pants', { id: 'real-bottom' });
+    const top = item('T-Shirt');
+    const shoes = item('Shoes');
+
+    const results = generateClosestOutfits(
+      emptyCandidates({ bottoms: [realBottom], tops: [top], shoes: [shoes] }),
+      noDismatches,
+      0,
+      NO_CEILING,
+      0,
+      10,
+      new Map(),
+      { anchorPool: [overrideBottom] },
+    );
+
+    const bottomIdsUsed = new Set(results.map((o) => o.items.find((i) => i.category === 'Pants')?.id));
+    expect(bottomIdsUsed).toEqual(new Set(['override-bottom']));
+  });
+});
+
+describe('generateClosestOutfits includeWarmthAccessories/topCandidatesOverride pass-through', () => {
+  it('never includes a Scarf or Tights item when includeWarmthAccessories is false', () => {
+    const bottom = item('Skirt', { inferredWarmth: 0 });
+    const top = item('T-Shirt');
+    const shoes = item('Shoes');
+    const scarf = item('Scarf', { id: 'scarf-1' });
+    const tights = item('Tights', { id: 'tights-1' });
+
+    const results = generateClosestOutfits(
+      emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes], scarves: [scarf], tights: [tights] }),
+      noDismatches,
+      10,
+      NO_CEILING,
+      0,
+      10,
+      new Map(),
+      { includeWarmthAccessories: false },
+    );
+
+    for (const outfit of results) {
+      expect(outfit.items.some((i) => i.category === 'Scarf' || i.category === 'Tights')).toBe(false);
+    }
+  });
+
+  it('uses topCandidatesOverride for every anchor tried, not just the first', () => {
+    const overrideTop = item('Shirt', { id: 'override-top' });
+    const bottomA = item('Pants', { id: 'bottom-a' });
+    const bottomB = item('Pants', { id: 'bottom-b' });
+    const shoes = item('Shoes');
+
+    const results = generateClosestOutfits(
+      emptyCandidates({ bottoms: [bottomA, bottomB], tops: [item('Shirt', { id: 'real-top' })], shoes: [shoes] }),
+      noDismatches,
+      0,
+      NO_CEILING,
+      0,
+      10,
+      new Map(),
+      { topCandidatesOverride: [overrideTop] },
+    );
+
+    const topIdsUsed = new Set(results.map((o) => o.items.find((i) => i.category === 'Shirt')?.id));
+    expect(topIdsUsed).toEqual(new Set(['override-top']));
+  });
+});
