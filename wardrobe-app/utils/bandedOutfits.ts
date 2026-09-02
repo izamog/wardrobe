@@ -226,6 +226,76 @@ function fillBandTiered(
   return picked;
 }
 
+interface ReuseTracker {
+  /** Live view of today's per-item use counts, for rankNow's own freshness tiebreak. */
+  useCounts: ReadonlyMap<string, number>;
+  /** Hard safety-net cap: an item may never appear in more than 2 of the day's shown outfits, and a second use may never overlap the first use's outfit on any other item (no near-duplicate outfit pair). The fallback tier -- see violatesFreshnessPreference for the preferred, stricter tier tried first. */
+  violatesUniqueness(outfit: ScoredOutfit): boolean;
+  /** Preferred tier: an item should appear in at most 1 of the day's shown outfits. Tried before violatesUniqueness's looser cap-2 fallback, so a genuinely scarce wardrobe (one bag, one valid trouser) still fills every slot -- it just falls through to the cap-2 tier to do it, rather than this tier blocking outright. */
+  violatesFreshnessPreference(outfit: ScoredOutfit): boolean;
+  /** Picks up to `need` outfits, recording (and permanently consuming reuse budget for) only what it actually keeps -- never records a candidate it evaluates but then discards, which would silently tighten the reuse cap for outfits the user never sees. `requireMeetsTarget` and `violatesCap` let the caller run this same walk at different tiers of strictness (see the 4-tier `tiers` array in selectBandedOutfits). */
+  pickUpTo(
+    ranked: readonly ScoredOutfit[],
+    need: number,
+    requireMeetsTarget: boolean,
+    violatesCap: (outfit: ScoredOutfit) => boolean,
+  ): ScoredOutfit[];
+}
+
+/** Owns the day's useCounts/firstUse state and every reuse-cap check built on it. Extracted from selectBandedOutfits purely to keep that function within the project's line-count limit. */
+function createReuseTracker(): ReuseTracker {
+  const useCounts = new Map<string, number>();
+  const firstUse = new Map<string, ScoredOutfit>();
+
+  function violatesUniqueness(outfit: ScoredOutfit): boolean {
+    const ids = trackedItemIds(outfit);
+    for (const id of ids) {
+      const count = useCounts.get(id) ?? 0;
+      if (count >= 2) return true;
+      if (count === 1) {
+        const sibling = firstUse.get(id);
+        if (sibling) {
+          const siblingIds = new Set(trackedItemIds(sibling));
+          const overlapsOnAnotherItem = ids.some((otherId) => otherId !== id && siblingIds.has(otherId));
+          if (overlapsOnAnotherItem) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function violatesFreshnessPreference(outfit: ScoredOutfit): boolean {
+    return trackedItemIds(outfit).some((id) => (useCounts.get(id) ?? 0) >= 1);
+  }
+
+  function record(outfit: ScoredOutfit): void {
+    for (const id of trackedItemIds(outfit)) {
+      const count = useCounts.get(id) ?? 0;
+      if (count === 0) firstUse.set(id, outfit);
+      useCounts.set(id, count + 1);
+    }
+  }
+
+  function pickUpTo(
+    ranked: readonly ScoredOutfit[],
+    need: number,
+    requireMeetsTarget: boolean,
+    violatesCap: (outfit: ScoredOutfit) => boolean,
+  ): ScoredOutfit[] {
+    const picked: ScoredOutfit[] = [];
+    for (const outfit of ranked) {
+      if (picked.length === need) break;
+      if (requireMeetsTarget && !outfit.meetsTarget) continue;
+      if (violatesCap(outfit)) continue;
+      record(outfit);
+      picked.push(outfit);
+    }
+    return picked;
+  }
+
+  return { useCounts, violatesUniqueness, violatesFreshnessPreference, pickUpTo };
+}
+
 export function selectBandedOutfits(
   candidates: OutfitCandidates,
   dismatchedKeys: ReadonlySet<string>,
@@ -249,57 +319,7 @@ export function selectBandedOutfits(
     core.map((outfit) => [outfit, compatibleTopUpPools(outfit, candidates, dismatchedKeys)]),
   );
 
-  const useCounts = new Map<string, number>();
-  const firstUse = new Map<string, ScoredOutfit>();
-
-  /** Hard safety-net cap: an item may never appear in more than 2 of the day's shown outfits, and a second use may never overlap the first use's outfit on any other item (no near-duplicate outfit pair). This is the fallback tier -- see violatesFreshnessPreference for the preferred, stricter tier tried first. */
-  function violatesUniqueness(outfit: ScoredOutfit): boolean {
-    const ids = trackedItemIds(outfit);
-    for (const id of ids) {
-      const count = useCounts.get(id) ?? 0;
-      if (count >= 2) return true;
-      if (count === 1) {
-        const sibling = firstUse.get(id);
-        if (sibling) {
-          const siblingIds = new Set(trackedItemIds(sibling));
-          const overlapsOnAnotherItem = ids.some((otherId) => otherId !== id && siblingIds.has(otherId));
-          if (overlapsOnAnotherItem) return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  /** Preferred tier: an item should appear in at most 1 of the day's shown outfits. Tried before violatesUniqueness's looser cap-2 fallback, so a genuinely scarce wardrobe (one bag, one valid trouser) still fills every slot -- it just falls through to the cap-2 tier to do it, rather than this tier blocking outright. */
-  function violatesFreshnessPreference(outfit: ScoredOutfit): boolean {
-    return trackedItemIds(outfit).some((id) => (useCounts.get(id) ?? 0) >= 1);
-  }
-
-  function record(outfit: ScoredOutfit): void {
-    for (const id of trackedItemIds(outfit)) {
-      const count = useCounts.get(id) ?? 0;
-      if (count === 0) firstUse.set(id, outfit);
-      useCounts.set(id, count + 1);
-    }
-  }
-
-  /** Picks up to `need` outfits, recording (and permanently consuming reuse budget for) only what it actually keeps -- never records a candidate it evaluates but then discards, which would silently tighten the reuse cap for outfits the user never sees. `requireMeetsTarget` and `violatesCap` let the caller run this same walk at different tiers of strictness (see the 4-tier fill loop in selectBandedOutfits). */
-  function pickUpTo(
-    ranked: readonly ScoredOutfit[],
-    need: number,
-    requireMeetsTarget: boolean,
-    violatesCap: (outfit: ScoredOutfit) => boolean,
-  ): ScoredOutfit[] {
-    const picked: ScoredOutfit[] = [];
-    for (const outfit of ranked) {
-      if (picked.length === need) break;
-      if (requireMeetsTarget && !outfit.meetsTarget) continue;
-      if (violatesCap(outfit)) continue;
-      record(outfit);
-      picked.push(outfit);
-    }
-    return picked;
-  }
+  const { useCounts, violatesUniqueness, violatesFreshnessPreference, pickUpTo } = createReuseTracker();
 
   const toppedUpByBand = {
     cooler: toppedUpForBand(core, bands.cooler, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor, wornDaysAgo, poolsByOutfit),
