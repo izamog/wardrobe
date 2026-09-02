@@ -256,3 +256,43 @@ describe('floorAwareCandidates with wornDaysAgo', () => {
     expect(pool.map((i) => i.id).filter((id) => id === 'w2')).toHaveLength(1);
   });
 });
+
+describe('floorAwareCandidates with a warmthCeiling', () => {
+  it('picks the warmest half from items that fit under the ceiling, not the wardrobe\'s overall warmest', () => {
+    // Reported bug: on a hot day with a tight ceiling, the "warmest half"
+    // ignored the ceiling entirely and always pulled in the wardrobe's
+    // genuinely warmest items -- e.g. warmth-5/7 jeans at a ceiling of 2 --
+    // wasting half the pool on candidates that could never produce a valid
+    // outfit, while mid-warmth items that would actually fit (warmth 2)
+    // never entered the pool at all.
+    const warmths = [0, 0, 0, 0, 0, 2, 5, 7];
+    const items = warmths.map((w, i) => item({ id: `w${w}-${i}`, category: 'Pants', inferredWarmth: w }));
+
+    const pool = floorAwareCandidates(items, 0.5, new Map(), 2);
+
+    expect(pool.map((i) => i.id)).not.toContain('w5-6');
+    expect(pool.map((i) => i.id)).not.toContain('w7-7');
+    expect(pool.map((i) => i.id)).toContain('w2-5');
+  });
+
+  it('falls back to the overall warmest when nothing at all fits under the ceiling', () => {
+    // An impossibly tight ceiling shouldn't collapse the pool to nothing --
+    // the extreme-day "closest available" fallback still needs real
+    // candidates to try (see outfitsFor's own documented behavior).
+    const warmths = [3, 4, 5];
+    const items = warmths.map((w) => item({ id: `w${w}`, category: 'Pants', inferredWarmth: w }));
+
+    const pool = floorAwareCandidates(items, 0.5, new Map(), 1);
+
+    expect(pool.map((i) => i.id)).toContain('w5');
+  });
+
+  it('is unaffected when no warmthCeiling is passed, matching the pre-existing behavior exactly', () => {
+    const warmths = [0, 0, 0, 0, 0, 5, 7];
+    const items = warmths.map((w, i) => item({ id: `w${w}-${i}`, category: 'Pants', inferredWarmth: w }));
+
+    const withoutCeiling = floorAwareCandidates(items, 0.5);
+
+    expect(withoutCeiling.map((i) => i.id)).toContain('w7-6');
+  });
+});

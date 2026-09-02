@@ -131,12 +131,13 @@ export function generateOutfits(
     if (slot.preferred) searchSlots(slots, slotIndex + 1);
   }
 
-  for (const bottom of floorAwareCandidates(bottomCandidatesFor(candidates, warmthFloor), warmthFloor, wornDaysAgo)) {
+  for (const bottom of floorAwareCandidates(bottomCandidatesFor(candidates, warmthFloor), warmthFloor, wornDaysAgo, warmthCeiling)) {
     if (results.length >= searchBudget) break;
 
     chosen.push(bottom);
     if (!exceedsCeiling()) {
-      searchSlots(buildSlots(candidates, bottom, warmthFloor, needsScarf, bottom.hasBeltLoops, wornDaysAgo), 0);
+      const slots = buildSlots(candidates, bottom, warmthFloor, needsScarf, bottom.hasBeltLoops, wornDaysAgo, { warmthCeiling });
+      searchSlots(slots, 0);
     }
     chosen.pop();
   }
@@ -228,17 +229,17 @@ export function generateClosestOutfits(
   }
 
   const anchorPool =
-    options.anchorPool ?? floorAwareCandidates(bottomCandidatesFor(candidates, warmthFloor), warmthFloor, wornDaysAgo);
+    options.anchorPool ??
+    floorAwareCandidates(bottomCandidatesFor(candidates, warmthFloor), warmthFloor, wornDaysAgo, warmthCeiling);
 
+  const slotOptions = {
+    includeWarmthAccessories: options.includeWarmthAccessories,
+    topCandidatesOverride: options.topCandidatesOverride,
+    warmthCeiling,
+  };
   for (const bottom of anchorPool) {
     chosen.push(bottom);
-    searchSlots(
-      buildSlots(candidates, bottom, warmthFloor, needsScarf, bottom.hasBeltLoops, wornDaysAgo, {
-        includeWarmthAccessories: options.includeWarmthAccessories,
-        topCandidatesOverride: options.topCandidatesOverride,
-      }),
-      0,
-    );
+    searchSlots(buildSlots(candidates, bottom, warmthFloor, needsScarf, bottom.hasBeltLoops, wornDaysAgo, slotOptions), 0);
     chosen.pop();
   }
 

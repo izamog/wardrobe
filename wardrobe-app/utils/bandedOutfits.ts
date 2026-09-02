@@ -38,16 +38,32 @@ export function bandOrderFor(warmthFloor: number): ('median' | 'cooler' | 'warme
  * same fraction the leg/torso region floors themselves use keeps this
  * per-band varying (each band's own center still differs) while bringing it
  * into the right units.
+ *
+ * `warmthCeiling`, scaled by the same `regionFraction`, is passed through to
+ * floorAwareCandidates so its warmest half stays honest on a hot, tight-
+ * ceiling day -- see that function's own doc comment. Without it, every
+ * band's own contribution to this merged pool pulled in the same genuinely-
+ * warmest-overall items regardless of how low today's ceiling was, so the
+ * union across all three bands never surfaced a mid-warmth item either: the
+ * root cause of a reported bug where a warmth-5-class bottom was shown over
+ * a ceiling of 2 on a real wardrobe with plenty of lighter, valid options
+ * that the search never even got to see.
  */
 function mergedByBandCenters(
   items: readonly ClothingItem[],
   bands: { cooler: WarmthBand; median: WarmthBand; warmer: WarmthBand },
   regionFraction: number,
   wornDaysAgo: ReadonlyMap<string, number>,
+  warmthCeiling: number,
 ): ClothingItem[] {
   const merged = new Map<string, ClothingItem>();
   for (const band of [bands.cooler, bands.median, bands.warmer]) {
-    for (const candidate of floorAwareCandidates(items, band.center * regionFraction, wornDaysAgo)) {
+    for (const candidate of floorAwareCandidates(
+      items,
+      band.center * regionFraction,
+      wornDaysAgo,
+      warmthCeiling * regionFraction,
+    )) {
       merged.set(candidate.id, candidate);
     }
   }
@@ -77,12 +93,14 @@ export function coreOutfitsForBands(
     bands,
     LEG_WARMTH_FLOOR_FRACTION,
     wornDaysAgo,
+    warmthCeiling,
   );
   const topPool = mergedByBandCenters(
     baseTopCandidates(candidates.tops, warmthFloor),
     bands,
     TORSO_WARMTH_FLOOR_FRACTION,
     wornDaysAgo,
+    warmthCeiling,
   );
 
   return generateClosestOutfits(candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor, Infinity, wornDaysAgo, {

@@ -244,17 +244,35 @@ export function layerFirst(
  * of it — never shrinks the coverage the split already guarantees, only
  * ever +1 candidate, and a no-op when that item is already one of the ones
  * picked above.
+ *
+ * `warmthCeiling`, when given, keeps the warmest half honest on a hot day:
+ * unfiltered, "warmest overall" always pulls in the wardrobe's genuinely
+ * warmest items regardless of today's ceiling -- e.g. warmth-5/7 jeans at a
+ * ceiling of 2 -- wasting half the pool on candidates that can never
+ * produce a valid outfit, while the mid-warmth items that would actually
+ * fit under the ceiling never enter the pool at all (reported bug: a
+ * warmth-5-class bottom shown over a ceiling of 2, on a real wardrobe with
+ * plenty of lighter options that never got the chance). With a ceiling
+ * given, "warmest" means warmest among items that still fit under it,
+ * falling back to the wardrobe's genuinely warmest only when literally
+ * nothing clears the ceiling -- the extreme-day "closest available"
+ * fallback (outfitsFor's own documented behavior) still needs real
+ * candidates to try in that case. Omitted entirely, behavior is identical
+ * to before this parameter existed.
  */
 export function floorAwareCandidates(
   items: readonly ClothingItem[],
   warmthFloor: number,
   wornDaysAgo: ReadonlyMap<string, number> = new Map(),
+  warmthCeiling?: number,
 ): ClothingItem[] {
   if (warmthFloor <= 0) return leanFirst(items, wornDaysAgo);
 
   const half = Math.ceil(MAX_SLOT_CANDIDATES / 2);
   const leanest = leanFirst(items, wornDaysAgo).slice(0, half);
-  const warmest = rankWithFairTiebreak(items, wornDaysAgo, true).slice(0, MAX_SLOT_CANDIDATES - half);
+  const underCeiling = warmthCeiling === undefined ? items : items.filter((item) => item.inferredWarmth <= warmthCeiling);
+  const warmestBasis = underCeiling.length > 0 ? underCeiling : items;
+  const warmest = rankWithFairTiebreak(warmestBasis, wornDaysAgo, true).slice(0, MAX_SLOT_CANDIDATES - half);
 
   const merged = new Map<string, ClothingItem>();
   for (const item of [...leanest, ...warmest]) merged.set(item.id, item);
