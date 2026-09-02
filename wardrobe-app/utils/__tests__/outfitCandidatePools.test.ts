@@ -340,3 +340,38 @@ describe('floorAwareCandidates with a warmthCeiling', () => {
     expect(withoutCeiling.map((i) => i.id)).toContain('w7-6');
   });
 });
+
+describe('floorAwareCandidates with a slotSize', () => {
+  it('returns proportionally more leanest/warmest candidates when given a larger slotSize', () => {
+    const warmths = Array.from({ length: 30 }, (_, i) => i);
+    const items = warmths.map((w) => item({ id: `w${w}`, category: 'Pants', inferredWarmth: w }));
+
+    const defaultPool = floorAwareCandidates(items, 10);
+    const widerPool = floorAwareCandidates(items, 10, new Map(), undefined, 15);
+
+    expect(defaultPool.length).toBeLessThanOrEqual(7); // MAX_SLOT_CANDIDATES (6) + at most 1 closestToFloor
+    expect(widerPool.length).toBeGreaterThan(defaultPool.length);
+    expect(widerPool.length).toBeLessThanOrEqual(16); // slotSize (15) + at most 1 closestToFloor
+  });
+
+  it('omitting slotSize behaves identically to the previous MAX_SLOT_CANDIDATES-only behavior', () => {
+    const warmths = [0, 1, 2, 3, 5, 7, 9, 10];
+    const items = warmths.map((w) => item({ id: `w${w}`, category: 'Pants', inferredWarmth: w }));
+
+    const withoutSlotSize = floorAwareCandidates(items, 5);
+    const withExplicitDefault = floorAwareCandidates(items, 5, new Map(), undefined, 6);
+
+    expect(withoutSlotSize.map((i) => i.id).sort()).toEqual(withExplicitDefault.map((i) => i.id).sort());
+  });
+
+  it('a slotSize applies to the warmthFloor <= 0 branch too, not just the split branch', () => {
+    const warmths = Array.from({ length: 20 }, (_, i) => i);
+    const items = warmths.map((w) => item({ id: `w${w}`, category: 'Pants', inferredWarmth: w }));
+
+    const defaultPool = floorAwareCandidates(items, 0);
+    const widerPool = floorAwareCandidates(items, 0, new Map(), undefined, 15);
+
+    expect(defaultPool.length).toBe(6); // MAX_SLOT_CANDIDATES, warmthFloor<=0 branch, leanest-only
+    expect(widerPool.length).toBe(15);
+  });
+});

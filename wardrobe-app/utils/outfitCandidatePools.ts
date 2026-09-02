@@ -259,20 +259,29 @@ export function layerFirst(
  * fallback (outfitsFor's own documented behavior) still needs real
  * candidates to try in that case. Omitted entirely, behavior is identical
  * to before this parameter existed.
+ *
+ * `slotSize`, when given, replaces MAX_SLOT_CANDIDATES as the total size of
+ * the leanest/warmest split (and of the warmthFloor<=0 branch's own leanest
+ * slice) -- see mergedByBandCenters in bandedOutfits.ts, whose own merged,
+ * band-wide pool needs a larger slice than a single outfit slot's search
+ * does to avoid a valid mid-range item being crowded out by wardrobe size
+ * before the outfit search ever runs. Omitted, behavior is identical to
+ * before this parameter existed.
  */
 export function floorAwareCandidates(
   items: readonly ClothingItem[],
   warmthFloor: number,
   wornDaysAgo: ReadonlyMap<string, number> = new Map(),
   warmthCeiling?: number,
+  slotSize: number = MAX_SLOT_CANDIDATES,
 ): ClothingItem[] {
-  if (warmthFloor <= 0) return leanFirst(items, wornDaysAgo);
+  if (warmthFloor <= 0) return rankWithFairTiebreak(items, wornDaysAgo).slice(0, slotSize);
 
-  const half = Math.ceil(MAX_SLOT_CANDIDATES / 2);
-  const leanest = leanFirst(items, wornDaysAgo).slice(0, half);
+  const half = Math.ceil(slotSize / 2);
+  const leanest = rankWithFairTiebreak(items, wornDaysAgo).slice(0, half);
   const underCeiling = warmthCeiling === undefined ? items : items.filter((item) => item.inferredWarmth <= warmthCeiling);
   const warmestBasis = underCeiling.length > 0 ? underCeiling : items;
-  const warmest = rankWithFairTiebreak(warmestBasis, wornDaysAgo, true).slice(0, MAX_SLOT_CANDIDATES - half);
+  const warmest = rankWithFairTiebreak(warmestBasis, wornDaysAgo, true).slice(0, slotSize - half);
 
   const merged = new Map<string, ClothingItem>();
   for (const item of [...leanest, ...warmest]) merged.set(item.id, item);
