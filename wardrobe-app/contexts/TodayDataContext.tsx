@@ -60,12 +60,21 @@ function filterWorkAppropriate(candidates: OutfitCandidates): OutfitCandidates {
  * slider is actually dragged, against whatever feltTempC/windSpeedKph the
  * slider supplies; both are just different bounds over the same
  * already-fetched candidate pools, not two different features.
+ *
+ * `previous`, when given alongside `workAppropriateOnly: true`, preserves
+ * any of its `shown` outfits whose every item is already work appropriate
+ * -- see selectBandedOutfits' alreadyClaimed parameter. Only ever pass a
+ * `previous` result that was computed at the same feltTempC/windSpeedKph
+ * as this call: those bounds define the bands themselves, so a `previous`
+ * from different bounds could hand back outfits that no longer describe
+ * today's actual targets.
  */
 export function outfitsFor(
   todayCandidates: TodayCandidates | null,
   feltTempC: number,
   windSpeedKph: number,
   workAppropriateOnly: boolean = false,
+  previous: TodayOutfits | null = null,
 ): TodayOutfits {
   if (!todayCandidates) return { shown: [], hasAnyOutfit: false };
   const candidates = workAppropriateOnly
@@ -74,6 +83,10 @@ export function outfitsFor(
   const floor = warmthFloor(feltTempC);
   const ceiling = warmthCeiling(feltTempC);
   const bands = splitIntoWarmthBands(floor, ceiling);
+  const alreadyClaimed =
+    workAppropriateOnly && previous
+      ? previous.shown.filter((outfit) => outfit.items.every((item) => item.isWorkAppropriate))
+      : [];
   const diverse = selectBandedOutfits(
     candidates,
     todayCandidates.dismatchedKeys,
@@ -82,6 +95,7 @@ export function outfitsFor(
     windFloor(windSpeedKph, feltTempC),
     bands,
     todayCandidates.wornDaysAgo,
+    alreadyClaimed,
   );
   // Not filtered to meetsTarget-only: unlike the old single-target ranking,
   // each band deliberately steers toward its own edge of the valid range,

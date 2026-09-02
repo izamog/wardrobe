@@ -197,3 +197,75 @@ describe('outfitsFor banded recommendations', () => {
     expect(result.shown.length).toBeLessThanOrEqual(6);
   });
 });
+
+describe('outfitsFor preserves already-valid outfits across a work-appropriate toggle', () => {
+  it('keeps the exact same outfit object for a band that was already fully work-appropriate', () => {
+    const workBottom = item('Pants', { id: 'work-bottom', isWorkAppropriate: true });
+    const workTop = item('T-Shirt', { id: 'work-top', isWorkAppropriate: true });
+    const workShoes = item('Shoes', { id: 'work-shoes', isWorkAppropriate: true });
+    const todayCandidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [workBottom], tops: [workTop], shoes: [workShoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const first = outfitsFor(todayCandidates, 20, 0, false);
+    const withFilter = outfitsFor(todayCandidates, 20, 0, true, first);
+
+    // Object identity, not just equal content: proves the preserved outfit
+    // is the exact same reference from `first`, not a recomputed
+    // equivalent that merely happens to match.
+    const firstOutfits = new Set(first.shown);
+    expect(withFilter.shown.some((outfit) => firstOutfits.has(outfit))).toBe(true);
+  });
+
+  it('does not preserve anything when previous is omitted', () => {
+    const bottom = item('Pants', { isWorkAppropriate: true });
+    const top = item('T-Shirt', { isWorkAppropriate: true });
+    const shoes = item('Shoes', { isWorkAppropriate: true });
+    const todayCandidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const result = outfitsFor(todayCandidates, 20, 0, true);
+
+    expect(result.hasAnyOutfit).toBe(true);
+  });
+
+  it('ignores previous when workAppropriateOnly is false', () => {
+    const bottom = item('Pants', { id: 'a', isWorkAppropriate: true });
+    const top = item('T-Shirt', { id: 'b', isWorkAppropriate: true });
+    const shoes = item('Shoes', { id: 'c', isWorkAppropriate: true });
+    const todayCandidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const first = outfitsFor(todayCandidates, 20, 0, false);
+    const second = outfitsFor(todayCandidates, 20, 0, false, first);
+
+    expect(second.shown.map((o) => o.items.map((i) => i.id))).toEqual(first.shown.map((o) => o.items.map((i) => i.id)));
+  });
+
+  it('only preserves outfits whose every item is work appropriate, not partially-appropriate ones', () => {
+    const workBottom = item('Pants', { id: 'work-bottom', isWorkAppropriate: true });
+    const casualTop = item('T-Shirt', { id: 'casual-top', isWorkAppropriate: false });
+    const workShoes = item('Shoes', { id: 'work-shoes', isWorkAppropriate: true });
+    const todayCandidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [workBottom], tops: [casualTop], shoes: [workShoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const first = outfitsFor(todayCandidates, 20, 0, false);
+    // Every outfit in `first` uses the casual Top, so none should survive
+    // the filter -- confirms the isWorkAppropriate check is per-item, not
+    // skipped.
+    const withFilter = outfitsFor(todayCandidates, 20, 0, true, first);
+
+    expect(withFilter.shown.some((outfit) => outfit.items.some((i) => i.id === 'casual-top'))).toBe(false);
+  });
+});
