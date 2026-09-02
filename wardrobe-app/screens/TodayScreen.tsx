@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import Slider from '@react-native-community/slider';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -7,7 +7,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { EmptyState } from '../components/EmptyState';
 import { OutfitCollage } from '../components/OutfitCollage';
 import { StoredImage } from '../components/StoredImage';
-import { useTodayData, outfitsFor } from '../contexts/TodayDataContext';
+import { useTodayData, outfitsFor, type TodayOutfits } from '../contexts/TodayDataContext';
 import type { DailyForecast } from '../services/weather';
 import { logOutfitWorn } from '../services/items';
 import { withDb } from '../services/database';
@@ -577,10 +577,39 @@ export function TodayScreen() {
   // work-appropriate filter on both need a fresh call, for the same reason:
   // either one changes what outfitsFor would return versus what the
   // provider precomputed.
+  //
+  // lastComputedRef remembers the bounds an outfits value was computed
+  // under, so toggling workAppropriateOnly alone (same feltTempC/
+  // windSpeedKph as last time) can pass that prior result to outfitsFor as
+  // `previous` -- preserving any outfit that's already work appropriate
+  // instead of discarding the whole list. A slider drag changes the bounds
+  // themselves, so it's never treated as "filter-only" here, and never
+  // preserves anything -- see outfitsFor's own doc comment on `previous`
+  // for why passing it across different bounds would be wrong.
+  const lastComputedRef = useRef<{ feltTempC: number; windSpeedKph: number; outfits: TodayOutfits } | null>(null);
+
   const outfits = useMemo(() => {
     if (!isReady) return { shown: [], hasAnyOutfit: false };
-    if (!isOverridden && !workAppropriateOnly) return state.initialOutfits;
-    return outfitsFor(state.todayCandidates, effectiveFeltTempC, effectiveWindSpeedKph, workAppropriateOnly);
+    if (!isOverridden && !workAppropriateOnly) {
+      lastComputedRef.current = {
+        feltTempC: effectiveFeltTempC,
+        windSpeedKph: effectiveWindSpeedKph,
+        outfits: state.initialOutfits,
+      };
+      return state.initialOutfits;
+    }
+    const last = lastComputedRef.current;
+    const filterOnlyChange =
+      last !== null && last.feltTempC === effectiveFeltTempC && last.windSpeedKph === effectiveWindSpeedKph;
+    const result = outfitsFor(
+      state.todayCandidates,
+      effectiveFeltTempC,
+      effectiveWindSpeedKph,
+      workAppropriateOnly,
+      filterOnlyChange ? last!.outfits : null,
+    );
+    lastComputedRef.current = { feltTempC: effectiveFeltTempC, windSpeedKph: effectiveWindSpeedKph, outfits: result };
+    return result;
   }, [isReady, isOverridden, workAppropriateOnly, state, effectiveFeltTempC, effectiveWindSpeedKph]);
 
   const openItem = useCallback(
