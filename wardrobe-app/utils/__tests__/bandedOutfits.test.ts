@@ -96,7 +96,9 @@ describe('selectBandedOutfits', () => {
     expect(results.map((o) => o.band)).toEqual(['median', 'median', 'cooler', 'cooler', 'warmer', 'warmer']);
   });
 
-  it('never uses the same item more than twice across the whole 6-outfit set', () => {
+  it('never uses the same *tracked* item more than twice across the whole 6-outfit set', () => {
+    // Bag is deliberately excluded from this cap -- see UNTRACKED_CATEGORIES
+    // -- so its own count is asserted separately below, unbounded.
     const bottoms = Array.from({ length: 8 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: i }));
     const tops = Array.from({ length: 8 }, (_, i) => item('T-Shirt', { id: `top-${i}`, inferredWarmth: i }));
     const shoes = Array.from({ length: 8 }, (_, i) => item('Shoes', { id: `shoes-${i}` }));
@@ -118,20 +120,24 @@ describe('selectBandedOutfits', () => {
         counts.set(outfitItem.id, (counts.get(outfitItem.id) ?? 0) + 1);
       }
     }
-    for (const count of counts.values()) {
+    for (const [id, count] of counts) {
+      if (id.startsWith('bag-')) continue;
       expect(count).toBeLessThanOrEqual(2);
     }
   });
 
-  it('when an item is reused, the two outfits sharing it differ in every other item', () => {
+  it('when an item is reused, the two outfits sharing it differ in every other *tracked* item', () => {
     // Thin wardrobe: only 2 distinct bottoms, forcing at least one to repeat
-    // across two of the 6 slots -- when it does, every other slot in those
-    // two outfits must differ.
+    // across two of the 6 slots -- when it does, every other TRACKED slot
+    // (everything except Bag/Belt/Scarf/Tights, which are exempt from reuse
+    // tracking entirely -- see UNTRACKED_CATEGORIES) in those two outfits
+    // must differ. Bag is deliberately capped to a single id here so the
+    // test can assert it's allowed to repeat freely, unlike Top/Shoes.
     const bottomA = item('Pants', { id: 'bottom-a', inferredWarmth: 2 });
     const bottomB = item('Pants', { id: 'bottom-b', inferredWarmth: 6 });
     const tops = Array.from({ length: 8 }, (_, i) => item('T-Shirt', { id: `top-${i}`, inferredWarmth: i }));
     const shoes = Array.from({ length: 8 }, (_, i) => item('Shoes', { id: `shoes-${i}` }));
-    const bags = Array.from({ length: 8 }, (_, i) => item('Bag', { id: `bag-${i}` }));
+    const bags = [item('Bag', { id: 'only-bag' })];
     const bands = splitIntoWarmthBands(0, 10);
 
     const results = selectBandedOutfits(
@@ -143,6 +149,11 @@ describe('selectBandedOutfits', () => {
       bands,
     );
 
+    // The single Bag is untracked, so it's fine -- expected, even -- for it
+    // to appear in every outfit shown.
+    expect(results.every((outfit) => outfit.items.some((i) => i.id === 'only-bag'))).toBe(true);
+
+    const trackedOtherCategories = new Set(['T-Shirt', 'Shoes']);
     const byBottom = new Map<string, (typeof results)[number][]>();
     for (const outfit of results) {
       const bottomId = outfit.items.find((i) => i.category === 'Pants')?.id;
@@ -152,8 +163,10 @@ describe('selectBandedOutfits', () => {
     for (const outfitsSharingABottom of byBottom.values()) {
       if (outfitsSharingABottom.length < 2) continue;
       const [first, second] = outfitsSharingABottom;
-      const firstOtherIds = new Set(first.items.filter((i) => i.category !== 'Pants').map((i) => i.id));
-      const secondOtherIds = second.items.filter((i) => i.category !== 'Pants').map((i) => i.id);
+      const firstOtherIds = new Set(
+        first.items.filter((i) => trackedOtherCategories.has(i.category)).map((i) => i.id),
+      );
+      const secondOtherIds = second.items.filter((i) => trackedOtherCategories.has(i.category)).map((i) => i.id);
       for (const id of secondOtherIds) {
         expect(firstOtherIds.has(id)).toBe(false);
       }
@@ -532,6 +545,36 @@ describe('selectBandedOutfits', () => {
     const bottomUses = results.filter((o) => o.items.some((i) => i.id === 'only-bottom')).length;
     expect(bottomUses).toBe(2);
   });
+
+  it('a single Bag, Belt, or Scarf is reused across every outfit shown, with no cap at all', () => {
+    // Direct feedback: bags and belts should always be recommended
+    // regardless of reuse (a bag with every outfit, a belt with any
+    // belt-loop bottom), and scarves as often as needed -- some wardrobes
+    // only own one of each. Plenty of Bottom/Top/Shoes variety here so the
+    // only possible bottleneck is the single Bag/Belt/Scarf itself.
+    const bottoms = Array.from({ length: 8 }, (_, i) =>
+      item('Pants', { id: `bottom-${i}`, inferredWarmth: i, hasBeltLoops: true }),
+    );
+    const tops = Array.from({ length: 8 }, (_, i) => item('T-Shirt', { id: `top-${i}`, inferredWarmth: i }));
+    const shoes = Array.from({ length: 8 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: i }));
+    const bags = [item('Bag', { id: 'only-bag' })];
+    const belts = [item('Belt', { id: 'only-belt' })];
+    const scarves = [item('Scarf', { id: 'only-scarf', inferredWarmth: 3 })];
+    const bands = splitIntoWarmthBands(6, 14);
+
+    const results = selectBandedOutfits(
+      emptyCandidates({ bottoms, tops, shoes, bags, belts, scarves }),
+      noDismatches,
+      6,
+      NO_CEILING,
+      0,
+      bands,
+    );
+
+    expect(results.length).toBe(6);
+    expect(results.every((o) => o.items.some((i) => i.id === 'only-bag'))).toBe(true);
+    expect(results.every((o) => o.items.some((i) => i.id === 'only-belt'))).toBe(true);
+  });
 });
 
 describe('freshnessPenalty', () => {
@@ -549,6 +592,26 @@ describe('freshnessPenalty', () => {
   it('never counts Tights, matching trackedItemIds\' own exclusion', () => {
     const outfit = { items: [item('Skirt', { id: 'sk1' }), item('Tights', { id: 't1' })], warmth: 0, wind: 0, meetsTarget: true };
     const useCounts = new Map([['t1', 2]]);
+    expect(freshnessPenalty(outfit, useCounts)).toBe(0);
+  });
+
+  it('never counts Bag, Belt, or Scarf -- unlimited reuse per direct feedback (a wardrobe may only own one of each)', () => {
+    const outfit = {
+      items: [
+        item('Skirt', { id: 'sk1' }),
+        item('Bag', { id: 'b1' }),
+        item('Belt', { id: 'bl1' }),
+        item('Scarf', { id: 'sc1' }),
+      ],
+      warmth: 0,
+      wind: 0,
+      meetsTarget: true,
+    };
+    const useCounts = new Map([
+      ['b1', 5],
+      ['bl1', 5],
+      ['sc1', 5],
+    ]);
     expect(freshnessPenalty(outfit, useCounts)).toBe(0);
   });
 });

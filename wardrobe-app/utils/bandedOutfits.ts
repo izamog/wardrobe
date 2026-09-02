@@ -110,9 +110,12 @@ export function coreOutfitsForBands(
   });
 }
 
-/** Every item id in `outfit` that counts toward the global reuse tracker -- every category except Tights, per the design spec's "Top-up items" ruling. */
+/** Categories excluded from the global reuse tracker entirely -- unlimited reuse, no freshness penalty, no cap. Tights per the original design spec's "Top-up items" ruling; Bag/Belt/Scarf per direct feedback: a bag should always be recommended, a belt with any belt-loop bottom, and a scarf as often as needed -- some wardrobes only own one of each, and none of them should compete with Bottoms/Tops/Outerwear/Shoes for reuse budget. */
+const UNTRACKED_CATEGORIES: ReadonlySet<ClothingItem['category']> = new Set(['Tights', 'Bag', 'Belt', 'Scarf']);
+
+/** Every item id in `outfit` that counts toward the global reuse tracker -- see UNTRACKED_CATEGORIES for what's excluded and why. */
 function trackedItemIds(outfit: ScoredOutfit): string[] {
-  return outfit.items.filter((item) => item.category !== 'Tights').map((item) => item.id);
+  return outfit.items.filter((item) => !UNTRACKED_CATEGORIES.has(item.category)).map((item) => item.id);
 }
 
 /**
