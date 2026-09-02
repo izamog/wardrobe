@@ -166,6 +166,36 @@ describe('isCompatibleCandidate', () => {
       expect(isCompatibleCandidate(item('cardigan', 'Cardigan'), backlessDress)).toBe(false);
     });
   });
+
+  describe('Dress layering', () => {
+    const dress = item('dress', 'Dress');
+
+    it('rejects a Dress paired with a plain Top -- never a legal layer, per layering.ts', () => {
+      expect(isCompatibleCandidate(dress, item('top', 'Top'))).toBe(false);
+      expect(isCompatibleCandidate(item('top', 'Top'), dress)).toBe(false);
+    });
+
+    it('allows a Dress paired with a T-Shirt or Shirt (worn under it)', () => {
+      expect(isCompatibleCandidate(dress, item('tshirt', 'T-Shirt'))).toBe(true);
+      expect(isCompatibleCandidate(dress, item('shirt', 'Shirt'))).toBe(true);
+    });
+
+    it('allows a Dress paired with a Cardigan or Sweater (worn over it)', () => {
+      expect(isCompatibleCandidate(dress, item('cardigan', 'Cardigan'))).toBe(true);
+      expect(isCompatibleCandidate(dress, item('sweater', 'Sweater'))).toBe(true);
+    });
+
+    it('does not touch a Dress paired with Outerwear -- Outerwear has no Top-group conflict with Dress at all', () => {
+      expect(isCompatibleCandidate(dress, item('jacket', 'Jacket'))).toBe(true);
+      expect(isCompatibleCandidate(dress, item('coat', 'Coat'))).toBe(true);
+    });
+
+    it('does not apply the Dress layering rule outside Dress pairs', () => {
+      // A plain Top next to a Shirt is a real, independently-legal layering
+      // pair (Shirt goes over Top) -- this rule must not fire for it.
+      expect(isCompatibleCandidate(item('top', 'Top'), item('shirt', 'Shirt'))).toBe(true);
+    });
+  });
 });
 
 describe('buildUnratedPairs: belt loops and hardware finish', () => {

@@ -661,6 +661,33 @@ describe('generateOutfits: a Dress as the anchor', () => {
   });
 });
 
+describe('generateOutfits: a Dress never pairs with a plain Top', () => {
+  it('only T-Shirt/Shirt may layer under a Dress, never a plain Top', () => {
+    // Reported bug: a plain 'Top' category item (see types/wardrobe.ts --
+    // distinct from 'T-Shirt' and 'Shirt') was reaching the Top slot
+    // alongside a Dress anchor, which layering.ts's own LAYER_PAIRS table
+    // never permits (no ['Top', 'Dress'] entry) -- the outfit generator's
+    // search just never checked it. A T-Shirt is offered too, to confirm
+    // the fix is a real per-category rule, not the Top slot going empty
+    // altogether.
+    const dress = item('Dress', { inferredWarmth: 1, inferredWind: 0 });
+    const shoes = item('Shoes', { inferredWarmth: 0, inferredWind: 0 });
+    const plainTop = item('Top', { inferredWarmth: 2, inferredWind: 0 });
+    const tShirt = item('T-Shirt', { inferredWarmth: 2, inferredWind: 0 });
+
+    const results = generateOutfits(
+      emptyCandidates({ bottoms: [dress], shoes: [shoes], tops: [plainTop, tShirt] }),
+      noDismatches,
+      0,
+      NO_CEILING,
+      0,
+    );
+
+    expect(results.some((outfit) => outfit.some((i) => i.id === plainTop.id))).toBe(false);
+    expect(results.some((outfit) => outfit.some((i) => i.id === tShirt.id))).toBe(true);
+  });
+});
+
 describe('generateOutfits: bag is preferred, not required', () => {
   it('includes a compatible bag rather than skipping it', () => {
     const bottom = item('Pants');

@@ -1,7 +1,7 @@
 import { canonicalPair } from '../services/items';
-import { getComplementaryCategories, hardwareColorApplies } from './categories';
+import { CATEGORY_GROUP, getComplementaryCategories, hardwareColorApplies } from './categories';
 import { hardwareColorsCompatible } from './hardware';
-import { canLayerUnder, isLayerableCategory } from './layering';
+import { canLayerEitherWay, canLayerUnder, isLayerableCategory } from './layering';
 import type { ClothingItem } from '../types/wardrobe';
 
 export interface ItemPair {
@@ -125,6 +125,28 @@ function clearsBacklessRule(a: ClothingItem, b: ClothingItem): boolean {
 }
 
 /**
+ * A Dress replaces both the Top and Bottom slots at once, so by default it
+ * conflicts with every Top-group category — except the ones layering.ts's
+ * LAYER_PAIRS documents as a real relationship (a T-Shirt or Shirt worn
+ * under it, a Cardigan or Sweater worn over it; Outerwear has no Top-group
+ * conflict with Dress at all, so a Jacket/Coat is untouched by this rule).
+ * getComplementaryCategories already encodes this correctly for the Speed
+ * Matcher's pairing screen, but the outfit generator's own search
+ * (isCompatibleWithAll in outfitSlots.ts) only ever calls
+ * isCompatibleCandidate, never getComplementaryCategories — so without this
+ * rule here, a plain Top reaching the Top slot alongside a Dress anchor was
+ * never rejected, and the search offered Dress+Top combinations the Speed
+ * Matcher's own deck would never have proposed.
+ */
+function clearsDressLayerRule(a: ClothingItem, b: ClothingItem): boolean {
+  const dress = a.category === 'Dress' ? a : b.category === 'Dress' ? b : null;
+  if (!dress) return true;
+  const other = dress === a ? b : a;
+  if (CATEGORY_GROUP[other.category] !== 'Top') return true;
+  return canLayerEitherWay('Dress', other.category);
+}
+
+/**
  * Whether two items are allowed to appear together as a candidate pair, on
  * top of getComplementaryCategories' category-slot rule.
  */
@@ -134,7 +156,8 @@ export function isCompatibleCandidate(a: ClothingItem, b: ClothingItem): boolean
     clearsHardwareRule(a, b) &&
     clearsCardiganLayerRule(a, b) &&
     clearsBaseLayerRule(a, b) &&
-    clearsBacklessRule(a, b)
+    clearsBacklessRule(a, b) &&
+    clearsDressLayerRule(a, b)
   );
 }
 
