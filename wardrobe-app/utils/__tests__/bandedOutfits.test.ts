@@ -757,13 +757,23 @@ describe('rankNow', () => {
     const freshBottom = item('Pants', { id: 'fresh-bottom' });
     const outfitUsingUsed = { items: [usedBottom], warmth: 5, wind: 0, meetsTarget: true };
     const outfitUsingFresh = { items: [freshBottom], warmth: 9, wind: 0, meetsTarget: true };
-    const band: WarmthBand = { min: 6, max: 10, center: 8 };
+    // min widened to 4 (was 6) so both warmth 5 and warmth 9 fall inside the
+    // band's own range and tie on the new inBand tier -- otherwise warmth 5
+    // would fall outside [6,10] and the inBand tier (which now runs before
+    // freshness) would decide this case by itself, the same confound fixed
+    // in the 'ranks freshness ahead of distance' test above. center moved to
+    // 6 (was 8) so outfitUsingUsed (gap 1) is actually CLOSER to center than
+    // outfitUsingFresh (gap 3) -- if freshness were removed from the
+    // comparator, distance alone would rank outfitUsingUsed first, so this
+    // fixture is genuinely load-bearing for proving freshness (not distance)
+    // is what decides the outcome below.
+    const band: WarmthBand = { min: 4, max: 10, center: 6 };
     const useCounts = new Map([['used-bottom', 1]]);
 
-    // outfitUsingFresh (warmth 9, gap 1) is numerically closer to center 8
-    // than outfitUsingUsed (warmth 5, gap 3) -- freshness should rank it
-    // first regardless, but this also confirms the deliberate case: even
-    // if outfitUsingUsed were closer, freshness wins first.
+    // outfitUsingUsed (warmth 5, gap 1) is numerically closer to center 6
+    // than outfitUsingFresh (warmth 9, gap 3) -- freshness should still rank
+    // outfitUsingFresh first despite being farther from center, proving
+    // freshness (not distance) is the deciding tier here.
     const ranked = rankNow([outfitUsingUsed, outfitUsingFresh], band, useCounts);
 
     expect(ranked[0]).toBe(outfitUsingFresh);
