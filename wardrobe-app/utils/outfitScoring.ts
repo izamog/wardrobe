@@ -165,6 +165,23 @@ export const TORSO_WARMTH_FLOOR_FRACTION = 1 / 3;
  */
 export const LEG_WARMTH_FLOOR_FRACTION = 1 / 4;
 
+/**
+ * The real per-item weight a Bottom/Dress item's inferredWarmth carries
+ * toward an outfit's total weighted warmth (see WARMTH_REGION_WEIGHT and
+ * sumWarmth above) -- exported so mergedByBandCenters (bandedOutfits.ts) can
+ * scale a day's warmthCeiling down to the same raw, per-item scale
+ * floorAwareCandidates' ceiling filter compares against, without reusing
+ * LEG_WARMTH_FLOOR_FRACTION (a floor-apportionment constant with no ceiling
+ * meaning -- reusing it for the ceiling was the reported bug this fixes: a
+ * raw-warmth-4 bottom was excluded by a ceiling scaled to 1.5 when its real
+ * weighted contribution, 4 * 0.6 = 2.4, was well under the day's actual
+ * ceiling of 6).
+ */
+export const LEG_WARMTH_CEILING_WEIGHT = WARMTH_REGION_WEIGHT.Bottom;
+
+/** Same as LEG_WARMTH_CEILING_WEIGHT, for the Top region -- see that constant's doc comment. */
+export const TORSO_WARMTH_CEILING_WEIGHT = WARMTH_REGION_WEIGHT.Top;
+
 /** Whether the leg region alone is warm enough for today, given the outfit's warmthFloor — see legWarmth. */
 function meetsLegFloor(chosen: readonly ClothingItem[], warmthFloor: number): boolean {
   return legWarmth(chosen) >= warmthFloor * LEG_WARMTH_FLOOR_FRACTION;

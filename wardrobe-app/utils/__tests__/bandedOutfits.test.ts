@@ -85,6 +85,38 @@ describe('coreOutfitsForBands', () => {
     const usedIds = new Set(results.map((o) => o.items.find((i) => i.category === 'Pants')?.id));
     expect(usedIds.has('mid-range')).toBe(true);
   });
+
+  it('a mid-warmth bottom is not excluded by a ceiling scaled with the wrong constant', () => {
+    // Reported bug (Task 3's real-CSV finding): mergedByBandCenters scaled
+    // warmthCeiling by LEG_WARMTH_FLOOR_FRACTION (0.25, a floor-only
+    // constant) instead of the region's real WARMTH_REGION_WEIGHT (Bottom:
+    // 0.6). At ceiling 6, the old formula produced a scaled ceiling of 1.5,
+    // wrongly excluding a raw-warmth-4 item whose true weighted
+    // contribution (4 * 0.6 = 2.4) is well under 6. 10 leaner competing
+    // bottoms push the target out of the "leanest" half of the pool split,
+    // isolating this from Task 2's slot-widening fix -- this test fails
+    // even with BAND_POOL_SLOT_SIZE=15 unless the ceiling scaling itself is
+    // also fixed.
+    const target = item('Pants', { id: 'mid-warmth', inferredWarmth: 4 });
+    const leanerBottoms = [0, 0, 0, 1, 1, 2, 2, 3, 3, 3].map((w, i) =>
+      item('Pants', { id: `lean-${i}`, inferredWarmth: w }),
+    );
+    const top = item('T-Shirt');
+    const shoes = item('Shoes');
+    const bands = splitIntoWarmthBands(1, 6);
+
+    const results = coreOutfitsForBands(
+      emptyCandidates({ bottoms: [target, ...leanerBottoms], tops: [top], shoes: [shoes] }),
+      noDismatches,
+      1,
+      6,
+      0,
+      bands,
+    );
+
+    const usedIds = new Set(results.map((o) => o.items.find((i) => i.category === 'Pants')?.id));
+    expect(usedIds.has('mid-warmth')).toBe(true);
+  });
 });
 
 describe('selectBandedOutfits', () => {

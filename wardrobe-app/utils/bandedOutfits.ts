@@ -1,7 +1,7 @@
 import { floorAwareCandidates, bottomCandidatesFor, baseTopCandidates } from './outfitCandidatePools';
 import { generateClosestOutfits, type OutfitCandidates, type ScoredOutfit } from './outfitGenerator';
 import { topUpToward, compatibleTopUpPools, type TopUpPools } from './warmthTopUp';
-import { LEG_WARMTH_FLOOR_FRACTION, TORSO_WARMTH_FLOOR_FRACTION } from './outfitScoring';
+import { LEG_WARMTH_FLOOR_FRACTION, TORSO_WARMTH_FLOOR_FRACTION, LEG_WARMTH_CEILING_WEIGHT, TORSO_WARMTH_CEILING_WEIGHT } from './outfitScoring';
 import type { WarmthBand } from './warmthBands';
 import type { ClothingItem } from '../types/wardrobe';
 
@@ -59,10 +59,18 @@ export function bandOrderFor(warmthFloor: number): ('median' | 'cooler' | 'warme
  * per-band varying (each band's own center still differs) while bringing it
  * into the right units.
  *
- * `warmthCeiling`, scaled by the same `regionFraction`, is passed through to
+ * `warmthCeiling`, converted to the same raw per-item scale via
+ * `ceilingRegionWeight` (LEG_WARMTH_CEILING_WEIGHT or
+ * TORSO_WARMTH_CEILING_WEIGHT -- see outfitScoring.ts), is passed through to
  * floorAwareCandidates so its warmest half stays honest on a hot, tight-
- * ceiling day -- see that function's own doc comment. Without it, every
- * band's own contribution to this merged pool pulled in the same genuinely-
+ * ceiling day -- see that function's own doc comment. Deliberately NOT
+ * scaled by `regionFraction` (that constant only has a validated meaning
+ * for the floor, via meetsLegFloor/meetsTorsoFloor's own raw per-region
+ * checks) -- reusing it for the ceiling was a reported bug: a raw-warmth-4
+ * bottom was excluded by a ceiling scaled to 1.5 (6 * 0.25) when its real
+ * weighted contribution (4 * 0.6) was well under the day's actual ceiling
+ * of 6. Without any correct per-region ceiling scaling at all, every band's
+ * own contribution to this merged pool pulled in the same genuinely-
  * warmest-overall items regardless of how low today's ceiling was, so the
  * union across all three bands never surfaced a mid-warmth item either: the
  * root cause of a reported bug where a warmth-5-class bottom was shown over
@@ -75,6 +83,7 @@ function mergedByBandCenters(
   regionFraction: number,
   wornDaysAgo: ReadonlyMap<string, number>,
   warmthCeiling: number,
+  ceilingRegionWeight: number,
 ): ClothingItem[] {
   const merged = new Map<string, ClothingItem>();
   for (const band of [bands.cooler, bands.median, bands.warmer]) {
@@ -82,7 +91,7 @@ function mergedByBandCenters(
       items,
       band.center * regionFraction,
       wornDaysAgo,
-      warmthCeiling * regionFraction,
+      warmthCeiling / ceilingRegionWeight,
       BAND_POOL_SLOT_SIZE,
     )) {
       merged.set(candidate.id, candidate);
@@ -115,6 +124,7 @@ export function coreOutfitsForBands(
     LEG_WARMTH_FLOOR_FRACTION,
     wornDaysAgo,
     warmthCeiling,
+    LEG_WARMTH_CEILING_WEIGHT,
   );
   const topPool = mergedByBandCenters(
     baseTopCandidates(candidates.tops, warmthFloor),
@@ -122,6 +132,7 @@ export function coreOutfitsForBands(
     TORSO_WARMTH_FLOOR_FRACTION,
     wornDaysAgo,
     warmthCeiling,
+    TORSO_WARMTH_CEILING_WEIGHT,
   );
 
   return generateClosestOutfits(candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor, Infinity, wornDaysAgo, {
