@@ -1,4 +1,4 @@
-import { floorAwareCandidates, bottomCandidatesFor, baseTopCandidates } from './outfitCandidatePools';
+import { bottomCandidatesFor, baseTopCandidates, rankWithFairTiebreak, recencyPenalty } from './outfitCandidatePools';
 import { generateClosestOutfits, type OutfitCandidates, type ScoredOutfit } from './outfitGenerator';
 import { topUpToward, compatibleTopUpPools, type TopUpPools } from './warmthTopUp';
 import { LEG_WARMTH_FLOOR_FRACTION, TORSO_WARMTH_FLOOR_FRACTION, LEG_WARMTH_CEILING_WEIGHT, TORSO_WARMTH_CEILING_WEIGHT } from './outfitScoring';
@@ -43,39 +43,75 @@ export function bandOrderFor(warmthFloor: number): ('median' | 'cooler' | 'warme
 }
 
 /**
- * Merges floorAwareCandidates run once per band into one deduped pool -- see
- * the design spec's "Pool widening" ruling for why this is a static,
- * up-front merge rather than a dynamic re-search.
+ * Picks the single item in `items` closest to `target` on the raw,
+ * per-item inferredWarmth scale -- used once per band by
+ * mergedByBandCenters to anchor that band's own floor requirement, the
+ * same "closest to floor" logic floorAwareCandidates itself uses
+ * internally (see outfitCandidatePools.ts), extracted here since
+ * mergedByBandCenters no longer calls that function.
+ */
+function closestToTarget(
+  items: readonly ClothingItem[],
+  target: number,
+  wornDaysAgo: ReadonlyMap<string, number>,
+): ClothingItem | undefined {
+  return [...items].sort((a, b) => {
+    const byDistance = Math.abs(a.inferredWarmth - target) - Math.abs(b.inferredWarmth - target);
+    return byDistance !== 0 ? byDistance : recencyPenalty(a, wornDaysAgo) - recencyPenalty(b, wornDaysAgo);
+  })[0];
+}
+
+/**
+ * Samples up to `slotSize` items evenly spread across the full sorted-by-
+ * insulation range of `items` under `warmthCeiling`, rather than clustering
+ * at the two extremes the way floorAwareCandidates' leanest/warmest split
+ * does. mergedByBandCenters' own merged, band-wide pool needs full-range
+ * coverage -- a mid-range item must be reachable -- not just cheap and
+ * maximal options.
  *
- * `regionFraction` (LEG_WARMTH_FLOOR_FRACTION or TORSO_WARMTH_FLOOR_FRACTION)
- * scales each band's own whole-outfit `center` down to the same raw,
- * per-item inferredWarmth scale floorAwareCandidates' own "closest to
- * target" tiebreak compares against (see outfitCandidatePools.ts) -- a
- * single Bottom or Top item's own inferredWarmth is never on the same scale
- * as a whole outfit's weighted warmth total, so ranking a Bottom pool
- * against a bare band.center measured a single trouser against a number
- * roughly LEG_WARMTH_FLOOR_FRACTION's reciprocal too large. Scaling by the
- * same fraction the leg/torso region floors themselves use keeps this
- * per-band varying (each band's own center still differs) while bringing it
- * into the right units.
+ * Reported bug this fixes: a valid mid-range item (a silk skirt, on a real
+ * wardrobe) never entered the search at all, even after Tasks 1-2's pool
+ * widening and Task 3b's ceiling-scaling fix -- the leanest-half/warmest-
+ * half split structurally excludes anything in the middle once the
+ * eligible pool exceeds slotSize, independent of pool size or ceiling
+ * correctness.
  *
- * `warmthCeiling`, converted to the same raw per-item scale via
- * `ceilingRegionWeight` (LEG_WARMTH_CEILING_WEIGHT or
- * TORSO_WARMTH_CEILING_WEIGHT -- see outfitScoring.ts), is passed through to
- * floorAwareCandidates so its warmest half stays honest on a hot, tight-
- * ceiling day -- see that function's own doc comment. Deliberately NOT
- * scaled by `regionFraction` (that constant only has a validated meaning
- * for the floor, via meetsLegFloor/meetsTorsoFloor's own raw per-region
- * checks) -- reusing it for the ceiling was a reported bug: a raw-warmth-4
- * bottom was excluded by a ceiling scaled to 1.5 (6 * 0.25) when its real
- * weighted contribution (4 * 0.6) was well under the day's actual ceiling
- * of 6. Without any correct per-region ceiling scaling at all, every band's
- * own contribution to this merged pool pulled in the same genuinely-
- * warmest-overall items regardless of how low today's ceiling was, so the
- * union across all three bands never surfaced a mid-warmth item either: the
- * root cause of a reported bug where a warmth-5-class bottom was shown over
- * a ceiling of 2 on a real wardrobe with plenty of lighter, valid options
- * that the search never even got to see.
+ * Each bucket's own representative is picked at random from within that
+ * bucket (jittered), not always the same relative position -- a fixed
+ * grid position (e.g. always the bucket's first item) guarantees the SAME
+ * items are always skipped for a given (poolSize, slotSize) pair, which is
+ * exactly how a real item (a silk skirt, "Arket") was permanently
+ * unreachable despite this function's own full-range coverage goal. A
+ * bucket of size 1 is still always included (no randomness where there's
+ * no choice); only multi-item buckets vary call to call.
+ */
+function evenlySampled(
+  items: readonly ClothingItem[],
+  wornDaysAgo: ReadonlyMap<string, number>,
+  warmthCeiling: number,
+  slotSize: number,
+): ClothingItem[] {
+  const underCeiling = items.filter((item) => item.inferredWarmth <= warmthCeiling);
+  const eligible = underCeiling.length > 0 ? underCeiling : items;
+  const sorted = rankWithFairTiebreak(eligible, wornDaysAgo);
+  if (sorted.length <= slotSize) return sorted;
+
+  const sampled = new Map<string, ClothingItem>();
+  for (let bucket = 0; bucket < slotSize; bucket++) {
+    const start = Math.floor((bucket * sorted.length) / slotSize);
+    const end = Math.floor(((bucket + 1) * sorted.length) / slotSize);
+    const pick = start + Math.floor(Math.random() * (end - start));
+    sampled.set(sorted[pick].id, sorted[pick]);
+  }
+  return [...sampled.values()];
+}
+
+/**
+ * Builds mergedByBandCenters' own merged, band-wide candidate pool: one
+ * full-range evenly-sampled base (see evenlySampled -- computed once, not
+ * once per band, since it doesn't depend on any band's own target) plus
+ * each band's own closest-to-floor anchor item (still per-band, since each
+ * band's own floor requirement genuinely differs).
  */
 function mergedByBandCenters(
   items: readonly ClothingItem[],
@@ -86,16 +122,12 @@ function mergedByBandCenters(
   ceilingRegionWeight: number,
 ): ClothingItem[] {
   const merged = new Map<string, ClothingItem>();
+  for (const candidate of evenlySampled(items, wornDaysAgo, warmthCeiling / ceilingRegionWeight, BAND_POOL_SLOT_SIZE)) {
+    merged.set(candidate.id, candidate);
+  }
   for (const band of [bands.cooler, bands.median, bands.warmer]) {
-    for (const candidate of floorAwareCandidates(
-      items,
-      band.center * regionFraction,
-      wornDaysAgo,
-      warmthCeiling / ceilingRegionWeight,
-      BAND_POOL_SLOT_SIZE,
-    )) {
-      merged.set(candidate.id, candidate);
-    }
+    const closest = closestToTarget(items, band.center * regionFraction, wornDaysAgo);
+    if (closest) merged.set(closest.id, closest);
   }
   return [...merged.values()];
 }
