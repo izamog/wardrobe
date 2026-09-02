@@ -577,6 +577,107 @@ describe('selectBandedOutfits', () => {
   });
 });
 
+describe('selectBandedOutfits with alreadyClaimed', () => {
+  it('skips a band\'s own search entirely when 2 already-claimed outfits are tagged to it', () => {
+    const claimedOutfit1 = { items: [item('Pants', { id: 'claimed-1' })], warmth: 3, wind: 0, meetsTarget: true, band: 'median' as const };
+    const claimedOutfit2 = { items: [item('Pants', { id: 'claimed-2' })], warmth: 3, wind: 0, meetsTarget: true, band: 'median' as const };
+    const bottoms = Array.from({ length: 6 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: i }));
+    const tops = Array.from({ length: 6 }, (_, i) => item('T-Shirt', { id: `top-${i}`, inferredWarmth: i }));
+    const shoes = Array.from({ length: 6 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: i }));
+    const bands = splitIntoWarmthBands(0, 12);
+
+    const results = selectBandedOutfits(
+      emptyCandidates({ bottoms, tops, shoes }),
+      noDismatches,
+      0,
+      NO_CEILING,
+      0,
+      bands,
+      new Map(),
+      [claimedOutfit1, claimedOutfit2],
+    );
+
+    const medianResults = results.filter((o) => o.band === 'median');
+    expect(medianResults).toEqual([claimedOutfit1, claimedOutfit2]);
+  });
+
+  it('fills only the remaining slot when 1 already-claimed outfit is tagged to a band', () => {
+    const claimedOutfit = { items: [item('Pants', { id: 'claimed-1' })], warmth: 3, wind: 0, meetsTarget: true, band: 'median' as const };
+    const bottoms = Array.from({ length: 6 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: i }));
+    const tops = Array.from({ length: 6 }, (_, i) => item('T-Shirt', { id: `top-${i}`, inferredWarmth: i }));
+    const shoes = Array.from({ length: 6 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: i }));
+    const bands = splitIntoWarmthBands(0, 12);
+
+    const results = selectBandedOutfits(
+      emptyCandidates({ bottoms, tops, shoes }),
+      noDismatches,
+      0,
+      NO_CEILING,
+      0,
+      bands,
+      new Map(),
+      [claimedOutfit],
+    );
+
+    const medianResults = results.filter((o) => o.band === 'median');
+    expect(medianResults).toHaveLength(2);
+    expect(medianResults[0]).toBe(claimedOutfit);
+  });
+
+  it('behaves identically to today when alreadyClaimed is omitted', () => {
+    const bottoms = Array.from({ length: 6 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: i }));
+    const tops = Array.from({ length: 6 }, (_, i) => item('T-Shirt', { id: `top-${i}`, inferredWarmth: i }));
+    const shoes = Array.from({ length: 6 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: i }));
+    const bands = splitIntoWarmthBands(0, 12);
+
+    const withDefault = selectBandedOutfits(emptyCandidates({ bottoms, tops, shoes }), noDismatches, 0, NO_CEILING, 0, bands);
+    const withExplicitEmpty = selectBandedOutfits(
+      emptyCandidates({ bottoms, tops, shoes }),
+      noDismatches,
+      0,
+      NO_CEILING,
+      0,
+      bands,
+      new Map(),
+      [],
+    );
+
+    expect(withDefault.map((o) => o.items.map((i) => i.id))).toEqual(withExplicitEmpty.map((o) => o.items.map((i) => i.id)));
+  });
+
+  it('seeds the reuse tracker so a filled slot respects reuse against an already-claimed outfit\'s tracked items', () => {
+    // Only 1 distinct Bottom exists at all -- claiming an outfit using it
+    // once must still leave it under the cap-2 hard ceiling across every
+    // band's picks, proving alreadyClaimed items count toward the shared
+    // reuse budget rather than being invisible to it.
+    const claimedOutfit = {
+      items: [item('Pants', { id: 'scarce-bottom' }), item('T-Shirt', { id: 'top-a' }), item('Shoes', { id: 'shoes-a' })],
+      warmth: 3,
+      wind: 0,
+      meetsTarget: true,
+      band: 'median' as const,
+    };
+    const scarceBottom = item('Pants', { id: 'scarce-bottom', inferredWarmth: 3 });
+    const tops = [item('T-Shirt', { id: 'top-a', inferredWarmth: 3 }), item('T-Shirt', { id: 'top-b', inferredWarmth: 3 })];
+    const shoes = [item('Shoes', { id: 'shoes-a' }), item('Shoes', { id: 'shoes-b' })];
+    const bands = splitIntoWarmthBands(0, 12);
+
+    const results = selectBandedOutfits(
+      emptyCandidates({ bottoms: [scarceBottom], tops, shoes }),
+      noDismatches,
+      0,
+      NO_CEILING,
+      0,
+      bands,
+      new Map(),
+      [claimedOutfit],
+    );
+
+    const scarceBottomUses = results.filter((o) => o.items.some((i) => i.id === 'scarce-bottom')).length;
+    expect(scarceBottomUses).toBeLessThanOrEqual(2);
+  });
+});
+
 describe('freshnessPenalty', () => {
   it('is 0 when none of the outfit\'s tracked items have been used yet', () => {
     const outfit = { items: [item('Pants', { id: 'p1' }), item('Sweater', { id: 's1' })], warmth: 0, wind: 0, meetsTarget: true };

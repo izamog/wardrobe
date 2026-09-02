@@ -225,15 +225,16 @@ function fillBandTiered(
     violatesCap: (outfit: ScoredOutfit) => boolean,
   ) => ScoredOutfit[],
   tiers: readonly [boolean, (outfit: ScoredOutfit) => boolean][],
+  need: number,
 ): ScoredOutfit[] {
   let picked: ScoredOutfit[] = [];
   for (const [requireMeetsTarget, violatesCap] of tiers) {
-    if (picked.length === 2) break;
+    if (picked.length === need) break;
     for (const source of sources) {
-      if (picked.length === 2) break;
+      if (picked.length === need) break;
       picked = [
         ...picked,
-        ...pickUpTo(rankNow(toppedUpByBand[source], bands[source], useCounts), 2 - picked.length, requireMeetsTarget, violatesCap),
+        ...pickUpTo(rankNow(toppedUpByBand[source], bands[source], useCounts), need - picked.length, requireMeetsTarget, violatesCap),
       ];
     }
   }
@@ -254,6 +255,47 @@ interface ReuseTracker {
     requireMeetsTarget: boolean,
     violatesCap: (outfit: ScoredOutfit) => boolean,
   ): ScoredOutfit[];
+  /** Records an already-decided outfit's tracked items against the reuse budget without walking any ranked list -- used to seed the tracker with outfits the caller is keeping from a prior selectBandedOutfits call (see selectBandedOutfits' alreadyClaimed parameter), so bands still being searched correctly treat those items as already used. */
+  claim(outfit: ScoredOutfit): void;
+}
+
+/** Records every `alreadyClaimed` outfit against the reuse tracker and groups them by their own `.band` tag, so selectBandedOutfits can skip or partially fill each band's search accordingly. Extracted purely to keep selectBandedOutfits within the project's line-count limit. */
+function groupAlreadyClaimed(
+  alreadyClaimed: readonly ScoredOutfit[],
+  claim: (outfit: ScoredOutfit) => void,
+): Record<BandName, ScoredOutfit[]> {
+  const claimedByBand: Record<BandName, ScoredOutfit[]> = { cooler: [], median: [], warmer: [] };
+  for (const outfit of alreadyClaimed) {
+    claim(outfit);
+    if (outfit.band) claimedByBand[outfit.band].push(outfit);
+  }
+  return claimedByBand;
+}
+
+/**
+ * Fills one band's `results` entry: the already-claimed outfits for it if 2
+ * were supplied, otherwise those plus whatever fillBandTiered finds for the
+ * remaining slots. Extracted purely to keep selectBandedOutfits within the
+ * project's line-count limit.
+ */
+function resultsForBand(
+  bandName: BandName,
+  claimedByBand: Record<BandName, ScoredOutfit[]>,
+  borrowOrder: Record<BandName, BandName[]>,
+  toppedUpByBand: Record<BandName, ScoredOutfit[]>,
+  bands: Record<BandName, WarmthBand>,
+  useCounts: ReadonlyMap<string, number>,
+  pickUpTo: ReuseTracker['pickUpTo'],
+  tiers: readonly [boolean, (outfit: ScoredOutfit) => boolean][],
+): ScoredOutfit[] {
+  const claimed = claimedByBand[bandName].slice(0, 2);
+  if (claimed.length === 2) return claimed;
+  const sources = [bandName, ...borrowOrder[bandName]];
+  const picked = fillBandTiered(sources, toppedUpByBand, bands, useCounts, pickUpTo, tiers, 2 - claimed.length);
+  // Tagged with the band slot being filled, not the band it was ranked/
+  // topped-up for — a borrowed outfit still fills bandName's slot, and this
+  // tag is what the UI (TodayScreen.tsx) groups and labels by.
+  return [...claimed, ...picked.map((outfit) => ({ ...outfit, band: bandName }))];
 }
 
 /** Owns the day's useCounts/firstUse state and every reuse-cap check built on it. Extracted from selectBandedOutfits purely to keep that function within the project's line-count limit. */
@@ -307,7 +349,7 @@ function createReuseTracker(): ReuseTracker {
     return picked;
   }
 
-  return { useCounts, violatesUniqueness, violatesFreshnessPreference, pickUpTo };
+  return { useCounts, violatesUniqueness, violatesFreshnessPreference, pickUpTo, claim: record };
 }
 
 export function selectBandedOutfits(
@@ -318,6 +360,7 @@ export function selectBandedOutfits(
   windFloor: number,
   bands: { cooler: WarmthBand; median: WarmthBand; warmer: WarmthBand },
   wornDaysAgo: ReadonlyMap<string, number> = new Map(),
+  alreadyClaimed: readonly ScoredOutfit[] = [],
 ): ScoredOutfit[] {
   const core = coreOutfitsForBands(
     candidates,
@@ -333,7 +376,8 @@ export function selectBandedOutfits(
     core.map((outfit) => [outfit, compatibleTopUpPools(outfit, candidates, dismatchedKeys)]),
   );
 
-  const { useCounts, violatesUniqueness, violatesFreshnessPreference, pickUpTo } = createReuseTracker();
+  const { useCounts, violatesUniqueness, violatesFreshnessPreference, pickUpTo, claim } = createReuseTracker();
+  const claimedByBand = groupAlreadyClaimed(alreadyClaimed, claim);
 
   const toppedUpByBand = {
     cooler: toppedUpForBand(core, bands.cooler, candidates, dismatchedKeys, warmthFloor, warmthCeiling, windFloor, wornDaysAgo, poolsByOutfit),
@@ -364,12 +408,9 @@ export function selectBandedOutfits(
 
   const results: ScoredOutfit[] = [];
   for (const bandName of order) {
-    const sources = [bandName, ...borrowOrder[bandName]];
-    const picked = fillBandTiered(sources, toppedUpByBand, bands, useCounts, pickUpTo, tiers);
-    // Tagged with the band slot being filled, not the band it was ranked/
-    // topped-up for — a borrowed outfit still fills bandName's slot, and
-    // this tag is what the UI (TodayScreen.tsx) groups and labels by.
-    results.push(...picked.map((outfit) => ({ ...outfit, band: bandName })));
+    results.push(
+      ...resultsForBand(bandName, claimedByBand, borrowOrder, toppedUpByBand, bands, useCounts, pickUpTo, tiers),
+    );
   }
 
   return results;
