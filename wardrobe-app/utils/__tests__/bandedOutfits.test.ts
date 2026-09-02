@@ -55,6 +55,36 @@ describe('coreOutfitsForBands', () => {
     const bottomIdsUsed = new Set(results.map((o) => o.items.find((i) => i.category === 'Pants')?.id));
     expect(bottomIdsUsed.has('w3')).toBe(true);
   });
+
+  it('the merged anchor pool is wide enough that a mid-range item is not crowded out by many competing bottoms', () => {
+    // Reported bug: with only MAX_SLOT_CANDIDATES (6) candidates per band
+    // (3 leanest + 3 warmest-under-ceiling), a genuinely good mid-range
+    // fit could be silently excluded from the entire search once enough
+    // OTHER bottoms compete for those few slots -- not because it was a
+    // poor match, but because too many other items crowded the fixed
+    // slice. 30 bottoms spread across the warmth range, only one of which
+    // (warmth 12) is the specific mid-range item under test; the other 29
+    // are deliberately spread to contest both the leanest and warmest ends.
+    const midRangeBottom = item('Pants', { id: 'mid-range', inferredWarmth: 12 });
+    const otherBottoms = Array.from({ length: 29 }, (_, i) =>
+      item('Pants', { id: `other-${i}`, inferredWarmth: i < 15 ? i : 30 - i }),
+    );
+    const top = item('T-Shirt');
+    const shoes = item('Shoes');
+    const bands = splitIntoWarmthBands(0, 20);
+
+    const results = coreOutfitsForBands(
+      emptyCandidates({ bottoms: [midRangeBottom, ...otherBottoms], tops: [top], shoes: [shoes] }),
+      noDismatches,
+      0,
+      NO_CEILING,
+      0,
+      bands,
+    );
+
+    const usedIds = new Set(results.map((o) => o.items.find((i) => i.category === 'Pants')?.id));
+    expect(usedIds.has('mid-range')).toBe(true);
+  });
 });
 
 describe('selectBandedOutfits', () => {

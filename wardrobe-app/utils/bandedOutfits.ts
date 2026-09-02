@@ -6,6 +6,26 @@ import type { WarmthBand } from './warmthBands';
 import type { ClothingItem } from '../types/wardrobe';
 
 /**
+ * The candidate-pool-widening slice size mergedByBandCenters uses -- larger
+ * than MAX_SLOT_CANDIDATES (which bounds a single outfit slot's own search
+ * branching cost) because this pool represents every plausible bottom/top
+ * across a real, ~20-40-item-per-category wardrobe, not one slot's
+ * candidates. Safe from the branching-cost concern MAX_SLOT_CANDIDATES'
+ * own doc comment warns about: coreOutfitsForBands runs generateClosestOutfits
+ * as one search per day (see its own doc comment), not once per band and
+ * not once per DFS branch, so a larger merged pool costs more once, not
+ * once per branch -- verified empirically, not assumed (see
+ * bandedOutfits.test.ts's own performance regression test).
+ *
+ * Reported bug this fixes: a valid mid-range item (a silk skirt, on a real
+ * wardrobe) never entered the search at all -- not because it was a poor
+ * fit, but because too many other items competed for the old, fixed
+ * 3-item "warmest-under-ceiling" slice across all three band calls, before
+ * the outfit search ever ran.
+ */
+const BAND_POOL_SLOT_SIZE = 15;
+
+/**
  * Which band's turn comes last -- and is therefore more likely to fall
  * back to a closest-available result on a constrained wardrobe -- depends
  * on today's warmthFloor. Median always goes first; warmer matters less
@@ -63,6 +83,7 @@ function mergedByBandCenters(
       band.center * regionFraction,
       wornDaysAgo,
       warmthCeiling * regionFraction,
+      BAND_POOL_SLOT_SIZE,
     )) {
       merged.set(candidate.id, candidate);
     }
