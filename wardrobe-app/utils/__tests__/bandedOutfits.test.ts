@@ -682,7 +682,12 @@ describe('rankNow', () => {
   it('ranks freshness ahead of distance: a fresh outfit farther from center beats a used outfit closer to center', () => {
     const usedCloser = { items: [item('Pants', { id: 'used-item' })], warmth: 8, wind: 0, meetsTarget: true };
     const freshFarther = { items: [item('Pants', { id: 'fresh-item' })], warmth: 5, wind: 0, meetsTarget: true };
-    const band: WarmthBand = { min: 6, max: 10, center: 8 };
+    // min widened to 4 (was 6) so both candidates fall within the band's own
+    // range and are tied on the new inBand tier -- otherwise freshFarther's
+    // warmth 5 would fall outside [6,10] and the inBand tier (which now runs
+    // before freshness) would decide this case instead of freshness, which
+    // isn't what this test is about.
+    const band: WarmthBand = { min: 4, max: 10, center: 8 };
     const useCounts = new Map([['used-item', 1]]);
 
     // usedCloser: gap 0 (at center), but used (freshness penalty 1)
@@ -691,6 +696,38 @@ describe('rankNow', () => {
     const ranked = rankNow([usedCloser, freshFarther], band, useCounts);
 
     expect(ranked[0]).toBe(freshFarther);
+  });
+
+  it('prefers a candidate within the band\'s own range over a fresher one outside it', () => {
+    const inRangeButUsed = { items: [item('Pants', { id: 'in-range' })], warmth: 8, wind: 0, meetsTarget: true };
+    const outOfRangeButFresh = { items: [item('Pants', { id: 'out-of-range' })], warmth: 3, wind: 0, meetsTarget: true };
+    const band: WarmthBand = { min: 7, max: 9, center: 8 };
+    const useCounts = new Map([['in-range', 1]]); // already used once -- not fresh
+
+    const ranked = rankNow([outOfRangeButFresh, inRangeButUsed], band, useCounts);
+
+    expect(ranked[0]).toBe(inRangeButUsed);
+  });
+
+  it('still uses freshness as a tiebreak between two otherwise-equal in-band candidates', () => {
+    const used = { items: [item('Pants', { id: 'used' })], warmth: 8, wind: 0, meetsTarget: true };
+    const fresh = { items: [item('Pants', { id: 'fresh' })], warmth: 8, wind: 0, meetsTarget: true };
+    const band: WarmthBand = { min: 7, max: 9, center: 8 };
+    const useCounts = new Map([['used', 1]]);
+
+    const ranked = rankNow([used, fresh], band, useCounts);
+
+    expect(ranked[0]).toBe(fresh);
+  });
+
+  it('falls back to closeness-to-center when both candidates are outside the band\'s own range (inBand is tied at false)', () => {
+    const closer = { items: [item('Pants', { id: 'closer' })], warmth: 6, wind: 0, meetsTarget: true };
+    const farther = { items: [item('Pants', { id: 'farther' })], warmth: 2, wind: 0, meetsTarget: true };
+    const band: WarmthBand = { min: 7, max: 9, center: 8 };
+
+    const ranked = rankNow([farther, closer], band, new Map());
+
+    expect(ranked[0]).toBe(closer);
   });
 });
 

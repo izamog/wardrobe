@@ -176,8 +176,16 @@ export function freshnessPenalty(outfit: ScoredOutfit, useCounts: ReadonlyMap<st
  * distance-to-center -- rejected by the reuse rule, over and over,
  * while a genuinely different, valid Top/Outerwear pairing sat far down
  * the list. meetsTarget still wins first; freshness is the new middle
- * tier; distance to band.center is the final tiebreak.
+ * tier; inBand (is this candidate within THIS band's own [min,max], not
+ * just today's overall floor-ceiling) is next; freshness breaks ties within
+ * the same inBand bucket; distance to band.center is the final tiebreak.
  */
+
+/** Whether `outfit`'s warmth actually falls within THIS band's own [min, max] sub-range, not just the day's overall floor-ceiling. */
+function inBand(outfit: ScoredOutfit, band: WarmthBand): boolean {
+  return outfit.warmth >= band.min && outfit.warmth <= band.max;
+}
+
 export function rankNow(
   toppedUp: readonly ScoredOutfit[],
   band: WarmthBand,
@@ -185,6 +193,9 @@ export function rankNow(
 ): ScoredOutfit[] {
   return [...toppedUp].sort((a, b) => {
     if (a.meetsTarget !== b.meetsTarget) return a.meetsTarget ? -1 : 1;
+    const inBandA = inBand(a, band);
+    const inBandB = inBand(b, band);
+    if (inBandA !== inBandB) return inBandA ? -1 : 1;
     const freshA = freshnessPenalty(a, useCounts);
     const freshB = freshnessPenalty(b, useCounts);
     if (freshA !== freshB) return freshA - freshB;
