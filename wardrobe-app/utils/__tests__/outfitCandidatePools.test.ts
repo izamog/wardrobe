@@ -219,6 +219,50 @@ describe('floorAwareOuterwearCandidates with wornDaysAgo', () => {
   });
 });
 
+describe('floorAwareOuterwearCandidates with a warmthCeiling', () => {
+  it('picks the heaviest items that fit under the ceiling, not the wardrobe\'s overall heaviest', () => {
+    // Reported bug: on a hot day the "heaviest 3" ignored the ceiling
+    // entirely and always pulled in the wardrobe's genuinely heaviest
+    // coats/jackets -- e.g. a warmth-6 Jacket at a ceiling of 4 -- pushing
+    // an otherwise-valid outfit over the ceiling with no lighter Outerwear
+    // option ever offered instead.
+    const items = [
+      item({ id: 'light-1', category: 'Jacket', inferredWarmth: 1, inferredWind: 0 }),
+      item({ id: 'light-2', category: 'Jacket', inferredWarmth: 2, inferredWind: 0 }),
+      item({ id: 'heavy-1', category: 'Jacket', inferredWarmth: 6, inferredWind: 0 }),
+      item({ id: 'heavy-2', category: 'Coat', inferredWarmth: 8, inferredWind: 0 }),
+    ];
+
+    const pool = floorAwareOuterwearCandidates(items, new Map(), 3);
+
+    expect(pool.map((i) => i.id)).not.toContain('heavy-1');
+    expect(pool.map((i) => i.id)).not.toContain('heavy-2');
+    expect(pool.map((i) => i.id)).toContain('light-2');
+  });
+
+  it('falls back to the overall heaviest when nothing at all fits under the ceiling', () => {
+    const items = [
+      item({ id: 'heavy-1', category: 'Jacket', inferredWarmth: 6, inferredWind: 0 }),
+      item({ id: 'heavy-2', category: 'Coat', inferredWarmth: 8, inferredWind: 0 }),
+    ];
+
+    const pool = floorAwareOuterwearCandidates(items, new Map(), 1);
+
+    expect(pool.map((i) => i.id)).toContain('heavy-2');
+  });
+
+  it('is unaffected when no warmthCeiling is passed, matching the pre-existing behavior exactly', () => {
+    const items = [
+      item({ id: 'light', category: 'Jacket', inferredWarmth: 1, inferredWind: 0 }),
+      item({ id: 'heavy', category: 'Coat', inferredWarmth: 8, inferredWind: 0 }),
+    ];
+
+    const pool = floorAwareOuterwearCandidates(items);
+
+    expect(pool.map((i) => i.id)).toContain('heavy');
+  });
+});
+
 describe('floorAwareCandidates with wornDaysAgo', () => {
   it('passes wornDaysAgo through to its internal leanFirst call', () => {
     const wornRecently = item({ id: 'a', category: 'Pants', inferredWarmth: 3 });

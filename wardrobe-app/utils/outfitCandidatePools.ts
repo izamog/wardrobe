@@ -319,12 +319,27 @@ export function floorAwareCandidates(
  * already among the heaviest 3) — a bounded, one-slot cost for one specific
  * slot, not a shared cap this search's own complexity budget depends on
  * staying small (see MAX_ACCESSORY_CANDIDATES's own doc comment).
+ *
+ * `warmthCeiling`, when given, keeps the heaviest-3 honest on a hot day —
+ * the same fix floorAwareCandidates got for Top/Bottom, applied here for the
+ * same reason: unfiltered, "heaviest overall" always offers the wardrobe's
+ * genuinely heaviest coats regardless of today's ceiling, pushing an outfit
+ * over it with no lighter Outerwear option ever tried instead (reported bug:
+ * a warmth-6 Jacket shown over a ceiling of 4). With a ceiling given,
+ * "heaviest" means heaviest among items that still fit under it, falling
+ * back to the wardrobe's genuinely heaviest only when nothing clears the
+ * ceiling — the extreme-cold "closest available" fallback still needs real
+ * candidates to try in that case. Omitted entirely, behavior is identical to
+ * before this parameter existed.
  */
 export function floorAwareOuterwearCandidates(
   items: readonly ClothingItem[],
   wornDaysAgo: ReadonlyMap<string, number> = new Map(),
+  warmthCeiling?: number,
 ): ClothingItem[] {
-  const heaviest = layerFirst(items, wornDaysAgo);
+  const underCeiling = warmthCeiling === undefined ? items : items.filter((item) => item.inferredWarmth <= warmthCeiling);
+  const heaviestBasis = underCeiling.length > 0 ? underCeiling : items;
+  const heaviest = layerFirst(heaviestBasis, wornDaysAgo);
   const leanest = rankWithFairTiebreak(items, wornDaysAgo).slice(0, 1);
 
   const merged = new Map<string, ClothingItem>();

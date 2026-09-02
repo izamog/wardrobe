@@ -280,7 +280,11 @@ export function buildSlots(
       ? [{ candidates: accessoryFirst(candidates.tights, wornDaysAgo), required: false, preferred: true }]
       : []),
     {
-      candidates: floorAwareOuterwearCandidates(excludesSleeveless(candidates.outerwear, warmthFloor), wornDaysAgo),
+      candidates: floorAwareOuterwearCandidates(
+        excludesSleeveless(candidates.outerwear, warmthFloor),
+        wornDaysAgo,
+        warmthCeiling,
+      ),
       required: false,
     },
     { candidates: accessoryFirst(candidates.bags, wornDaysAgo), required: false, preferred: true },
