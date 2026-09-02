@@ -1,0 +1,92 @@
+brand,category,primaryColor,secondaryColor,material1,material1Percent,material2,material2Percent,hardwareColor,hasBeltLoops,sleeveLength,length,thickness,denier,backless,inferredWarmth,inferredWind,isWorkAppropriate
+Havaianas,Sandals,Navy,,,,,,None,false,Short,,Regular,0,false,0,0,false
+Arket,Sweater,Brown,,Alpaca,0,,,None,false,Long,,Light,0,false,8,2,false
+Peppermayo,Skirt,White,,Cotton,0,,,None,false,Short,Mini,Light,0,false,0,0,false
+Tala,Top,Black,,Polyamide,0,,,None,false,Sleeveless,,Regular,0,false,0,0,false
+Unknown,Top,Multi,,Cotton,0,,,None,false,Sleeveless,,Regular,0,true,0,0,false
+Peppermayo,Top,Red,,Lyocell,0,,,None,false,Sleeveless,,Regular,0,false,0,0,true
+Peppermayo,Top,Black,,Polyester,0,,,None,false,Sleeveless,,Regular,0,false,0,0,true
+Zara,Jacket,White,,Denim,0,,,None,false,Long,,Regular,0,false,7,6,true
+Adanola,Shirt,Blue,,Cotton,0,,,None,false,Long,,Regular,0,false,3,2,true
+Ganni,Top,Black,,Polyester,0,,,None,false,Long,,Mesh,0,false,1,3,false
+Unknown,Sweater,Black,,Wool,0,,,None,false,Sleeveless,,Regular,0,false,7,0,true
+Unknown,Tights,,,,,,,None,false,Short,,Regular,15,false,3,2,true
+Reiss,Pants,Cream,,Denim,0,,,None,true,Short,Long,Regular,0,false,5,4,true
+Reiss,Pants,Beige,,Wool,0,,,None,true,Short,Long,Regular,0,false,7,3,true
+Reiss,Pants,Blue,,Denim,0,,,None,true,Short,Long,Regular,0,false,5,4,true
+Marks & Spencer,Skirt,White,,Polyester,0,,,None,false,Short,Midi,Regular,0,false,2,2,true
+Unknown,Shirt,Pink,,Cotton,0,,,None,false,Long,,Regular,0,false,3,2,true
+Aritzia,Shirt,White,,Cotton,0,,,None,false,Long,,Regular,0,false,3,2,true
+Almost Monday,Sweater,Black,,Cotton,0,,,None,false,Long,,Regular,0,false,6,2,false
+Massimo Dutti,Sweater,Green,Grey,Cashmere,10,Wool,90,None,false,Long,,Regular,0,false,8,2,true
+Outdoor Voices,Dress,Navy,,Lyocell,0,Polyester,0,None,false,Short,Mini,Regular,0,false,0,0,false
+Abercrombie,Dress,Red,,Polyester,0,,,None,false,Sleeveless,Midi,Regular,0,false,1,0,false
+Stand Studio,Coat,Brown,White,Polyester,0,,,None,false,Long,,Thick,0,false,9,7,true
+Acne Studios,Scarf,Multi,,Alpaca,0,,,None,false,Short,,Regular,0,false,6,2,true
+Arket,Jacket,Black,,Polyester,53,Wool,43,None,false,Long,,Light,0,false,6,6,true
+Arket,Sweater,Burgundy,,Cashmere,75,Wool,25,None,false,Long,,Regular,0,false,8,2,true
+Arket,Sweater,Beige,,Cashmere,75,Wool,25,None,false,Long,,Regular,0,false,8,2,true
+Arket,Jacket,Blue,,Cotton,0,Denim,0,None,false,Long,,Regular,0,false,7,6,true
+Minka dink,Pants,Black,,Cotton,0,Denim,0,None,true,Short,Long,Regular,0,false,5,4,true
+PrettyLittleThing,Dress,Black,,Polyamide,0,Viscose,0,None,false,Sleeveless,Mini,Light,0,true,0,0,false
+Unknown,Jacket,Beige,Red,Cotton,0,Fleece,0,None,false,Long,,Thick,0,false,9,4,true
+Reiss,Pants,Black,,Cotton,57,Viscose,34,None,true,Short,Long,Regular,0,false,4,3,true
+Marks & Spencer,Pants,Navy,,Linen,0,,,None,false,Short,Long,Regular,0,false,3,2,true
+Unknown,Jacket,Brown,,Fur,0,,,None,false,Long,,Heavy,0,false,9,9,true
+Kookai,Dress,White,,Cotton,0,,,None,false,Sleeveless,Maxi,Regular,0,true,1,0,false
+& Other Stories,Pants,Grey,,Wool,0,,,None,true,Short,Long,Regular,0,false,7,3,true
+COS,Jacket,Brown,,Wool,0,,,None,false,Long,,Regular,0,false,9,5,true
+Cos,Sweater,Brown,,Wool,0,,,None,false,Long,,Regular,0,false,8,2,true
+Abercrombie,Skirt,Black,,Polyester,0,,,None,false,Short,Mini,Regular,0,false,0,0,false
+COS,Sweater,Green,,Wool,0,,,None,false,Long,,Heavy,0,false,8,2,true
+Arket,Sweater,Green,,Alpaca,0,,,None,false,Long,,Light,0,false,7,1,true
+EMENTA,Sweater,Green,,Cotton,0,,,None,false,Long,,Regular,0,false,6,2,true
+Cos,Sweater,Black,,Wool,0,,,None,false,Long,,Regular,0,false,8,2,true
+Abercrombie,Top,Navy,,Polyester,0,,,None,false,Sleeveless,,Thick,0,false,1,0,true
+Unknown,Shirt,,,,,,,None,false,Long,,Regular,0,false,3,2,true
+Tala,Top,Black,,Elastane,0,Modal,0,None,false,Long,,Thick,0,true,2,0,false
+Kookai,Dress,Green,,Polyester,0,,,None,false,Sleeveless,Maxi,Mesh,0,true,0,0,false
+Arket,Coat,Black,,Wool,0,,,None,false,Long,,Regular,0,false,10,6,true
+Office,Boots,Black,,Leather,0,,,None,false,Short,,Regular,0,false,4,10,true
+Adanola,Leggings,Black,,Elastane,0,Polyester,0,None,false,Short,Knee-length,Regular,0,false,1,1,false
+Hollister,Top,Brown,,Polyester,0,,,None,false,Short,,Regular,0,false,1,1,true
+Reiss,Top,Blue,Navy,Cotton,0,,,None,false,Sleeveless,,Regular,0,false,0,0,true
+Reformation,Top,Blue,,Cotton,0,Lyocell,0,None,false,Short,,Regular,0,false,1,0,true
+Boii,Cardigan,Cream,,Alpaca,0,Wool,0,None,false,Long,,Regular,0,false,7,2,true
+Office,Boots,Black,,Leather,0,,,None,false,Short,,Regular,0,false,4,10,false
+Coach,Bag,Black,Grey,Cotton,0,,,Silver,false,Short,,Regular,0,false,0,0,true
+Uniqlo,T-Shirt,Black,,Polyester,0,,,None,false,Long,,Regular,0,false,2,2,true
+Uniqlo,T-Shirt,Cream,,Cotton,0,Lyocell,0,None,false,Short,,Regular,0,false,1,0,true
+& Other Stories,Boots,Black,,Leather,0,,,None,false,Short,,Regular,0,false,4,10,true
+COS,Belt,Brown,Gold,Leather,0,,,Gold,false,Short,,Regular,0,false,0,0,true
+COS,Belt,Black,Silver,Leather,0,,,Silver,false,Short,,Regular,0,false,0,0,true
+Arket,Top,Black,,Cotton,0,,,None,false,Sleeveless,,Regular,0,false,0,0,true
+Rouje,Top,Black,,Polyester,0,Viscose,0,None,false,Sleeveless,,Regular,0,false,0,0,false
+Rouje,Top,Black,,Polyester,0,Viscose,0,None,false,Sleeveless,,Regular,0,false,0,0,false
+Arket,Coat,Grey,,Wool,100,,,None,false,Long,,Regular,0,false,10,6,true
+Unknown,Cardigan,Burgundy,,Cotton,0,Wool,0,None,false,Sleeveless,,Regular,0,false,6,0,true
+Realisation Par,Skirt,Black,Tan,Silk,0,,,None,false,Short,Midi,Regular,0,false,3,1,true
+Unknown,Shorts,Beige,,Cotton,0,,,None,true,Short,,Regular,0,false,1,0,true
+Mango,Jacket,Cream,,Wool,0,,,None,false,Long,,Regular,0,false,9,5,true
+Coach,Bag,Brown,,Leather,0,,,Gold,false,Short,,Regular,0,false,0,0,true
+Uniqlo,Jacket,Navy,,Denim,0,,,None,false,Long,,Regular,0,false,7,6,true
+Reformation,Top,Black,,Elastane,0,Lyocell,0,None,false,Sleeveless,,Regular,0,false,0,0,false
+Anthropologie,Sandals,Red,,,,,,None,false,Short,,Regular,0,false,0,0,true
+United Colors of Benetton,Pants,Green,,Linen,0,,,None,false,Short,Long,Regular,0,false,3,2,true
+Weekday,Pants,Blue,,Denim,0,,,None,true,Short,Long,Light,0,false,4,4,true
+Adidas,Shoes,Burgundy,,Leather,0,,,None,false,Short,,Regular,0,false,2,10,true
+Motel Rocks,Jacket,Burgundy,Red,Faux Leather,0,,,None,false,Long,,Regular,0,false,6,10,true
+& Other Stories,Top,Red,,Lyocell,0,Polyester,0,None,false,Sleeveless,,Light,0,false,0,0,true
+Abercrombie,Shorts,Blue,,Denim,0,,,None,true,Short,,Regular,0,false,2,0,false
+Whistles,Cardigan,Burgundy,,Cashmere,0,,,None,false,Long,,Regular,0,false,7,2,true
+Abercrombie,Top,Black,,Polyester,0,,,None,false,Short,,Regular,0,false,1,1,false
+New Balance,Shoes,White,Green,Leather,0,,,None,false,Short,,Regular,0,false,2,10,true
+Abercrombie,Jacket,Brown,Burgundy,Fleece,0,Polyester,0,None,false,Long,,Thick,0,false,9,4,true
+Levi's,Pants,Blue,,Denim,0,,,None,true,Short,Long,Regular,0,false,5,4,true
+Levi's,Pants,Blue,,Denim,0,,,None,true,Short,Long,Regular,0,false,5,4,true
+Arket,Top,Red,,Cotton,0,,,None,false,Sleeveless,,Regular,0,false,0,0,true
+Arket,Shirt,Red,,Linen,0,,,None,false,Long,,Regular,0,false,2,1,true
+Arket,Skirt,Cream,,Silk,0,,,None,false,Short,Maxi,Regular,0,false,4,2,true
+Miista,Shoes,Black,Cream,Leather,0,,,None,false,Short,,Regular,0,false,2,10,true
+Calvin Klein,Top,Black,,Cotton,0,,,None,false,Sleeveless,,Regular,0,false,0,0,true
+Nike,Shoes,Tan,White,Leather,0,,,None,false,Short,,Regular,0,false,2,10,true

@@ -171,6 +171,43 @@ export function rankNow(
   });
 }
 
+type BandName = 'cooler' | 'median' | 'warmer';
+
+/**
+ * Fills one band's 2 slots by walking `tiers` in order -- each tier tried
+ * across `sources` (the band itself, then its donors, per borrowOrder)
+ * before the next, stricter-to-looser tier is ever touched. Extracted from
+ * selectBandedOutfits purely to keep that function within the project's
+ * line-count limit; see the tiers array at its one call site for what each
+ * tier means.
+ */
+function fillBandTiered(
+  sources: readonly BandName[],
+  toppedUpByBand: Record<BandName, ScoredOutfit[]>,
+  bands: Record<BandName, WarmthBand>,
+  useCounts: ReadonlyMap<string, number>,
+  pickUpTo: (
+    ranked: readonly ScoredOutfit[],
+    need: number,
+    requireMeetsTarget: boolean,
+    violatesCap: (outfit: ScoredOutfit) => boolean,
+  ) => ScoredOutfit[],
+  tiers: readonly [boolean, (outfit: ScoredOutfit) => boolean][],
+): ScoredOutfit[] {
+  let picked: ScoredOutfit[] = [];
+  for (const [requireMeetsTarget, violatesCap] of tiers) {
+    if (picked.length === 2) break;
+    for (const source of sources) {
+      if (picked.length === 2) break;
+      picked = [
+        ...picked,
+        ...pickUpTo(rankNow(toppedUpByBand[source], bands[source], useCounts), 2 - picked.length, requireMeetsTarget, violatesCap),
+      ];
+    }
+  }
+  return picked;
+}
+
 export function selectBandedOutfits(
   candidates: OutfitCandidates,
   dismatchedKeys: ReadonlySet<string>,
@@ -197,6 +234,7 @@ export function selectBandedOutfits(
   const useCounts = new Map<string, number>();
   const firstUse = new Map<string, ScoredOutfit>();
 
+  /** Hard safety-net cap: an item may never appear in more than 2 of the day's shown outfits, and a second use may never overlap the first use's outfit on any other item (no near-duplicate outfit pair). This is the fallback tier -- see violatesFreshnessPreference for the preferred, stricter tier tried first. */
   function violatesUniqueness(outfit: ScoredOutfit): boolean {
     const ids = trackedItemIds(outfit);
     for (const id of ids) {
@@ -214,6 +252,11 @@ export function selectBandedOutfits(
     return false;
   }
 
+  /** Preferred tier: an item should appear in at most 1 of the day's shown outfits. Tried before violatesUniqueness's looser cap-2 fallback, so a genuinely scarce wardrobe (one bag, one valid trouser) still fills every slot -- it just falls through to the cap-2 tier to do it, rather than this tier blocking outright. */
+  function violatesFreshnessPreference(outfit: ScoredOutfit): boolean {
+    return trackedItemIds(outfit).some((id) => (useCounts.get(id) ?? 0) >= 1);
+  }
+
   function record(outfit: ScoredOutfit): void {
     for (const id of trackedItemIds(outfit)) {
       const count = useCounts.get(id) ?? 0;
@@ -222,12 +265,18 @@ export function selectBandedOutfits(
     }
   }
 
-  /** Picks up to `need` outfits, recording (and permanently consuming reuse budget for) only what it actually keeps -- never records a candidate it evaluates but then discards, which would silently tighten the max-2 ceiling for outfits the user never sees. */
-  function pickUpTo(ranked: readonly ScoredOutfit[], need: number): ScoredOutfit[] {
+  /** Picks up to `need` outfits, recording (and permanently consuming reuse budget for) only what it actually keeps -- never records a candidate it evaluates but then discards, which would silently tighten the reuse cap for outfits the user never sees. `requireMeetsTarget` and `violatesCap` let the caller run this same walk at different tiers of strictness (see the 4-tier fill loop in selectBandedOutfits). */
+  function pickUpTo(
+    ranked: readonly ScoredOutfit[],
+    need: number,
+    requireMeetsTarget: boolean,
+    violatesCap: (outfit: ScoredOutfit) => boolean,
+  ): ScoredOutfit[] {
     const picked: ScoredOutfit[] = [];
     for (const outfit of ranked) {
       if (picked.length === need) break;
-      if (violatesUniqueness(outfit)) continue;
+      if (requireMeetsTarget && !outfit.meetsTarget) continue;
+      if (violatesCap(outfit)) continue;
       record(outfit);
       picked.push(outfit);
     }
@@ -247,13 +296,24 @@ export function selectBandedOutfits(
     warmer: ['median', 'cooler'],
   };
 
+  // Four tiers, tried in order, each across own-band-then-donors before the
+  // next tier is ever touched: (1) valid + fresh, (2) valid + reused (only
+  // when a scarce wardrobe has no fresh valid alternative), (3) invalid +
+  // fresh, (4) invalid + reused -- today's original last-resort fallback.
+  // Validity is checked before freshness at every step, so an over-ceiling
+  // outfit is never shown while a same-day valid alternative -- in this
+  // band OR a donor's -- still exists unclaimed or reusable.
+  const tiers: readonly [boolean, (outfit: ScoredOutfit) => boolean][] = [
+    [true, violatesFreshnessPreference],
+    [true, violatesUniqueness],
+    [false, violatesFreshnessPreference],
+    [false, violatesUniqueness],
+  ];
+
   const results: ScoredOutfit[] = [];
   for (const bandName of order) {
-    let picked = pickUpTo(rankNow(toppedUpByBand[bandName], bands[bandName], useCounts), 2);
-    for (const donor of borrowOrder[bandName]) {
-      if (picked.length === 2) break;
-      picked = [...picked, ...pickUpTo(rankNow(toppedUpByBand[donor], bands[donor], useCounts), 2 - picked.length)];
-    }
+    const sources = [bandName, ...borrowOrder[bandName]];
+    const picked = fillBandTiered(sources, toppedUpByBand, bands, useCounts, pickUpTo, tiers);
     // Tagged with the band slot being filled, not the band it was ranked/
     // topped-up for — a borrowed outfit still fills bandName's slot, and
     // this tag is what the UI (TodayScreen.tsx) groups and labels by.
