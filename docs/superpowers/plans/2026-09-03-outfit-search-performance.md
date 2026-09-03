@@ -27,6 +27,15 @@ Expo SDK 54, pure functions plus one React screen component.
 - Approach A prunes only on the ceiling side, never the floor side — the
   mathematical proof (warmth is monotonic non-decreasing; `topUpToward`
   only ever adds warmth) only holds for the ceiling.
+- Approach D's per-(bottom,top)-pair budget resets exactly once per pair
+  (at `slotIndex === 1`, right after Top is chosen or skipped), never
+  globally across the whole search — a global budget would starve
+  later-visited bottom/top pairs entirely, reintroducing the prior
+  session's own "valid item invisible to the search" bug class.
+- Approach D is lossy by design and must never be described or verified as
+  if it were as strong a guarantee as Approach A's provably-lossless
+  margin — its verification is the real-CSV regression sweep's own
+  structural invariants holding, not exact-output equality.
 - Approach A's margin (`MAX_USEFUL_OVER_CEILING_MARGIN`) must be proven,
   not assumed, to produce identical output to the unpruned search — via
   the equivalence check in Task 2, run against every existing
@@ -437,6 +446,185 @@ git commit -m "Add a finite-ceiling performance regression test that exercises t
 (If Step 3 required widening `MAX_USEFUL_OVER_CEILING_MARGIN`, that change
 belongs in this commit too, with a note in the commit message about what
 the equivalence check found.)
+
+---
+
+## Task 2b: Per-(bottom,top)-pair result budget in `generateClosestOutfits`
+
+Task 2's own real-CSV measurement found the ceiling prune (Task 1) only
+bought ~6-7% wall-clock improvement. Root cause, confirmed by direct
+instrumentation: `coreOutfitsForBands` returns 77,850 outfits at 0°C/21kph
+— not from unpruned branches (Task 1 already handles those), but from the
+accessory slots (Cardigan, BaseLayer, Outerwear, Bag) genuinely producing
+hundreds of valid, distinct combinations per bottom+top pair (~340 on
+average), every one of which then gets topped-up 3x and repeatedly
+re-sorted downstream.
+
+Removing Scarf/Tights as redundant with the later top-up pass was
+investigated and ruled out: `coreOutfitsForBands` already passes
+`includeWarmthAccessories: false` (`bandedOutfits.ts:175`), so Scarf/
+Tights never entered the core search's branching in the first place —
+nothing left to remove there.
+
+**Files:**
+- Modify: `wardrobe-app/utils/outfitGenerator.ts`
+- Test: `wardrobe-app/utils/__tests__/outfitGenerator.test.ts`
+
+**Interfaces:**
+- Consumes: nothing new.
+- Produces: no new exports — `generateClosestOutfits`' own behavior changes (fewer complete outfits collected per bottom+top pair once its budget is spent), its signature does not. A new, unexported constant `MAX_RESULTS_PER_TOP_PAIR`.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `wardrobe-app/utils/__tests__/outfitGenerator.test.ts`, inside the same `describe('generateClosestOutfits', ...)` block Task 1 added (after Task 1's own test, before the closing `});`):
+
+```ts
+  it('caps how many complete outfits it collects per bottom+top pair, without starving a different pair', () => {
+    // Reported bug (Task 2's real-CSV benchmark): coreOutfitsForBands
+    // returned 77,850 outfits at 0C/21kph -- not from unpruned DFS
+    // branches (Task 1 already fixed that), but from the accessory slots
+    // (Cardigan/BaseLayer/Outerwear/Bag) genuinely producing hundreds of
+    // valid, distinct combinations per bottom+top pair, every one of
+    // which then gets topped-up and re-sorted 3x downstream.
+    //
+    // Fixture: 2 bottoms, 1 top, 5 Outerwear + 3 Bag options -- (5
+    // Outerwear + skip) x (3 Bag + skip) = 24 distinct completions per
+    // bottom, comfortably exceeding MAX_RESULTS_PER_TOP_PAIR (12).
+    const bottomA = item('Pants', { id: 'bottom-a', inferredWarmth: 1 });
+    const bottomB = item('Pants', { id: 'bottom-b', inferredWarmth: 1 });
+    const top = item('Sweater', { id: 'top-1', inferredWarmth: 1 });
+    const shoes = item('Shoes', { id: 'shoes-1', inferredWarmth: 0 });
+    const outerwear = Array.from({ length: 5 }, (_, i) => item('Jacket', { id: `jacket-${i}`, inferredWarmth: 1 }));
+    const bags = Array.from({ length: 3 }, (_, i) => item('Bag', { id: `bag-${i}` }));
+
+    const results = generateClosestOutfits(
+      emptyCandidates({ bottoms: [bottomA, bottomB], tops: [top], shoes: [shoes], outerwear, bags }),
+      noDismatches,
+      1,
+      10,
+      0,
+      Infinity,
+    );
+
+    const countFor = (bottomId: string) => results.filter((o) => o.items.some((i) => i.id === bottomId)).length;
+
+    expect(countFor('bottom-a')).toBeLessThanOrEqual(12);
+    expect(countFor('bottom-b')).toBeLessThanOrEqual(12);
+    expect(countFor('bottom-a')).toBeGreaterThan(0);
+    expect(countFor('bottom-b')).toBeGreaterThan(0); // proves bottom-b wasn't starved by bottom-a's own budget
+  });
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx jest utils/__tests__/outfitGenerator.test.ts -t "caps how many complete outfits"` (from `wardrobe-app/`)
+Expected: FAIL on the `toBeLessThanOrEqual(12)` assertions — with no budget, each bottom currently produces all 24 completions.
+
+- [ ] **Step 3: Add the budget constant and wire it into `searchSlots`**
+
+In `wardrobe-app/utils/outfitGenerator.ts`, add this constant right after `MAX_USEFUL_OVER_CEILING_MARGIN`'s own definition:
+
+```ts
+/**
+ * How many complete outfits generateClosestOutfits collects per (bottom,
+ * top) pair before moving on -- not a global budget (see this constant's
+ * own Global Constraint in the plan for why a global one would starve
+ * later-visited pairs), reset fresh every time a new Top candidate (or a
+ * Dress anchor's Top-skip branch) is chosen.
+ *
+ * Reported bug this fixes: the accessory slots (Cardigan, BaseLayer,
+ * Outerwear, Bag) genuinely produce hundreds of valid, distinct
+ * combinations per bottom+top pair on a real wardrobe (coreOutfitsForBands
+ * returned 77,850 outfits at 0C/21kph, ~340 per pair on average) -- every
+ * one gets topped up and re-sorted 3x downstream (once per band), which
+ * dominates wall-clock time far more than the DFS branching
+ * MAX_USEFUL_OVER_CEILING_MARGIN already prunes. This is the same
+ * "cap redundant depth, not breadth" principle MAX_ACCESSORY_CANDIDATES
+ * already applies to a single accessory slot's own pool, applied one
+ * level up, to the combinations across several such slots together.
+ *
+ * Unlike MAX_USEFUL_OVER_CEILING_MARGIN, this is NOT provably lossless --
+ * it deliberately drops some real, valid outfits once a pair's budget is
+ * spent. Verified via the real-wardrobe regression sweep's own structural
+ * invariants holding (not exact-output equality, which doesn't apply
+ * here), not asserted correct by reasoning alone.
+ */
+const MAX_RESULTS_PER_TOP_PAIR = 12;
+```
+
+Then replace `generateClosestOutfits`' body from `const all: ScoredOutfit[] = [];` through the closing of `searchSlots`:
+
+```ts
+  const all: ScoredOutfit[] = [];
+  const chosen: ClothingItem[] = [];
+  let resultsForThisPair = 0;
+
+  // Every complete combination gets pushed to `all` — this view exists to
+  // show near-misses, not hide them (see this function's own doc comment).
+  // dropAccessoryFreeDuplicates, below, is what keeps a bare outfit from
+  // cluttering the ranked results once its accessorized twin is shown too.
+  function searchSlots(slots: Slot[], slotIndex: number): void {
+    // Fresh budget for this (bottom, top) pair -- slotIndex reaches 1
+    // exactly once per pair, right after Top is chosen (or skipped, for a
+    // Dress anchor), before any accessory branch beneath it runs. See
+    // MAX_RESULTS_PER_TOP_PAIR's own doc comment.
+    if (slotIndex === 1) resultsForThisPair = 0;
+
+    if (slotIndex === slots.length) {
+      if (resultsForThisPair < MAX_RESULTS_PER_TOP_PAIR) {
+        all.push(scoreOutfit(chosen, warmthFloor, warmthCeiling, windFloor));
+        resultsForThisPair++;
+      }
+      return;
+    }
+
+    const slot = slots[slotIndex];
+    if (skipsBeforeCandidates(slot)) searchSlots(slots, slotIndex + 1);
+    // isViable now prunes branches already far enough over the ceiling
+    // that no later addition could ever bring them back into range -- see
+    // MAX_USEFUL_OVER_CEILING_MARGIN's own doc comment for the proof.
+    // Still deliberately loose relative to generateOutfits' own ceiling
+    // check: this function's job is to surface real near-misses too, not
+    // just outfits that already meet target. isDone now also stops once
+    // this pair's own budget is spent -- see MAX_RESULTS_PER_TOP_PAIR's
+    // own doc comment.
+    tryEachCandidate(
+      slot,
+      chosen,
+      dismatchedKeys,
+      () => resultsForThisPair >= MAX_RESULTS_PER_TOP_PAIR,
+      () => sumWarmth(chosen) <= warmthCeiling + MAX_USEFUL_OVER_CEILING_MARGIN,
+      () => searchSlots(slots, slotIndex + 1),
+    );
+    if (slot.preferred) searchSlots(slots, slotIndex + 1);
+  }
+```
+
+(Only changes: the new `resultsForThisPair` counter, its reset at `slotIndex === 1`, the budget check at the leaf case, and `tryEachCandidate`'s `isDone` callback changed from `() => false` to `() => resultsForThisPair >= MAX_RESULTS_PER_TOP_PAIR`. The anchor loop below this function, and everything after it, is unchanged.)
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `npx jest utils/__tests__/outfitGenerator.test.ts`
+Expected: PASS, all tests — the new test, Task 1's test, and every pre-existing test (a budget of 12 per pair is generous relative to any existing fixture's own expected near-miss count).
+
+Run: `npx jest && npm run lint && npm run typecheck`
+Expected: all clean.
+
+- [ ] **Step 5: Re-run the real-CSV regression sweep — this is the real verification for a lossy change**
+
+Run: `npx jest utils/__tests__/realWardrobeRegression.test.ts` at least 3 times in a row (slow, ~5 minutes per run — budget time).
+Expected: all 3 invariant tests (pool-visibility, shown-count, within-band-repeat) still PASS reliably. This is the Global Constraint's own required verification method for Approach D — not exact-output equality (that doesn't apply to a lossy change), but confirmation that none of the sweep's structural invariants regress. If any invariant starts failing, `MAX_RESULTS_PER_TOP_PAIR = 12` is too tight for some real scenario — widen it and re-verify; do not weaken the invariant instead.
+
+- [ ] **Step 6: Wall-clock benchmark, before/after**
+
+Using the same throwaway-script technique established in Task 2, measure `selectBandedOutfits`'s wall-clock time against the real CSV wardrobe at 0°C/21kph and 22°C/10kph (5 runs each), comparing against Task 2's own recorded post-Task-1 baseline (4109ms / 1999ms average). Also measure `coreOutfitsForBands`' own `core.length` at 0°C/21kph and compare against the 77,850 baseline. Report both the outfit-count reduction and the wall-clock improvement — this is the number that actually matters for whether the reported freeze is now addressed. Delete the script when done.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add wardrobe-app/utils/outfitGenerator.ts wardrobe-app/utils/__tests__/outfitGenerator.test.ts
+git commit -m "Add a per-(bottom,top)-pair result budget to generateClosestOutfits"
+```
 
 ---
 
