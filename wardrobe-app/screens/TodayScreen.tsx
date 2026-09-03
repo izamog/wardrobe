@@ -587,30 +587,60 @@ export function TodayScreen() {
   // preserves anything -- see outfitsFor's own doc comment on `previous`
   // for why passing it across different bounds would be wrong.
   const lastComputedRef = useRef<{ feltTempC: number; windSpeedKph: number; outfits: TodayOutfits } | null>(null);
+  // Bumped on every trigger that needs a fresh outfitsFor call (slider
+  // drag or work-appropriate toggle) -- a deferred computation checks its
+  // own generation against this before committing, so a stale, slower
+  // computation started before a newer trigger never overwrites the
+  // newer one's result. Mirrors the identical pattern already proven in
+  // TodayDataContext.tsx's own latestRequestId.
+  const outfitsGenerationRef = useRef(0);
+  const [outfitsState, setOutfitsState] = useState<{ outfits: TodayOutfits; computing: boolean }>({
+    outfits: { shown: [], hasAnyOutfit: false },
+    computing: false,
+  });
 
-  const outfits = useMemo(() => {
-    if (!isReady) return { shown: [], hasAnyOutfit: false };
+  useEffect(() => {
+    if (!isReady) {
+      setOutfitsState({ outfits: { shown: [], hasAnyOutfit: false }, computing: false });
+      return;
+    }
     if (!isOverridden && !workAppropriateOnly) {
       lastComputedRef.current = {
         feltTempC: effectiveFeltTempC,
         windSpeedKph: effectiveWindSpeedKph,
         outfits: state.initialOutfits,
       };
-      return state.initialOutfits;
+      setOutfitsState({ outfits: state.initialOutfits, computing: false });
+      return;
     }
-    const last = lastComputedRef.current;
-    const filterOnlyChange =
-      last !== null && last.feltTempC === effectiveFeltTempC && last.windSpeedKph === effectiveWindSpeedKph;
-    const result = outfitsFor(
-      state.todayCandidates,
-      effectiveFeltTempC,
-      effectiveWindSpeedKph,
-      workAppropriateOnly,
-      filterOnlyChange ? last!.outfits : null,
-    );
-    lastComputedRef.current = { feltTempC: effectiveFeltTempC, windSpeedKph: effectiveWindSpeedKph, outfits: result };
-    return result;
+
+    const generation = ++outfitsGenerationRef.current;
+    // computing: true keeps the PREVIOUS outfits on screen (never blanks
+    // the list) while signalling a spinner/dimmed state -- see the
+    // "Updating outfits…" indicator below, which reads outfitsState.computing.
+    setOutfitsState((current) => ({ outfits: current.outfits, computing: true }));
+
+    const handle = requestAnimationFrame(() => {
+      if (outfitsGenerationRef.current !== generation) return; // superseded before this frame ran
+      const last = lastComputedRef.current;
+      const filterOnlyChange =
+        last !== null && last.feltTempC === effectiveFeltTempC && last.windSpeedKph === effectiveWindSpeedKph;
+      const result = outfitsFor(
+        state.todayCandidates,
+        effectiveFeltTempC,
+        effectiveWindSpeedKph,
+        workAppropriateOnly,
+        filterOnlyChange ? last!.outfits : null,
+      );
+      if (outfitsGenerationRef.current !== generation) return; // superseded while computing
+      lastComputedRef.current = { feltTempC: effectiveFeltTempC, windSpeedKph: effectiveWindSpeedKph, outfits: result };
+      setOutfitsState({ outfits: result, computing: false });
+    });
+
+    return () => cancelAnimationFrame(handle);
   }, [isReady, isOverridden, workAppropriateOnly, state, effectiveFeltTempC, effectiveWindSpeedKph]);
+
+  const outfits = outfitsState.outfits;
 
   const openItem = useCallback(
     (itemId: string) => navigation.navigate('ItemDetails', { itemId }),
@@ -690,6 +720,12 @@ export function TodayScreen() {
       />
 
       <View className="mt-4">
+        {outfitsState.computing && (
+          <View className="flex-row items-center mb-2">
+            <ActivityIndicator size="small" />
+            <Text className="ml-2 text-xs font-sans-medium text-ink-muted">Updating outfits…</Text>
+          </View>
+        )}
         {outfits.shown.length === 0 ? (
           <NoOutfitState />
         ) : (
