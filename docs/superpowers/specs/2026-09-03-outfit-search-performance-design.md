@@ -117,6 +117,106 @@ native modules) has no web-worker library installed, and
 `react-native-reanimated`'s worklets are UI-thread animation primitives,
 not appropriate for this kind of business logic.
 
+### D. A per-(bottom, top)-pair result budget in `generateClosestOutfits`
+
+**Added after Task 2's own real-CSV measurement found the ceiling prune
+(Approach A) only bought ~6-7% wall-clock improvement** — far short of
+what the reported freeze needs. Root cause, confirmed by direct
+instrumentation: `coreOutfitsForBands` returns **77,850 outfits** at
+0°C/21kph against the real wardrobe. This isn't dead branches (Approach A
+already handles those) — it's the accessory slots (Cardigan, BaseLayer,
+Outerwear, Bag — each capped at only `MAX_ACCESSORY_CANDIDATES` (3)
+candidates plus a skip branch, but four of them multiplying together)
+producing a genuine combinatorial explosion of *distinct, valid*
+outfits for every bottom×top pair — averaging ~340 complete outfits per
+pair. Every one of those 77,850 gets topped up (`topUpToward`) three times
+(once per band) and repeatedly re-sorted (`rankNow`, called fresh on every
+`fillBandTiered` tier×source iteration) — this fan-out, not the DFS
+itself, is the actual dominant cost.
+
+Considered and ruled out first: removing Scarf/Tights from the core
+search as redundant with the later top-up pass. Investigation found this
+is **already the case** — `coreOutfitsForBands` already passes
+`includeWarmthAccessories: false` to `generateClosestOutfits`
+(`bandedOutfits.ts:175`), so Scarf/Tights never entered the core search's
+branching in the first place. Nothing left to remove there; the 77,850
+figure already excludes it.
+
+**Design:** cap how many complete outfits the search collects **per
+bottom+top pair**, not globally and not post-hoc. A global cap would
+reintroduce the exact bug class the prior session's plan fixed — starving
+later-visited bottom/top pairs entirely. A post-hoc truncation (collect
+everything, then slice) wouldn't reduce wall-clock time at all, since the
+DFS would still fully explore before anything got cut. A per-pair cap,
+reset every time a new Top candidate is chosen, does neither: every bottom
+and every top candidate still gets fully, fairly visited (preserving the
+breadth the prior session's fixes were about), but each *pair* only
+contributes its first `MAX_RESULTS_PER_TOP_PAIR` complete accessory
+combinations instead of its full combinatorial expansion — the same
+"cap redundant depth, not breadth" principle `MAX_ACCESSORY_CANDIDATES`
+itself already applies to a single accessory slot's own pool, just applied
+one level up, to the combinations across several such slots together.
+
+Implementation shape: `generateClosestOutfits` gains a local counter,
+reset to 0 every time `searchSlots` reaches `slotIndex === 1` (i.e., right
+after a Top candidate has just been chosen, before the Cardigan/BaseLayer/
+Shoes/etc. branches beneath it run) — DFS visits each index exactly once
+per branch path, so this fires exactly once per (bottom, top) pair, not
+mid-pair. The completed-outfit push at `slotIndex === slots.length` only
+happens while the counter is under `MAX_RESULTS_PER_TOP_PAIR`; the same
+counter also feeds `tryEachCandidate`'s `isDone` callback so the search
+stops recursing into further accessory branches for a pair once its budget
+is spent, rather than continuing to explore (and discard) them.
+
+## Risks and mitigations — Approach D
+
+1. **Search-order bias in which accessory combinations survive the
+   budget.** Which `MAX_RESULTS_PER_TOP_PAIR` combinations get kept for a
+   given pair depends on `searchSlots`' own visit order (skip-before-
+   candidates for plain optional slots, candidates-before-skip for
+   preferred ones, and each accessory pool's own `accessoryFirst`
+   lean-first ranking) — a systematically-first-visited combination
+   pattern (e.g., always "no Cardigan, no Outerwear") could crowd out a
+   combination a specific band's own sub-range would have preferred, the
+   same class of risk `evenlySampled`'s own jittering was built to guard
+   against for anchor/top pool sampling, now one level up at the
+   accessory-combination level. *Mitigation:* this is NOT provable
+   lossless the way Approach A's ceiling margin was (it deliberately
+   drops some real, valid outfits) — so the right verification is not
+   core-level exact-output equality, but the existing 52-scenario
+   real-CSV regression sweep's own structural invariants (pool-visibility,
+   shown-count, within-band-repeat) re-run against this change, checking
+   whether any of them regress. If the pool-visibility invariant starts
+   failing for a specific item, that's direct evidence the budget is too
+   tight or too order-biased for that case.
+2. **A bottom that's slow to find its first valid completion could get
+   budget-starved before recording anything, even though it's genuinely
+   in the pool and visited.** If a bottom/top pair takes many attempted
+   (but incompatible, per `isCompatibleWithAll`) branches before its first
+   *complete*, compatible outfit, and the budget counts only completions
+   (matching `generateOutfits`' own existing `searchBudget` semantics,
+   which counts completions, not attempts), this specific risk is largely
+   self-mitigated by design — but it's worth stating explicitly and
+   testing, since the budget resets per-pair, not globally, so a single
+   hard pair can't consume budget meant for others, but it COULD still
+   end up under-represented in `core` relative to easier pairs.
+   *Mitigation:* the same regression-sweep re-run from risk 1 covers this
+   — a genuinely under-represented bottom would show up as a
+   pool-visibility or shown-count regression, not require a separate
+   hand-picked test.
+3. **Overclaiming the same level of safety Approach A's proof achieved.**
+   Approach A's margin was proven *exactly* lossless — literally zero
+   output difference, mathematically guaranteed and empirically confirmed.
+   Approach D is lossy by design; no amount of testing can prove it changes
+   nothing, only that it doesn't change anything *observable in the real
+   wardrobe's swept scenarios*. Conflating these two different strength-of-
+   guarantee levels in how this gets reported would be misleading.
+   *Mitigation:* report Approach D's verification explicitly as "the swept
+   real-wardrobe scenarios show no regression in the sweep's own
+   structural invariants," never as "proven identical" — the distinction
+   matters and should survive into the commit message and any final
+   summary, not get smoothed away.
+
 ### C. Quantized-bounds memoization (cheap, additive)
 
 `thermal.ts`'s `warmthFloor`/`warmthCeiling`/`windFloor` already round to
