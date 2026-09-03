@@ -44,6 +44,36 @@ export { sumWarmth, sumWind } from './outfitScoring';
 /** How many outfits generateOutfits returns by default. */
 export const DEFAULT_MAX_OUTFITS = 3;
 
+/**
+ * How far over warmthCeiling a partial outfit's warmth can climb before
+ * generateClosestOutfits prunes that branch outright.
+ *
+ * Provably safe on the ceiling side only: warmth is monotonic
+ * non-decreasing as items are added (every item's warmth-region weight is
+ * >= 0 -- see generateOutfits' own doc comment for the same fact used
+ * there), and topUpToward (utils/warmthTopUp.ts) only ever ADDS warmth to
+ * an outfit, never removes it -- so an outfit already this far over the
+ * ceiling can never become a valid, in-range recommendation regardless of
+ * what any downstream consumer (toppedUpForBand, rankNow) does with it
+ * later. Not safe on the floor side: a partial outfit under-floor can
+ * still be pushed up to floor by a later slot, so this margin is never
+ * applied there.
+ *
+ * The exact value here is not asserted correct by reasoning alone -- it's
+ * verified empirically in Task 2's equivalence check (real-wardrobe
+ * regression sweep plus every existing unit test fixture), which confirms
+ * this margin never changes the search's output relative to no pruning at
+ * all. If that check ever finds a divergence, this value is too tight --
+ * widen it and re-verify; never narrow the check to accommodate a
+ * divergence.
+ *
+ * Reported bug this fixes: the prior session's pool-widening fix
+ * (BAND_POOL_SLOT_SIZE 6->15) took this function's own unpruned search
+ * from ~885K to ~8M leaves, freezing the Today screen on-device for
+ * 10-15 seconds per slider drag.
+ */
+const MAX_USEFUL_OVER_CEILING_MARGIN = 20;
+
 /** Dedupes generateOutfits' raw results (see outfitDedup.ts's dropAccessoryFreeDuplicates) and trims to maxResults. */
 function finalizeOutfits(results: readonly ClothingItem[][], maxResults: number): ClothingItem[][] {
   return dropAccessoryFreeDuplicates(
@@ -182,11 +212,12 @@ function scoreOutfit(
  * Every complete, compatible outfit the search space contains, ranked
  * closest-to-the-bounds first — for troubleshooting why generateOutfits found
  * nothing, not for recommending an outfit. Unlike generateOutfits, this does
- * not prune on the ceiling or stop at the first `maxResults` matches: leaving
- * either in place would hide the very outfits a "why didn't anything work"
- * question needs to see, and MAX_SLOT_CANDIDATES already bounds the search
- * space to something that stays fast without it (see its own doc comment in
- * outfitSlots.ts).
+ * not stop at the first `maxResults` matches -- leaving that in place would
+ * hide the very outfits a "why didn't anything work" question needs to see.
+ * It does prune branches already far enough over the ceiling that no later
+ * addition could bring them back into range -- see
+ * MAX_USEFUL_OVER_CEILING_MARGIN's own doc comment for why that's safe
+ * without hiding any real near-miss.
  *
  * `meetsTarget` on a returned outfit means it actually clears every bound —
  * this can only happen when generateOutfits' own `maxResults` cap already cut
@@ -223,9 +254,20 @@ export function generateClosestOutfits(
 
     const slot = slots[slotIndex];
     if (skipsBeforeCandidates(slot)) searchSlots(slots, slotIndex + 1);
-    // isViable stays `() => true`: nothing is pruned by the ceiling here,
-    // unlike generateOutfits — see this function's own doc comment.
-    tryEachCandidate(slot, chosen, dismatchedKeys, () => false, () => true, () => searchSlots(slots, slotIndex + 1));
+    // isViable now prunes branches already far enough over the ceiling
+    // that no later addition could ever bring them back into range -- see
+    // MAX_USEFUL_OVER_CEILING_MARGIN's own doc comment for the proof.
+    // Still deliberately loose relative to generateOutfits' own ceiling
+    // check: this function's job is to surface real near-misses too, not
+    // just outfits that already meet target.
+    tryEachCandidate(
+      slot,
+      chosen,
+      dismatchedKeys,
+      () => false,
+      () => sumWarmth(chosen) <= warmthCeiling + MAX_USEFUL_OVER_CEILING_MARGIN,
+      () => searchSlots(slots, slotIndex + 1),
+    );
     if (slot.preferred) searchSlots(slots, slotIndex + 1);
   }
 

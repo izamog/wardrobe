@@ -898,3 +898,59 @@ describe('generateClosestOutfits includeWarmthAccessories/topCandidatesOverride 
     expect(topIdsUsed).toEqual(new Set(['override-top']));
   });
 });
+
+describe('generateClosestOutfits', () => {
+  it('prunes a branch that has accumulated warmth well past the ceiling across several slots, while still finding a normal near-miss just outside it', () => {
+    // Reported bug: generateClosestOutfits' isViable was hardcoded () =>
+    // true (no pruning at all), which combined with the prior session's
+    // pool-widening fix (BAND_POOL_SLOT_SIZE 6->15) blew the search from
+    // ~885K to ~8M leaves, freezing the app on-device. topUpToward only
+    // ever ADDS warmth (utils/warmthTopUp.ts), so an outfit already far
+    // over the ceiling can never become valid regardless of what runs
+    // later -- pruning it changes nothing about which outfits are
+    // reachable, only how much dead search gets explored to confirm that.
+    //
+    // Fixture note: Cardigan/BaseLayer/Scarf/Bag candidate pools are NOT
+    // themselves ceiling-filtered at construction (see cardiganCandidates/
+    // baseLayerCandidates/accessoryFirst in outfitCandidatePools.ts --
+    // unlike Top/Shoes/Outerwear, which are). A single absurdly-warm item
+    // in a ceiling-filtered pool never reaches the DFS at all, so it can't
+    // exercise this prune -- the real blowup this bug caused comes from
+    // several individually-reasonable items STACKING across multiple
+    // unfiltered optional slots. The Top slot is a plain 'Top' (not
+    // 'Sweater'): a Sweater can never layer with a Cardigan at all (see
+    // utils/layering.ts's LAYER_PAIRS/prohibitions), so pairing them
+    // wouldn't reach this prune either -- it would just never be a
+    // candidate outfit in the first place, pruned or not. warmthFloor=8
+    // (>=7, so Scarf is offered) and warmthCeiling=10: sumWarmth applies
+    // WARMTH_REGION_WEIGHT (outfitScoring.ts) per region, not a raw sum --
+    // bottom(2*0.6)+top(2*1)+shoes(0*0)=3.2, comfortably under margin;
+    // stacking Cardigan(12*1=12)+Scarf(12*0.8=9.6)+Outerwear(12*1=12) on
+    // top of that reaches 36.8, past ceiling(10)+margin(20)=30 -- that
+    // specific stacked combination should be pruned, while a leaner
+    // combination (just Top+Scarf, 12.8) still gets found.
+    const bottom = item('Pants', { id: 'bottom-1', inferredWarmth: 2 });
+    const top = item('Top', { id: 'top-1', inferredWarmth: 2 });
+    const shoes = item('Shoes', { id: 'shoes-1', inferredWarmth: 0 });
+    const cardigan = item('Cardigan', { id: 'cardigan-1', inferredWarmth: 12 });
+    const scarf = item('Scarf', { id: 'scarf-1', inferredWarmth: 12 });
+    const outerwear = item('Jacket', { id: 'jacket-1', inferredWarmth: 12 });
+
+    const results = generateClosestOutfits(
+      emptyCandidates({ bottoms: [bottom], tops: [top, cardigan], shoes: [shoes], outerwear: [outerwear], scarves: [scarf] }),
+      noDismatches,
+      8,
+      10,
+      0,
+      Infinity,
+    );
+
+    const usesAll = (o: (typeof results)[number]) =>
+      o.items.some((i) => i.id === 'cardigan-1') && o.items.some((i) => i.id === 'scarf-1') && o.items.some((i) => i.id === 'jacket-1');
+    const usesScarfOnly = (o: (typeof results)[number]) =>
+      o.items.some((i) => i.id === 'scarf-1') && !o.items.some((i) => i.id === 'cardigan-1') && !o.items.some((i) => i.id === 'jacket-1');
+
+    expect(results.some(usesAll)).toBe(false);
+    expect(results.some(usesScarfOnly)).toBe(true);
+  });
+});
