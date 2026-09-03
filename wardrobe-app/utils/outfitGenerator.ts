@@ -264,7 +264,10 @@ function scoreOutfit(
  * It does prune branches already far enough over the ceiling that no later
  * addition could bring them back into range -- see
  * MAX_USEFUL_OVER_CEILING_MARGIN's own doc comment for why that's safe
- * without hiding any real near-miss.
+ * without hiding any real near-miss. It also stops collecting further
+ * complete outfits for a given (bottom, top) pair once that pair's budget
+ * is spent -- see MAX_RESULTS_PER_TOP_PAIR's own doc comment for why that
+ * truncation is lossy, unlike the ceiling-margin prune above.
  *
  * `meetsTarget` on a returned outfit means it actually clears every bound —
  * this can only happen when generateOutfits' own `maxResults` cap already cut

@@ -53,9 +53,17 @@ Expo SDK 54, pure functions plus one React screen component.
   the work-appropriate-filter-toggle trigger, not two separate,
   uncoordinated guards.
 - Approach C's cache key must include everything the result actually
-  depends on: the rounded thermal bounds (`floor`, `ceiling`, `windFloor`),
-  `workAppropriateOnly`, a wear-history version counter, and the
-  `alreadyClaimed`/`previous` identity — not just the thermal bounds alone.
+  depends on: the rounded thermal bounds (`floor`, `ceiling`, `windFloor`)
+  and `workAppropriateOnly`. `previous`'s own *content* also affects the
+  result (it carries the filter-stability mechanism's state), and a key
+  that only distinguished "has a `previous`" from "has none" could
+  silently serve a result computed against the wrong `previous` — so the
+  cache must be skipped entirely (not consulted or populated) whenever
+  `previous !== null`, rather than folding a lossy summary of `previous`
+  into the key. No wear-history version counter is needed: cache
+  invalidation is already handled by comparing `todayCandidates` identity
+  (see below), and every real refresh produces a fresh `todayCandidates`
+  object.
 - Approach C's cache is short-lived (a small in-memory LRU, cleared on
   wardrobe/log data refresh) — never a persistent store, and never treated
   as a correctness guarantee for a specific temperature's result over time
@@ -887,30 +895,35 @@ cache above `outfitsFor`'s own definition:
 /**
  * A small, short-lived cache keyed on everything outfitsFor's result
  * actually depends on -- the rounded thermal bounds (thermal.ts's clamp()
- * already rounds warmthFloor/warmthCeiling/windFloor to integers), the
- * work-appropriate filter, a wear-history version (bumped whenever
- * todayCandidates.wornDaysAgo changes identity, which happens whenever an
- * outfit is logged -- see fetchTodayCandidates), and previous's own
- * identity (the filter-stability mechanism). Deliberately small (a few
- * entries) and cleared whenever todayCandidates itself changes identity
- * (a fresh wardrobe/log fetch) -- this only exists to make "drag back to a
- * temperature you were just at" instant within one interaction session,
- * not to guarantee long-term result stability for a given temperature
- * (the underlying search is intentionally Math.random()-jittered; see
- * Task 3d in the prior plan's own design spec).
+ * already rounds warmthFloor/warmthCeiling/windFloor to integers) and the
+ * work-appropriate filter. Deliberately small (a few entries) and cleared
+ * whenever todayCandidates itself changes identity (a fresh wardrobe/log
+ * fetch) -- this only exists to make "drag back to a temperature you were
+ * just at" instant within one interaction session, not to guarantee
+ * long-term result stability for a given temperature (the underlying
+ * search is intentionally Math.random()-jittered; see Task 3d in the prior
+ * plan's own design spec).
+ *
+ * Only consulted/populated when `previous === null`. `previous` carries the
+ * filter-stability mechanism's own state, and its *content* -- not just
+ * whether one was passed -- affects the result: two calls sharing the same
+ * thermal bounds and filter can still be given different `previous`
+ * values, so a key that only distinguished "has one" from "has none" could
+ * silently serve a result computed against the WRONG previous. The
+ * cache's actual job (instant re-lookup while dragging the temperature
+ * slider) never involves `previous` anyway -- it's only ever passed on a
+ * same-bounds, filter-toggle-only call, a narrower path this cache doesn't
+ * need to cover. No wear-history version counter is needed either:
+ * `fetchTodayCandidates` always returns a fresh `TodayCandidates` object,
+ * so the `outfitsCacheCandidates !== todayCandidates` identity check below
+ * already invalidates the cache on every real refresh.
  */
 const OUTFITS_CACHE_MAX_ENTRIES = 8;
 let outfitsCacheCandidates: TodayCandidates | null = null;
 let outfitsCache: Map<string, TodayOutfits> = new Map();
 
-function outfitsCacheKey(
-  floor: number,
-  ceiling: number,
-  wFloor: number,
-  workAppropriateOnly: boolean,
-  previous: TodayOutfits | null,
-): string {
-  return `${floor}|${ceiling}|${wFloor}|${workAppropriateOnly}|${previous === null ? 'none' : 'has-previous'}`;
+function outfitsCacheKey(floor: number, ceiling: number, wFloor: number, workAppropriateOnly: boolean): string {
+  return `${floor}|${ceiling}|${wFloor}|${workAppropriateOnly}`;
 }
 ```
 
@@ -936,9 +949,19 @@ export function outfitsFor(
   const floor = warmthFloor(feltTempC);
   const ceiling = warmthCeiling(feltTempC);
   const wFloor = windFloor(windSpeedKph, feltTempC);
-  const cacheKey = outfitsCacheKey(floor, ceiling, wFloor, workAppropriateOnly, previous);
-  const cached = outfitsCache.get(cacheKey);
-  if (cached) return cached;
+  // Only cache/consult when there's no `previous` to consider -- `previous`'s
+  // own content can differ between calls that otherwise share the same
+  // thermal bounds (it carries the filter-toggle-stability mechanism's own
+  // state), and a cache key that only distinguished "has one" from "has
+  // none" could silently serve a result computed against a DIFFERENT
+  // previous value. The cache's actual job (instant re-lookup while
+  // dragging the temperature slider) never involves `previous` anyway --
+  // that's only ever passed on a same-bounds filter-toggle call.
+  const cacheKey = previous === null ? outfitsCacheKey(floor, ceiling, wFloor, workAppropriateOnly) : null;
+  if (cacheKey) {
+    const cached = outfitsCache.get(cacheKey);
+    if (cached) return cached;
+  }
 
   const candidates = workAppropriateOnly
     ? filterWorkAppropriate(todayCandidates.candidates)
@@ -960,11 +983,13 @@ export function outfitsFor(
   );
   const result = { shown: diverse, hasAnyOutfit: diverse.length > 0 };
 
-  if (outfitsCache.size >= OUTFITS_CACHE_MAX_ENTRIES) {
-    const oldestKey = outfitsCache.keys().next().value;
-    if (oldestKey !== undefined) outfitsCache.delete(oldestKey);
+  if (cacheKey) {
+    if (outfitsCache.size >= OUTFITS_CACHE_MAX_ENTRIES) {
+      const oldestKey = outfitsCache.keys().next().value;
+      if (oldestKey !== undefined) outfitsCache.delete(oldestKey);
+    }
+    outfitsCache.set(cacheKey, result);
   }
-  outfitsCache.set(cacheKey, result);
 
   return result;
 }
@@ -975,7 +1000,18 @@ own contract — stays unchanged above this; only the function body and the
 `windFloor(windSpeedKph, feltTempC)` call's local variable name change,
 from an inline expression to the named `wFloor`, so it can be reused in
 both the cache key and the `selectBandedOutfits` call without computing it
-twice.)
+twice.
+
+This design point — bypassing the cache entirely whenever `previous !==
+null`, rather than folding `previous` into the cache key via a
+`'none'/'has-previous'` flag — was a correction made during
+implementation: an earlier draft of this task used exactly that binary
+flag, but it couldn't distinguish between two different non-null
+`previous` values, which risked serving a stale/wrong cached result. No
+wear-history version counter was added either; it turned out to be
+unnecessary, since `fetchTodayCandidates` always returns a fresh object
+and the existing `outfitsCacheCandidates !== todayCandidates` check
+already covers cache invalidation correctly.)
 
 - [ ] **Step 4: Invalidate the cache when the candidate pool actually refreshes**
 
