@@ -39,16 +39,36 @@ yield — which is why the symptom is a hard freeze, not just lag.
 
 Three changes, meant to land together, not as alternatives:
 
-### A. Branch-and-bound ceiling pruning (the actual fix)
+### A. Margin-based ceiling pruning (the actual fix)
 
-`sumWarmth` only ever increases as items are added to an outfit — every
-item's warmth-region weight is ≥ 0 (already relied on by `generateOutfits`'
-own, separate ceiling prune, `outfitGenerator.ts:65-67,97-99`). That means:
-once a partial outfit's warmth already exceeds `warmthCeiling` by more than
-the worst (largest) distance-from-target among the best K results found so
-far, every completion of that branch is mathematically guaranteed to score
-worse than what's already been found — it can be skipped with **zero
-change to which outfits the search returns**.
+**Revised from the original K-best design** after reading exactly how
+`generateClosestOutfits`' output is consumed: `coreOutfitsForBands` calls
+it with `maxResults: Infinity` (`bandedOutfits.ts:147-172` region), and
+every outfit in that full, unsliced result is processed once per band by
+`toppedUpForBand` (`bandedOutfits.ts:189-216`) — the breadth of this list
+is exactly what this session's pool-widening/jitter/reuse-avoidance work
+depends on. A small, fixed "keep the K best" bound would silently defeat
+that work. There is no small K to bound against here.
+
+The bound that *is* sound and doesn't depend on any K: `topUpToward`
+(`utils/warmthTopUp.ts`) only ever **adds** warmth to an outfit, never
+removes it — confirmed by reading its implementation, not assumed. Warmth
+is monotonic non-decreasing as items are added (every item's warmth-region
+weight is ≥ 0, already relied on by `generateOutfits`' own, separate
+ceiling prune, `outfitGenerator.ts:65-67,97-99`). Combined: **any outfit
+that already exceeds `warmthCeiling` before top-up is mathematically
+guaranteed to still exceed it after top-up** — it can never become a
+valid, in-range recommendation no matter what any downstream consumer does
+with it. The only thing an over-ceiling outfit is still useful for is the
+Today screen's troubleshoot panel, which — confirmed by reading
+`TodayScreen.tsx`'s `OutfitDiagnostics` — only ever renders whatever
+specific outfit ended up in `shown` after the full `selectBandedOutfits`
+pipeline (`rankNow`'s own tiers: `meetsTarget` → `inBand` → reuse →
+distance-to-center), never an independent "browse all near-misses"
+view. A near-miss the user could ever actually see is already going to be
+one of the outfits closest to the bounds, not one buried deep in the
+search — so a *generous, but finite* margin above the ceiling is safe to
+prune beyond, without needing to reason about an exact K at all.
 
 This is only safe on the *ceiling* side. Floor-side distance can still
 improve as later slots add warmth, so a partial outfit under-floor must
@@ -57,14 +77,18 @@ mathematically sound, and it's also where the real branching-factor cost
 lives (every optional slot's own "add more warmth" candidates and the wide
 Top/anchor pools all push warmth up).
 
-Implementation shape: `generateClosestOutfits` tracks the current top-K
-result set's worst kept distance as it runs (K = however many results the
-existing ranking layer above it actually consumes — read the exact call
-site before implementing, not assumed). `isViable` stops being a constant
-`true` and starts checking: if a partial outfit's warmth already exceeds
-`warmthCeiling + worstKeptDistance`, return `false` for that branch. Before
-the top-K set is populated (search just started), no bound exists yet —
-prune nothing until there's real evidence to prune against.
+Implementation shape: `generateClosestOutfits` gains a new constant,
+`MAX_USEFUL_OVER_CEILING_MARGIN`, and `isViable` stops being a constant
+`true` — it becomes: if a partial outfit's warmth already exceeds
+`warmthCeiling + MAX_USEFUL_OVER_CEILING_MARGIN`, return `false` for that
+branch (ceiling-side only; no equivalent floor-side check). The margin's
+exact value is not asserted analytically to be exactly right — it is
+**proven empirically** via the exact-output-equivalence test (see
+Testing): start generous, run the equivalence sweep, and only accept the
+margin once it produces byte-identical output to the current unpruned
+search across every existing fixture and the full real-CSV sweep. If any
+divergence appears, the margin is too tight — widen it and re-verify,
+never accept a divergence as "close enough."
 
 ### B. Chunked/deferred execution with a loading state (safety net)
 
@@ -97,33 +121,32 @@ could silently break the outfit-selection correctness this session spent
 five commits building and verifying, and how the design guards against
 each.
 
-### A. Branch-and-bound pruning
+### A. Margin-based ceiling pruning
 
-1. **Search-order-dependent premature pruning.** The bound only exists
-   once K results have been found, and how tight/correct it is depends on
-   what's been found *so far* — if the search visits candidates in an
-   unlucky order, an early, loose set of "best so far" results could
-   establish a bound that then wrongly excludes a genuinely better
-   candidate encountered later. *Mitigation:* don't apply any bound until
-   the top-K set is fully populated with real results (never prune
-   speculatively before that point); and the primary verification is not
-   code review but **exact-output equality**: run the pruned search
-   against the unpruned (current) search across the full 52-scenario
-   real-CSV sweep and every existing unit test fixture, asserting the
-   *same* set of returned outfits — not "close enough," identical. Any
-   divergence is treated as a bug in the prune, not accepted as
-   acceptable drift.
-2. **Hiding a near-miss the troubleshoot panel depends on.** The search's
-   own doc comment says part of its purpose is showing near-misses when
-   nothing meets target — if K (how many results are kept) is set too
-   small relative to what `OutfitDiagnostics`/the troubleshoot panel
-   actually reads, pruning could silently remove a near-miss the UI used
-   to display even while the "shown" recommendations stay correct.
-   *Mitigation:* read the exact consumer of this search's results before
-   choosing K (not guessed), size K to match what the diagnostic path
-   needs (which may be larger than what `TodayScreen` visibly shows), and
-   add a regression test reproducing a known troubleshoot near-miss
-   scenario, asserting it still surfaces post-pruning.
+1. **The margin is too tight and silently truncates real output.** Unlike
+   a K-best bound, there's no small natural count to validate against —
+   the margin is a single free parameter, and picking it wrong (too small)
+   would cut outfits that a downstream consumer (any of the three bands'
+   own `toppedUpForBand`/`rankNow` pipeline, not just what's ultimately
+   `shown`) still needed to see. *Mitigation:* the margin is never
+   asserted correct by reasoning alone — it's proven via **exact-output
+   equality**: run the pruned search against the unpruned (current) search
+   across the full 52-scenario real-CSV sweep and every existing unit test
+   fixture, asserting the *same* set of returned outfits, not "close
+   enough." Start with a deliberately generous margin, and only ever
+   narrow it later (if at all) behind a fresh equivalence run — never loosen
+   the test to accommodate a divergence.
+2. **Hiding a near-miss the troubleshoot panel depends on.** Confirmed by
+   reading `OutfitDiagnostics` (`TodayScreen.tsx`): it only ever renders
+   whatever outfit ended up in `shown` via the full `selectBandedOutfits`
+   pipeline, never an independent "browse every near-miss" view — so the
+   margin only needs to be generous enough that it never removes an
+   outfit that could have ended up as a band's own best-available
+   fallback pick. *Mitigation:* the same exact-output-equivalence test
+   used for risk 1 covers this directly, since `shown`'s own construction
+   depends on the same `core` list this prune modifies — any margin that
+   hides a real near-miss that used to reach `shown` would show up as a
+   divergence in that test, not require a separate, hand-picked scenario.
 3. **Accidentally applying the bound to the floor side too.** The
    mathematical proof only holds for the ceiling (warmth is monotonic
    non-decreasing as items are added; distance-from-floor is not,
@@ -229,6 +252,12 @@ each.
   regression sweep, asserting identical output sets. Any divergence blocks
   the change — it is not an acceptable tradeoff, since it would mean this
   session's own correctness work regressed silently.
+- **Margin sensitivity check (A):** re-run the exact-output-equivalence
+  test at a couple of different margin values (e.g. the chosen value and
+  a substantially larger one) to confirm the output is already stable —
+  i.e. that the chosen margin is comfortably past the point where further
+  widening stops changing anything, not just barely large enough to pass
+  once.
 - **Wall-clock benchmark, before/after (A):** reuse this session's own
   established benchmark harness (real CSV wardrobe, scaled 1x-4x) to
   quantify the actual leaf-count/time reduction, not just assert
