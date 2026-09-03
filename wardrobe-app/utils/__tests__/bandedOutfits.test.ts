@@ -1111,4 +1111,26 @@ describe('selectBandedOutfits performance', () => {
     // reappearing, not a tight performance budget.
     expect(elapsedMs).toBeLessThan(3000);
   });
+
+  it('completes well within a generous bound with a realistic finite ceiling', () => {
+    // Mirrors the reported on-device freeze: NO_CEILING (the existing test
+    // above) never exercises generateClosestOutfits' pruning at all, since
+    // nothing can exceed an infinite ceiling -- this test uses a real,
+    // finite ceiling so the prune actually has work to do.
+    const bottoms = Array.from({ length: 15 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: i }));
+    const tops = Array.from({ length: 6 }, (_, i) => item('Sweater', { id: `top-${i}`, inferredWarmth: 4 + i }));
+    const outerwear = Array.from({ length: 6 }, (_, i) => item('Jacket', { id: `jacket-${i}`, inferredWarmth: 4 + i }));
+    const shoes = Array.from({ length: 8 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: i }));
+    const belts = Array.from({ length: 4 }, (_, i) => item('Belt', { id: `belt-${i}`, inferredWarmth: i, hasBeltLoops: true }));
+    const bags = Array.from({ length: 8 }, (_, i) => item('Bag', { id: `bag-${i}`, inferredWarmth: i }));
+    const candidates = emptyCandidates({ bottoms, tops, outerwear, shoes, belts, bags });
+    const bands = splitIntoWarmthBands(1, 6);
+
+    const start = Date.now();
+    const results = selectBandedOutfits(candidates, noDismatches, 1, 6, 0, bands);
+    const elapsedMs = Date.now() - start;
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(elapsedMs).toBeLessThan(3000);
+  });
 });
