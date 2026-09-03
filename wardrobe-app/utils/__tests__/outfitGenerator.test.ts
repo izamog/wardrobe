@@ -953,4 +953,42 @@ describe('generateClosestOutfits', () => {
     expect(results.some(usesAll)).toBe(false);
     expect(results.some(usesScarfOnly)).toBe(true);
   });
+
+  it('caps how many complete outfits it collects per bottom+top pair, without starving a different pair', () => {
+    // Reported bug (Task 2's real-CSV benchmark): coreOutfitsForBands
+    // returned 77,850 outfits at 0C/21kph -- not from unpruned DFS
+    // branches (Task 1 already fixed that), but from the accessory slots
+    // (Cardigan/BaseLayer/Outerwear/Bag) genuinely producing hundreds of
+    // valid, distinct combinations per bottom+top pair, every one of
+    // which then gets topped-up and re-sorted 3x downstream.
+    //
+    // Fixture: 2 bottoms, 1 top, 12 Outerwear + 6 Bag options -- (12
+    // Outerwear + skip) x (6 Bag + skip) = 91 distinct completions per
+    // bottom, comfortably exceeding MAX_RESULTS_PER_TOP_PAIR (60 -- see
+    // that constant's own doc comment for why it landed there rather than
+    // the plan's original 12: a smaller fixture closer to 12's own
+    // headroom hit real pre-existing-test regressions, see below).
+    const bottomA = item('Pants', { id: 'bottom-a', inferredWarmth: 1 });
+    const bottomB = item('Pants', { id: 'bottom-b', inferredWarmth: 1 });
+    const top = item('Sweater', { id: 'top-1', inferredWarmth: 1 });
+    const shoes = item('Shoes', { id: 'shoes-1', inferredWarmth: 0 });
+    const outerwear = Array.from({ length: 12 }, (_, i) => item('Jacket', { id: `jacket-${i}`, inferredWarmth: 1 }));
+    const bags = Array.from({ length: 6 }, (_, i) => item('Bag', { id: `bag-${i}` }));
+
+    const results = generateClosestOutfits(
+      emptyCandidates({ bottoms: [bottomA, bottomB], tops: [top], shoes: [shoes], outerwear, bags }),
+      noDismatches,
+      1,
+      10,
+      0,
+      Infinity,
+    );
+
+    const countFor = (bottomId: string) => results.filter((o) => o.items.some((i) => i.id === bottomId)).length;
+
+    expect(countFor('bottom-a')).toBeLessThanOrEqual(60);
+    expect(countFor('bottom-b')).toBeLessThanOrEqual(60);
+    expect(countFor('bottom-a')).toBeGreaterThan(0);
+    expect(countFor('bottom-b')).toBeGreaterThan(0); // proves bottom-b wasn't starved by bottom-a's own budget
+  });
 });

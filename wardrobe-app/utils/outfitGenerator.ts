@@ -74,6 +74,53 @@ export const DEFAULT_MAX_OUTFITS = 3;
  */
 const MAX_USEFUL_OVER_CEILING_MARGIN = 20;
 
+/**
+ * How many complete outfits generateClosestOutfits collects per (bottom,
+ * top) pair before moving on -- not a global budget (see this constant's
+ * own Global Constraint in the plan for why a global one would starve
+ * later-visited pairs), reset fresh every time a new Top candidate (or a
+ * Dress anchor's Top-skip branch) is chosen.
+ *
+ * Reported bug this fixes: the accessory slots (Cardigan, BaseLayer,
+ * Outerwear, Bag) genuinely produce hundreds of valid, distinct
+ * combinations per bottom+top pair on a real wardrobe (coreOutfitsForBands
+ * returned 77,850 outfits at 0C/21kph, ~340 per pair on average) -- every
+ * one gets topped up and re-sorted 3x downstream (once per band), which
+ * dominates wall-clock time far more than the DFS branching
+ * MAX_USEFUL_OVER_CEILING_MARGIN already prunes. This is the same
+ * "cap redundant depth, not breadth" principle MAX_ACCESSORY_CANDIDATES
+ * already applies to a single accessory slot's own pool, applied one
+ * level up, to the combinations across several such slots together.
+ *
+ * Unlike MAX_USEFUL_OVER_CEILING_MARGIN, this is NOT provably lossless --
+ * it deliberately drops some real, valid outfits once a pair's budget is
+ * spent. Verified via the real-wardrobe regression sweep's own structural
+ * invariants holding (not exact-output equality, which doesn't apply
+ * here), not asserted correct by reasoning alone.
+ *
+ * 60, not the plan's originally proposed 12: DFS order within a pair is
+ * "leanest/preferred-accessory first" (see skipsBeforeCandidates and each
+ * Slot's own preferred flag in outfitSlots.ts), not "most-likely-to-meet-
+ * target first" -- a pair whose only in-range combo needs a specific,
+ * late-explored accessory (e.g. Outerwear but no Scarf, when Scarf is a
+ * preferred slot exhausted before Outerwear's own skip branch is ever
+ * tried) can have that one combo sit well past position 12 in raw search
+ * order even though the pair has plenty of near-misses before it. Caught
+ * empirically, not by reasoning ahead of time: two pre-existing fixtures
+ * (utils/__tests__/outfitDiversity.test.ts's "surfaces a warmer, equally
+ * valid bottom..." and utils/__tests__/bandedOutfits.test.ts's "picks
+ * warmer/cooler last..." tests) regressed at 12 because their one
+ * target-meeting combo for a given pair landed at raw position 28+. 60 was
+ * chosen empirically (binary search over a real regression run, confirmed
+ * stable from 50 through 100) as comfortably past every such case found so
+ * far, while still a small fraction of a real pair's own ~340-combo
+ * average -- if a future fixture or the real-wardrobe sweep finds another
+ * pair whose only valid combo sits past 60, widen this further and
+ * re-verify; do not narrow the two regression tests above to accommodate a
+ * tighter value instead.
+ */
+const MAX_RESULTS_PER_TOP_PAIR = 60;
+
 /** Dedupes generateOutfits' raw results (see outfitDedup.ts's dropAccessoryFreeDuplicates) and trims to maxResults. */
 function finalizeOutfits(results: readonly ClothingItem[][], maxResults: number): ClothingItem[][] {
   return dropAccessoryFreeDuplicates(
@@ -241,14 +288,24 @@ export function generateClosestOutfits(
   const needsScarf = warmthFloor >= SCARF_PREFERRED_WARMTH_FLOOR;
   const all: ScoredOutfit[] = [];
   const chosen: ClothingItem[] = [];
+  let resultsForThisPair = 0;
 
   // Every complete combination gets pushed to `all` — this view exists to
   // show near-misses, not hide them (see this function's own doc comment).
   // dropAccessoryFreeDuplicates, below, is what keeps a bare outfit from
   // cluttering the ranked results once its accessorized twin is shown too.
   function searchSlots(slots: Slot[], slotIndex: number): void {
+    // Fresh budget for this (bottom, top) pair -- slotIndex reaches 1
+    // exactly once per pair, right after Top is chosen (or skipped, for a
+    // Dress anchor), before any accessory branch beneath it runs. See
+    // MAX_RESULTS_PER_TOP_PAIR's own doc comment.
+    if (slotIndex === 1) resultsForThisPair = 0;
+
     if (slotIndex === slots.length) {
-      all.push(scoreOutfit(chosen, warmthFloor, warmthCeiling, windFloor));
+      if (resultsForThisPair < MAX_RESULTS_PER_TOP_PAIR) {
+        all.push(scoreOutfit(chosen, warmthFloor, warmthCeiling, windFloor));
+        resultsForThisPair++;
+      }
       return;
     }
 
@@ -259,12 +316,22 @@ export function generateClosestOutfits(
     // MAX_USEFUL_OVER_CEILING_MARGIN's own doc comment for the proof.
     // Still deliberately loose relative to generateOutfits' own ceiling
     // check: this function's job is to surface real near-misses too, not
-    // just outfits that already meet target.
+    // just outfits that already meet target. isDone now also stops once
+    // this pair's own budget is spent -- see MAX_RESULTS_PER_TOP_PAIR's
+    // own doc comment. Guarded with `slotIndex >= 1`: isDone is checked by
+    // tryEachCandidate BEFORE wear() runs, i.e. before the slotIndex===1
+    // reset above has a chance to fire for the candidate about to be
+    // tried -- without the guard, a spent budget left over from the
+    // previous Top candidate (or previous bottom) would block the very
+    // next Top candidate's own tryEachCandidate loop outright, before it
+    // ever got a fresh budget. The Top slot itself (slotIndex 0) is what
+    // defines a new pair, so it must never be capped by the previous
+    // pair's own count.
     tryEachCandidate(
       slot,
       chosen,
       dismatchedKeys,
-      () => false,
+      () => slotIndex >= 1 && resultsForThisPair >= MAX_RESULTS_PER_TOP_PAIR,
       () => sumWarmth(chosen) <= warmthCeiling + MAX_USEFUL_OVER_CEILING_MARGIN,
       () => searchSlots(slots, slotIndex + 1),
     );
