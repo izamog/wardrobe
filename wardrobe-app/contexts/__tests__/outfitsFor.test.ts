@@ -115,6 +115,93 @@ describe('outfitsFor', () => {
     expect(result.hasAnyOutfit).toBe(false);
     expect(result.shown).toHaveLength(0);
   });
+
+  it('returns a cached result for the same quantized bounds without recomputing', () => {
+    // Two raw feltTempC values that round to the SAME warmthFloor/
+    // warmthCeiling/windFloor (thermal.ts's clamp() already rounds to
+    // integers -- see the design spec's own confirmation of this) should
+    // hit the same cache entry. Asserts referential identity of the
+    // returned TodayOutfits object across both calls, which is only
+    // possible if the second call was served from cache rather than
+    // recomputed (a fresh call always builds a new result object).
+    const bottom = item('Pants', { inferredWarmth: 3, inferredWind: 2 });
+    const top = item('T-Shirt', { inferredWarmth: 2, inferredWind: 1 });
+    const shoes = item('Shoes', { inferredWarmth: 1, inferredWind: 1 });
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const first = outfitsFor(candidates, 5.0, 21, false);
+    // 5.15, not the brief's original 5.2: windFloor scales continuously with
+    // feltTempC (via windColdnessFactor in thermal.ts) before rounding, so
+    // 5.2 shares warmthFloor/warmthCeiling with 5.0 (18/25) but rounds its
+    // windFloor down to 5 instead of 6 -- a real cache miss, not a caching
+    // bug. 5.15 shares all three quantized bounds with 5.0.
+    const second = outfitsFor(candidates, 5.15, 21, false); // rounds to the same floor/ceiling/windFloor as 5.0
+    expect(second).toBe(first);
+  });
+
+  it('does not return a cached result when workAppropriateOnly differs', () => {
+    const bottom = item('Pants', { inferredWarmth: 3, inferredWind: 2 });
+    const top = item('T-Shirt', { inferredWarmth: 2, inferredWind: 1 });
+    const shoes = item('Shoes', { inferredWarmth: 1, inferredWind: 1 });
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const withFilter = outfitsFor(candidates, 5.0, 21, true);
+    const withoutFilter = outfitsFor(candidates, 5.0, 21, false);
+    expect(withFilter).not.toBe(withoutFilter);
+  });
+
+  it('does not return a stale cached result once todayCandidates itself is a new object (a real refresh)', () => {
+    const bottom = item('Pants', { inferredWarmth: 3, inferredWind: 2 });
+    const top = item('T-Shirt', { inferredWarmth: 2, inferredWind: 1 });
+    const shoes = item('Shoes', { inferredWarmth: 1, inferredWind: 1 });
+    const candidatesA: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+    // A structurally-identical but distinct object, simulating a fresh
+    // fetchTodayCandidates() call after a wardrobe/log write -- the cache
+    // must not treat this as the same candidate pool just because its
+    // contents happen to match.
+    const candidatesB: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const first = outfitsFor(candidatesA, 5.0, 21, false);
+    const second = outfitsFor(candidatesB, 5.0, 21, false);
+    expect(second).not.toBe(first);
+  });
+
+  it('never serves a cached result when previous is given, even across identical bounds/filter', () => {
+    // The cache is only consulted/populated when previous === null (see
+    // outfitsFor's own doc comment) -- previous's own content, not just
+    // whether one was passed, affects the result (it drives alreadyClaimed),
+    // so a cache keyed only on bounds/filter could otherwise silently serve
+    // a result computed against the WRONG previous.
+    const bottom = item('Pants', { id: 'work-bottom', isWorkAppropriate: true });
+    const top = item('T-Shirt', { id: 'work-top', isWorkAppropriate: true });
+    const shoes = item('Shoes', { id: 'work-shoes', isWorkAppropriate: true });
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const base = outfitsFor(candidates, 5.0, 21, false);
+    const withPreviousA = outfitsFor(candidates, 5.0, 21, true, base);
+    const withPreviousB = outfitsFor(candidates, 5.0, 21, true, base);
+    expect(withPreviousB).not.toBe(withPreviousA);
+  });
 });
 
 describe('outfitsFor workAppropriateOnly', () => {

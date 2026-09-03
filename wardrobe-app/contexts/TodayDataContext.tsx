@@ -69,6 +69,38 @@ function filterWorkAppropriate(candidates: OutfitCandidates): OutfitCandidates {
  * from different bounds could hand back outfits that no longer describe
  * today's actual targets.
  */
+/**
+ * A small, short-lived cache keyed on everything outfitsFor's result
+ * actually depends on -- the rounded thermal bounds (thermal.ts's clamp()
+ * already rounds warmthFloor/warmthCeiling/windFloor to integers) and the
+ * work-appropriate filter. Deliberately small (a few entries) and cleared
+ * whenever todayCandidates itself changes identity (a fresh wardrobe/log
+ * fetch) -- this only exists to make "drag back to a temperature you were
+ * just at" instant within one interaction session, not to guarantee
+ * long-term result stability for a given temperature (the underlying
+ * search is intentionally Math.random()-jittered; see Task 3d in the prior
+ * plan's own design spec).
+ *
+ * Only consulted/populated when `previous === null`. `previous` carries the
+ * filter-stability mechanism's own state (see outfitsFor's own doc
+ * comment), and its *content* -- not just whether one was passed -- affects
+ * the result: two calls sharing the same thermal bounds and filter can
+ * still be given different `previous` values, so a key that only
+ * distinguished "has one" from "has none" could silently serve a result
+ * computed against the WRONG previous. The cache's actual job (instant
+ * re-lookup while dragging the temperature slider) never involves
+ * `previous` anyway -- it's only ever passed on a same-bounds,
+ * filter-toggle-only call, a narrower path this cache doesn't need to
+ * cover.
+ */
+const OUTFITS_CACHE_MAX_ENTRIES = 8;
+let outfitsCacheCandidates: TodayCandidates | null = null;
+let outfitsCache: Map<string, TodayOutfits> = new Map();
+
+function outfitsCacheKey(floor: number, ceiling: number, wFloor: number, workAppropriateOnly: boolean): string {
+  return `${floor}|${ceiling}|${wFloor}|${workAppropriateOnly}`;
+}
+
 export function outfitsFor(
   todayCandidates: TodayCandidates | null,
   feltTempC: number,
@@ -77,11 +109,32 @@ export function outfitsFor(
   previous: TodayOutfits | null = null,
 ): TodayOutfits {
   if (!todayCandidates) return { shown: [], hasAnyOutfit: false };
+
+  if (outfitsCacheCandidates !== todayCandidates) {
+    outfitsCache = new Map();
+    outfitsCacheCandidates = todayCandidates;
+  }
+
+  const floor = warmthFloor(feltTempC);
+  const ceiling = warmthCeiling(feltTempC);
+  const wFloor = windFloor(windSpeedKph, feltTempC);
+  // Only cache/consult when there's no `previous` to consider -- `previous`'s
+  // own content can differ between calls that otherwise share the same
+  // thermal bounds (it carries the filter-toggle-stability mechanism's own
+  // state), and a cache key that only distinguished "has one" from "has
+  // none" could silently serve a result computed against a DIFFERENT
+  // previous value. The cache's actual job (instant re-lookup while
+  // dragging the temperature slider) never involves `previous` anyway --
+  // that's only ever passed on a same-bounds filter-toggle call.
+  const cacheKey = previous === null ? outfitsCacheKey(floor, ceiling, wFloor, workAppropriateOnly) : null;
+  if (cacheKey) {
+    const cached = outfitsCache.get(cacheKey);
+    if (cached) return cached;
+  }
+
   const candidates = workAppropriateOnly
     ? filterWorkAppropriate(todayCandidates.candidates)
     : todayCandidates.candidates;
-  const floor = warmthFloor(feltTempC);
-  const ceiling = warmthCeiling(feltTempC);
   const bands = splitIntoWarmthBands(floor, ceiling);
   const alreadyClaimed =
     workAppropriateOnly && previous
@@ -92,7 +145,7 @@ export function outfitsFor(
     todayCandidates.dismatchedKeys,
     floor,
     ceiling,
-    windFloor(windSpeedKph, feltTempC),
+    wFloor,
     bands,
     todayCandidates.wornDaysAgo,
     alreadyClaimed,
@@ -109,7 +162,17 @@ export function outfitsFor(
   // own "Meets target" vs "Closest available" label (see TodayScreen's
   // OutfitCard) -- nothing here needs the list itself filtered for that
   // to read correctly.
-  return { shown: diverse, hasAnyOutfit: diverse.length > 0 };
+  const result = { shown: diverse, hasAnyOutfit: diverse.length > 0 };
+
+  if (cacheKey) {
+    if (outfitsCache.size >= OUTFITS_CACHE_MAX_ENTRIES) {
+      const oldestKey = outfitsCache.keys().next().value;
+      if (oldestKey !== undefined) outfitsCache.delete(oldestKey);
+    }
+    outfitsCache.set(cacheKey, result);
+  }
+
+  return result;
 }
 
 export type TodayLoadState =
