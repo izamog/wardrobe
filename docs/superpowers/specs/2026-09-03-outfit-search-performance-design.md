@@ -90,20 +90,32 @@ search across every existing fixture and the full real-CSV sweep. If any
 divergence appears, the margin is too tight — widen it and re-verify,
 never accept a divergence as "close enough."
 
-### B. Chunked/deferred execution with a loading state (safety net)
+### B. Deferred execution with a loading state (safety net)
 
-Independent of A, and implemented regardless: break the search into
-yieldable batches (`setTimeout`/`requestAnimationFrame` between chunks) so
-the JS thread periodically frees up enough to paint a spinner and stay
-touch-responsive, instead of hard-freezing. This does not reduce total
-wall-clock cost on its own — A does that — but it changes the failure mode
-from "the app is unusable" to "the app shows a spinner for however long
-it's still going to take." Confirmed available without new dependencies:
-this Expo-Go-pinned project (per `wardrobe-app/AGENTS.md`, no ejecting, no
+**Revised from internal chunking** after weighing the implementation risk:
+true mid-DFS chunking would mean converting `generateClosestOutfits`'
+recursive search into something interruptible (a generator function or an
+explicit continuation) — a large, risky rewrite of the same
+correctness-critical code this whole session already spent five commits
+getting right, and it's also exactly where risks B2/B3 below (shared
+mutable state and re-randomized pool sampling leaking across chunk
+boundaries) come from. A simpler design avoids both entirely: **defer the
+*start* of the computation by one frame** (`requestAnimationFrame` or
+`InteractionManager.runAfterInteractions`, whichever actually lets React
+commit a paint first — verify, don't assume) so a loading spinner can
+render, then run the search as a single, uninterrupted synchronous call —
+no chunk boundaries inside the search at all. This does not reduce total
+wall-clock cost on its own — Approach A does that — it only changes the
+failure mode from "frozen with no feedback" to "a visible spinner for
+however long the (now much cheaper, post-A) computation actually takes."
+If on-device benchmarking after A lands still shows an unacceptably long
+spinner, true internal chunking becomes a real follow-up; this design
+deliberately doesn't build that complexity until the simpler fix is proven
+insufficient. Confirmed available without new dependencies: this
+Expo-Go-pinned project (per `wardrobe-app/AGENTS.md`, no ejecting, no
 native modules) has no web-worker library installed, and
 `react-native-reanimated`'s worklets are UI-thread animation primitives,
-not appropriate for this kind of business logic — `setTimeout`/
-`requestAnimationFrame` yielding is the realistic ceiling here.
+not appropriate for this kind of business logic.
 
 ### C. Quantized-bounds memoization (cheap, additive)
 
@@ -161,48 +173,50 @@ each.
    outfit that starts under-floor and is only pushed over-floor by a
    later slot, confirming it is still found.
 
-### B. Chunked/deferred execution
+### B. Deferred execution with a loading state
 
 1. **Stale-computation race.** If the user drags the slider again while a
-   previous chunked computation is still mid-flight (yielding between
-   chunks gives other code a chance to run), and nothing tracks which
-   computation is "current," the earlier, now-stale computation could
-   finish *after* the newer one and overwrite it — showing outfits for a
-   temperature the user already moved away from. This isn't an algorithm
-   bug, but it's visibly "the wrong outfit for the current setting," the
-   same user-facing symptom as the bugs already fixed. *Mitigation:* a
-   monotonically increasing generation/request counter, incremented on
-   every new computation start; a chunked computation checks its own
-   generation against the current one before committing its result, and
-   silently discards its output if it's been superseded.
-2. **Shared mutable state leaking across concurrent computations.** The
-   reuse tracker (`createReuseTracker`, `bandedOutfits.ts`) builds and
-   mutates its `useCounts`/`firstUse` maps in what's currently a single,
-   uninterrupted synchronous pass. If chunking is implemented by
-   restructuring this into something that shares state across yield
-   boundaries without full isolation per computation (e.g., a module-level
-   tracker reused across calls instead of a fresh one per call), two
-   overlapping computations could corrupt each other's reuse-tracking
-   state, producing spurious repeats or spurious "already used" exclusions
-   unrelated to any real wear history. *Mitigation:* every chunked
-   computation gets its own freshly-constructed tracker/state, never
-   shared at module scope; chunking resumes *within* one computation's own
-   closure (a generator function or explicit continuation), never by
-   re-entering the outer function with implicit shared state.
-3. **Re-randomizing the jittered pool across chunks.** `evenlySampled`
-   (Task 3d) draws its `Math.random()`-based sample once per
-   `mergedByBandCenters` call, and the whole point of Tasks 3c/3d's design
-   is that one computation sees one coherent, consistent pool. If chunk
-   boundaries are placed carelessly (e.g., a chunk "resumes" by re-calling
-   pool construction instead of resuming mid-DFS over an already-built
-   pool), each chunk could silently redraw a *different* random sample,
-   meaning a single logical search no longer sees a consistent candidate
-   set — reintroducing the kind of item-visibility inconsistency Task 3d
-   was written to bound within a single call. *Mitigation:* pool
-   construction (`evenlySampled`/`mergedByBandCenters`/`closestToTarget`)
-   always runs once, fully, before the first yield point; only the
-   DFS/leaf-walk over the already-built, fixed candidate lists is ever
-   chunked.
+   deferred computation is still pending (queued for next frame) or has
+   started running, and nothing tracks which request is "current," an
+   earlier, now-stale computation could resolve *after* a newer one and
+   overwrite it — showing outfits for a temperature the user already moved
+   away from. This isn't an algorithm bug, but it's visibly "the wrong
+   outfit for the current setting," the same user-facing symptom as the
+   bugs already fixed. *Mitigation:* the same monotonically increasing
+   generation/request counter already used elsewhere in this codebase for
+   exactly this pattern (`TodayDataContext.tsx`'s `latestRequestId`, used
+   by `reload()`/`refreshIfStale()`) — a deferred computation checks its
+   own generation against the current one before committing its result via
+   `setState`, and discards its output if superseded. Reusing an existing,
+   already-battle-tested pattern rather than inventing a new one.
+2. **The deferral doesn't actually let React paint before the block
+   starts.** `requestAnimationFrame`/`InteractionManager.runAfterInteractions`
+   scheduling on React Native's JS thread isn't a hard guarantee — if the
+   deferred callback fires before React has actually committed the loading
+   state to the screen, the user sees the exact same freeze as before,
+   just with extra code that gives a false sense of the problem being
+   fixed. *Mitigation:* this specific claim (does the spinner actually
+   render before the block starts) can only be confirmed by real on-device
+   testing — this environment has no simulator/device access (an existing,
+   standing limitation), so the plan explicitly calls out manual
+   verification of this exact behavior as a required step before
+   considering this approach done, not something to assume works because
+   the code compiles and passes unit tests.
+3. **A second user interaction during the now-visible loading state races
+   the state this screen already carefully sequences.** `TodayScreen.tsx`'s
+   `lastComputedRef`/`filterOnlyChange` logic (built earlier this session,
+   the filter-toggle-stability fix) depends on knowing exactly what bounds
+   the *previous* `outfits` value was computed under. If the user toggles
+   `workAppropriateOnly` while a deferred temperature-slider computation is
+   still pending, and both end up writing `lastComputedRef`/calling
+   `outfitsFor` without respecting each other's in-flight state, the wrong
+   `previous` could get passed through — silently breaking the
+   filter-stability fix. *Mitigation:* the generation-counter guard from
+   risk 1 covers this too, as long as *every* trigger of a fresh
+   computation (slider AND filter toggle) shares the same counter and the
+   same "only the latest generation may write `lastComputedRef`" rule —
+   this needs to be a single, shared mechanism, not one guard for the
+   slider and a separate, uncoordinated one for the filter toggle.
 
 ### C. Quantized-bounds memoization
 
