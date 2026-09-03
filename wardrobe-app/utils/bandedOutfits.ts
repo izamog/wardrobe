@@ -250,16 +250,25 @@ function inBand(outfit: ScoredOutfit, band: WarmthBand): boolean {
   return outfit.warmth >= band.min && outfit.warmth <= band.max;
 }
 
+/** Whether `outfit` shares any tracked item with `pickedThisBandIds` -- this band's own picks so far, computed fresh by fillBandTiered as it fills. 1 (deprioritized) if so, 0 if fully distinct from this band's own choices. */
+function sameBandRepeatPenalty(outfit: ScoredOutfit, pickedThisBandIds: ReadonlySet<string>): number {
+  return trackedItemIds(outfit).some((id) => pickedThisBandIds.has(id)) ? 1 : 0;
+}
+
 export function rankNow(
   toppedUp: readonly ScoredOutfit[],
   band: WarmthBand,
   useCounts: ReadonlyMap<string, number>,
+  pickedThisBandIds: ReadonlySet<string> = new Set(),
 ): ScoredOutfit[] {
   return [...toppedUp].sort((a, b) => {
     if (a.meetsTarget !== b.meetsTarget) return a.meetsTarget ? -1 : 1;
     const inBandA = inBand(a, band);
     const inBandB = inBand(b, band);
     if (inBandA !== inBandB) return inBandA ? -1 : 1;
+    const repeatA = sameBandRepeatPenalty(a, pickedThisBandIds);
+    const repeatB = sameBandRepeatPenalty(b, pickedThisBandIds);
+    if (repeatA !== repeatB) return repeatA - repeatB;
     const freshA = freshnessPenalty(a, useCounts);
     const freshB = freshnessPenalty(b, useCounts);
     if (freshA !== freshB) return freshA - freshB;
@@ -296,9 +305,15 @@ function fillBandTiered(
     if (picked.length === need) break;
     for (const source of sources) {
       if (picked.length === need) break;
+      const pickedThisBandIds = new Set(picked.flatMap(trackedItemIds));
       picked = [
         ...picked,
-        ...pickUpTo(rankNow(toppedUpByBand[source], bands[source], useCounts), need - picked.length, requireMeetsTarget, violatesCap),
+        ...pickUpTo(
+          rankNow(toppedUpByBand[source], bands[source], useCounts, pickedThisBandIds),
+          need - picked.length,
+          requireMeetsTarget,
+          violatesCap,
+        ),
       ];
     }
   }
@@ -403,13 +418,23 @@ function createReuseTracker(): ReuseTracker {
     violatesCap: (outfit: ScoredOutfit) => boolean,
   ): ScoredOutfit[] {
     const picked: ScoredOutfit[] = [];
-    for (const outfit of ranked) {
-      if (picked.length === need) break;
-      if (requireMeetsTarget && !outfit.meetsTarget) continue;
-      if (violatesCap(outfit)) continue;
-      record(outfit);
-      picked.push(outfit);
-    }
+    const pickedIdsThisCall = new Set<string>();
+
+    const tryPass = (allowSelfRepeat: boolean): void => {
+      for (const outfit of ranked) {
+        if (picked.length === need) break;
+        if (requireMeetsTarget && !outfit.meetsTarget) continue;
+        if (violatesCap(outfit)) continue;
+        if (!allowSelfRepeat && trackedItemIds(outfit).some((id) => pickedIdsThisCall.has(id))) continue;
+        record(outfit);
+        picked.push(outfit);
+        for (const id of trackedItemIds(outfit)) pickedIdsThisCall.add(id);
+      }
+    };
+
+    tryPass(false);
+    if (picked.length < need) tryPass(true);
+
     return picked;
   }
 

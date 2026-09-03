@@ -750,6 +750,40 @@ describe('selectBandedOutfits', () => {
     expect(results.every((o) => o.items.some((i) => i.id === 'only-bag'))).toBe(true);
     expect(results.every((o) => o.items.some((i) => i.id === 'only-belt'))).toBe(true);
   });
+
+  it('does not repeat the same tracked item within one band\'s own 2 picks when a fresh alternative exists, even when both picks come from a single pickUpTo call', () => {
+    // Reported bug (Task 4's real-CSV sweep, confirmed via instrumented
+    // trace in Task 4b's report): a single pickUpTo(need=2,...) call can
+    // greedily fill BOTH of a band's slots from one statically-sorted list,
+    // picking two outfits that share the same tracked item (e.g. the same
+    // Pants) -- because pickUpTo never re-checks same-band-repeat against
+    // its own just-picked items mid-walk. Fixture: 3 bottoms (2 distinct
+    // Pants, so a same-Pants repeat is avoidable), 2 tops, 1 pair of shoes
+    // -- deliberately few candidates so a naive greedy walk would be tempted
+    // to reuse the single best-ranked Pants for both outfits instead of
+    // spreading across the 2 available ones.
+    const pantsA = item('Pants', { id: 'pants-a', inferredWarmth: 5 });
+    const pantsB = item('Pants', { id: 'pants-b', inferredWarmth: 5 });
+    const topA = item('Top', { id: 'top-a' });
+    const topB = item('Top', { id: 'top-b' });
+    const shoes = item('Shoes', { id: 'shoes-a' });
+    const bands = splitIntoWarmthBands(1, 10);
+
+    const results = selectBandedOutfits(
+      emptyCandidates({ bottoms: [pantsA, pantsB], tops: [topA, topB], shoes: [shoes] }),
+      noDismatches,
+      1,
+      10,
+      0,
+      bands,
+    );
+
+    const cooler = results.filter((o) => o.band === 'cooler');
+    if (cooler.length === 2) {
+      const bottomIds = cooler.map((o) => o.items.find((i) => i.category === 'Pants')?.id);
+      expect(new Set(bottomIds).size).toBe(2); // both available Pants used, not the same one twice
+    }
+  });
 });
 
 describe('selectBandedOutfits with alreadyClaimed', () => {
@@ -1014,6 +1048,23 @@ describe('rankNow', () => {
     const ranked = rankNow([farther, closer], band, new Map());
 
     expect(ranked[0]).toBe(closer);
+  });
+
+  it('prefers a candidate that avoids repeating THIS band\'s own earlier pick, even over one flagged only by another band', () => {
+    // Reported bug (Task 4's real-CSV sweep, 0C/cooler band): freshnessPenalty
+    // counts uses across ALL bands, blind to which one -- so a candidate that
+    // repeats a DIFFERENT band's used item could tie or beat a candidate that
+    // repeats THIS band's own first pick, causing a redundant same-band
+    // repeat even when a genuinely fresh-for-this-band alternative exists.
+    const repeatsOwnPick = { items: [item('Top', { id: 'own-first-pick' })], warmth: 8, wind: 0, meetsTarget: true };
+    const freshForThisBand = { items: [item('Top', { id: 'other-band-top' })], warmth: 8, wind: 0, meetsTarget: true };
+    const band: WarmthBand = { min: 7, max: 9, center: 8 };
+    const useCounts = new Map([['other-band-top', 1]]); // claimed by an earlier band, not this one
+    const pickedThisBandIds = new Set(['own-first-pick']); // this band's own first pick
+
+    const ranked = rankNow([repeatsOwnPick, freshForThisBand], band, useCounts, pickedThisBandIds);
+
+    expect(ranked[0]).toBe(freshForThisBand);
   });
 });
 
