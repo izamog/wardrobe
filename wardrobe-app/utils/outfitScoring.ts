@@ -214,7 +214,8 @@ export function meetsRegionFloors(chosen: readonly ClothingItem[], warmthFloor: 
  * genuinely meets every bound — without this, generateClosestOutfits' sort
  * couldn't tell a region-floor violation apart from a real match, and the
  * violation could sort first purely because its bottom happened to be tried
- * first (see leanFirst in outfitSlots.ts).
+ * first (see floorAwareCandidates' warmthFloor<=0 branch in
+ * outfitCandidatePools.ts).
  */
 function regionShortfall(chosen: readonly ClothingItem[], warmthFloor: number): number {
   const legTarget = warmthFloor * LEG_WARMTH_FLOOR_FRACTION;

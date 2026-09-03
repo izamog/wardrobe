@@ -3,7 +3,6 @@ import {
   scoreFor,
   compareByScore,
   rankWithFairTiebreak,
-  leanFirst,
   layerFirst,
   accessoryFirst,
   floorAwareCandidates,
@@ -143,28 +142,6 @@ describe('rankWithFairTiebreak', () => {
   });
 });
 
-describe('leanFirst with wornDaysAgo', () => {
-  it('still sorts lightest-first when nothing was recently worn', () => {
-    const light = item({ id: 'a', inferredWarmth: 1 });
-    const heavy = item({ id: 'b', inferredWarmth: 5 });
-    expect(leanFirst([heavy, light]).map((i) => i.id)).toEqual(['a', 'b']);
-  });
-
-  it('a recently-worn item sorts behind an equally-warm alternative', () => {
-    const wornRecently = item({ id: 'a', inferredWarmth: 3 });
-    const notWorn = item({ id: 'b', inferredWarmth: 3 });
-    const wornDaysAgo = new Map([['a', 1]]);
-    expect(leanFirst([wornRecently, notWorn], wornDaysAgo).map((i) => i.id)).toEqual(['b', 'a']);
-  });
-
-  it('recency never overrides a real warmth difference', () => {
-    const lightButRecent = item({ id: 'a', inferredWarmth: 1 });
-    const heavyNotWorn = item({ id: 'b', inferredWarmth: 8 });
-    const wornDaysAgo = new Map([['a', 0]]);
-    expect(leanFirst([heavyNotWorn, lightButRecent], wornDaysAgo).map((i) => i.id)).toEqual(['a', 'b']);
-  });
-});
-
 describe('accessoryFirst with wornDaysAgo: the confirmed gold-vs-silver case', () => {
   it('a less-recently-worn zero-insulation accessory sorts ahead of a more-recently-worn one', () => {
     const goldBelt = item({ id: 'gold', category: 'Belt', hardwareColor: 'Gold' });
@@ -264,11 +241,11 @@ describe('floorAwareOuterwearCandidates with a warmthCeiling', () => {
 });
 
 describe('floorAwareCandidates with wornDaysAgo', () => {
-  it('passes wornDaysAgo through to its internal leanFirst call', () => {
+  it('passes wornDaysAgo through to its warmthFloor<=0 branch', () => {
     const wornRecently = item({ id: 'a', category: 'Pants', inferredWarmth: 3 });
     const notWorn = item({ id: 'b', category: 'Pants', inferredWarmth: 3 });
     const wornDaysAgo = new Map([['a', 1]]);
-    // warmthFloor 0 -> floorAwareCandidates is exactly leanFirst (see its own doc comment)
+    // warmthFloor 0 -> a plain lightest-first slice (see floorAwareCandidates' own doc comment)
     expect(floorAwareCandidates([wornRecently, notWorn], 0, wornDaysAgo).map((i) => i.id)).toEqual(['b', 'a']);
   });
 

@@ -32,8 +32,9 @@ import type { ClothingItem } from '../types/wardrobe';
  * weather-appropriate, because it was never weather-checked at all. Folding
  * it into the same lean-first, ceiling-checked search as Top and Shoes is
  * what actually fixes that: recency survives only as an emergent tie-break
- * (candidates already arrive newest-first from the DB, and leanFirst's sort
- * is stable), not as a rule that could override the weather.
+ * (candidates already arrive newest-first from the DB, and
+ * floorAwareCandidates' underlying rankWithFairTiebreak sort is stable), not
+ * as a rule that could override the weather.
  */
 
 export type { OutfitCandidates } from './outfitSlots';
@@ -279,18 +280,19 @@ export function generateClosestOutfits(
       // the bounds (both within them, or both short by the same amount) —
       // see the reported bug this guards against, below. Left alone
       // (returning 0, so JS's stable sort keeps search-encounter order —
-      // lean-first, see leanFirst in outfitCandidatePools.ts) whenever
-      // warmthFloor is 0: there is nothing to stay warm against, so
-      // preferring the leaner of two equally-valid options is still the
-      // right default on a mild or hot day.
+      // lean-first, see floorAwareCandidates' warmthFloor<=0 branch in
+      // outfitCandidatePools.ts) whenever warmthFloor is 0: there is nothing
+      // to stay warm against, so preferring the leaner of two equally-valid
+      // options is still the right default on a mild or hot day.
       //
       // Reported bug: at -14°C, a sleeveless top (0 warmth) plus a Cardigan
       // ties, at distance 0, with a T-Shirt or a wool Sweater the closet also
       // had — both combinations clear every bound, so nothing about distance
       // alone favoured the warmer choice, and lean-first search order (the
-      // sleeveless top sorts before either alternative — see leanFirst) meant
-      // the coldest still-technically-valid outfit won by default, every
-      // time, rather than the one with real margin above the floor.
+      // sleeveless top sorts before either alternative — see
+      // floorAwareCandidates' warmthFloor<=0 branch) meant the coldest
+      // still-technically-valid outfit won by default, every time, rather
+      // than the one with real margin above the floor.
       return warmthFloor > 0 ? b.warmth - a.warmth : 0;
     })
     .slice(0, maxResults);

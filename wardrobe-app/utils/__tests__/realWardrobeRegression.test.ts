@@ -170,11 +170,65 @@ function trackedIds(outfit: { items: readonly { id: string; category: string }[]
     .map((i) => i.id);
 }
 
+/** How many independent redraws hasNonConflictingValidAlternative takes before accepting "no alternative exists" as genuine -- see that function's own doc comment. */
+const SCARCITY_CONFIRMATION_ATTEMPTS = 5;
+
+/**
+ * One independent draw of coreOutfitsForBands/toppedUpForBand -- factored out
+ * of hasNonConflictingValidAlternative so that function can retry it, since
+ * coreOutfitsForBands' own evenlySampled pool is Math.random()-driven (see
+ * bandedOutfits.ts) and two calls with identical inputs can legitimately
+ * return different merged pools.
+ */
+function oneAlternativeDraw(
+  band: 'cooler' | 'median' | 'warmer',
+  scenario: Scenario,
+  shown: ReturnType<typeof outfitsFor>['shown'],
+  extraExcludeIds: ReadonlySet<string>,
+): boolean {
+  const candidates = filteredCandidates(scenario.workAppropriateOnly);
+  const floor = warmthFloor(scenario.feltTempC);
+  const ceiling = warmthCeiling(scenario.feltTempC);
+  const wFloor = windFloorFn(scenario.windSpeedKph, scenario.feltTempC);
+  const bands = splitIntoWarmthBands(floor, ceiling);
+  const core = coreOutfitsForBands(candidates, TODAY_CANDIDATES.dismatchedKeys, floor, ceiling, wFloor, bands, TODAY_CANDIDATES.wornDaysAgo);
+  const toppedUp = toppedUpForBand(core, bands[band], candidates, TODAY_CANDIDATES.dismatchedKeys, floor, ceiling, wFloor, TODAY_CANDIDATES.wornDaysAgo, new Map());
+  const claimed = claimedIdsExcluding(shown, band);
+  return toppedUp.some(
+    (outfit) =>
+      outfit.meetsTarget &&
+      outfit.items.every((outfitItem) => {
+        if (outfitItem.category === 'Tights' || outfitItem.category === 'Bag' || outfitItem.category === 'Belt' || outfitItem.category === 'Scarf') return true;
+        if (extraExcludeIds.has(outfitItem.id)) return false;
+        return (claimed.get(outfitItem.id) ?? 0) < 2;
+      }),
+  );
+}
+
 /**
  * Whether a genuinely valid, non-reuse-conflicting alternative existed for
  * `band` given what the other bands actually claimed -- the same trace this
  * session used repeatedly to distinguish a real bug from genuine wardrobe
  * scarcity.
+ *
+ * Retries the draw up to SCARCITY_CONFIRMATION_ATTEMPTS times and returns
+ * true (an alternative existed -- a genuine failure) as soon as any attempt
+ * finds one, only returning false (no alternative -- presumed scarcity)
+ * once every attempt has come back empty. This is necessary, not just
+ * belt-and-braces: coreOutfitsForBands (called by oneAlternativeDraw) now
+ * depends on evenlySampled's Math.random()-driven bucket sampling (see
+ * bandedOutfits.ts), so two calls with identical inputs can legitimately
+ * return different merged pools -- a size-2 bucket only surfaces its item
+ * ~50% of the time. A single draw here could therefore disagree with
+ * whatever draw actually produced the `shown` result under test, purely
+ * from randomness: reporting a spurious "genuine failure" (or the reverse,
+ * under-reporting a real bug as scarcity) with no actual bug involved. Five
+ * independent retries make a false "genuine scarcity" verdict from bad luck
+ * alone astronomically unlikely (~0.5^5 ≈ 3% per single size-2-bucket miss,
+ * compounding down further for any item that appears in more than one
+ * bucket-sized gap) while keeping this helper -- only invoked when a
+ * shortfall/repeat has ALREADY been observed, not on every scenario --
+ * cheap relative to the sweep as a whole.
  *
  * `extraExcludeIds` additionally rules out specific item ids regardless of
  * claim count -- needed for the within-band-repeat check below, where the
@@ -197,23 +251,10 @@ function hasNonConflictingValidAlternative(
   shown: ReturnType<typeof outfitsFor>['shown'],
   extraExcludeIds: ReadonlySet<string> = new Set(),
 ): boolean {
-  const candidates = filteredCandidates(scenario.workAppropriateOnly);
-  const floor = warmthFloor(scenario.feltTempC);
-  const ceiling = warmthCeiling(scenario.feltTempC);
-  const wFloor = windFloorFn(scenario.windSpeedKph, scenario.feltTempC);
-  const bands = splitIntoWarmthBands(floor, ceiling);
-  const core = coreOutfitsForBands(candidates, TODAY_CANDIDATES.dismatchedKeys, floor, ceiling, wFloor, bands, TODAY_CANDIDATES.wornDaysAgo);
-  const toppedUp = toppedUpForBand(core, bands[band], candidates, TODAY_CANDIDATES.dismatchedKeys, floor, ceiling, wFloor, TODAY_CANDIDATES.wornDaysAgo, new Map());
-  const claimed = claimedIdsExcluding(shown, band);
-  return toppedUp.some(
-    (outfit) =>
-      outfit.meetsTarget &&
-      outfit.items.every((outfitItem) => {
-        if (outfitItem.category === 'Tights' || outfitItem.category === 'Bag' || outfitItem.category === 'Belt' || outfitItem.category === 'Scarf') return true;
-        if (extraExcludeIds.has(outfitItem.id)) return false;
-        return (claimed.get(outfitItem.id) ?? 0) < 2;
-      }),
-  );
+  for (let attempt = 0; attempt < SCARCITY_CONFIRMATION_ATTEMPTS; attempt++) {
+    if (oneAlternativeDraw(band, scenario, shown, extraExcludeIds)) return true;
+  }
+  return false;
 }
 
 describe('real wardrobe regression sweep: shown count and reuse', () => {

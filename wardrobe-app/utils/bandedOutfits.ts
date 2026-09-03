@@ -136,10 +136,13 @@ function mergedByBandCenters(
  * The ranked core-outfit list (Scarf/Tights excluded, see the design spec's
  * "Core search" section) that selectBandedOutfits (Task 7) buckets into
  * bands and tops up. One search, not three: the anchor and Top pools are
- * each widened up front by merging a band-targeted floorAwareCandidates
- * call per band, then generateClosestOutfits runs once over that merged
- * pool -- ranking (closest to the real warmthFloor/warmthCeiling/windFloor)
- * is unaffected, only which candidates the search considers changes.
+ * each widened up front via mergedByBandCenters -- one shared, full-range
+ * evenlySampled base (computed once, not once per band) plus each band's
+ * own closestToTarget anchor item (still per-band, since each band's own
+ * floor requirement genuinely differs) -- then generateClosestOutfits runs
+ * once over that merged pool -- ranking (closest to the real
+ * warmthFloor/warmthCeiling/windFloor) is unaffected, only which
+ * candidates the search considers changes.
  */
 export function coreOutfitsForBands(
   candidates: OutfitCandidates,

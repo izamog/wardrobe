@@ -154,25 +154,6 @@ export function rankWithFairTiebreak(
   return sorted;
 }
 
-/**
- * Ranks a slot's candidates lightest-first, then caps to MAX_SLOT_CANDIDATES.
- *
- * Without this, candidates arrive in "most recently added" order, which has
- * no relationship to the weather — a wool jumper bought last week sorts
- * before a t-shirt bought last year regardless of what today calls for. The
- * warmth floor is a floor, not a target to hit exactly, so trying the
- * lightest options first is the correct greedy direction: the search only
- * escalates to something warmer when the lean choice actually fails to
- * clear it. The sort is stable, so items with equal insulation keep their
- * incoming (newest-first) order — recency as a tie-break, not a rule.
- */
-export function leanFirst(
-  items: readonly ClothingItem[],
-  wornDaysAgo: ReadonlyMap<string, number> = new Map(),
-): ClothingItem[] {
-  return rankWithFairTiebreak(items, wornDaysAgo).slice(0, MAX_SLOT_CANDIDATES);
-}
-
 /** Ranks a purely-optional accessory slot's candidates lightest-first, capped at MAX_ACCESSORY_CANDIDATES — see its doc comment. */
 export function accessoryFirst(
   items: readonly ClothingItem[],
@@ -201,17 +182,18 @@ export function layerFirst(
  * Bottom/Dress anchor, split between the leanest options overall and the
  * warmest options overall.
  *
- * leanFirst's blind "N lightest overall" selection silently dropped every
- * weather-appropriate item once a wardrobe held MAX_SLOT_CANDIDATES or more
- * lighter ones — a wool sweater or a pair of jeans never entered the search
- * at all on a cold day if the closet had six lighter tops or bottoms
- * (t-shirts, shorts, summer skirts), regardless of what the weather called
- * for; the DFS could only ever find combinations of whatever leanFirst
- * happened to keep. This keeps that same greedy "leanest that still works"
- * bias — a candidate here is not a guarantee, just a starting point the
- * search still weather-checks in full — while guaranteeing the pool always
- * includes this group's warmest available options too, when the closet has
- * them.
+ * A blind "N lightest overall" selection (what this file's warmthFloor<=0
+ * branch below still does, and what this whole function used to do
+ * unconditionally) silently dropped every weather-appropriate item once a
+ * wardrobe held MAX_SLOT_CANDIDATES or more lighter ones — a wool sweater or
+ * a pair of jeans never entered the search at all on a cold day if the
+ * closet had six lighter tops or bottoms (t-shirts, shorts, summer skirts),
+ * regardless of what the weather called for; the DFS could only ever find
+ * combinations of whatever that lightest-first slice happened to keep. This
+ * keeps that same greedy "leanest that still works" bias — a candidate here
+ * is not a guarantee, just a starting point the search still weather-checks
+ * in full — while guaranteeing the pool always includes this group's
+ * warmest available options too, when the closet has them.
  *
  * Earlier, the warm half was picked by filtering for
  * `item.inferredWarmth >= warmthFloor * LEG_WARMTH_FLOOR_FRACTION` — that
@@ -220,24 +202,26 @@ export function layerFirst(
  * reach on its own (CATEGORY_RANGE's per-category max in utils/warmth.ts),
  * since real leg warmth is bottom-plus-Tights (see legWarmth in
  * outfitScoring.ts), not the bottom alone. Once the target passed that
- * ceiling, the filter matched nothing, silently collapsing this back to
- * plain leanFirst — every bottom offered was one of the lightest in the
- * closet, denim or wool trousers never included at all, however cold it got.
+ * ceiling, the filter matched nothing, silently collapsing this back to a
+ * plain lightest-first slice — every bottom offered was one of the lightest
+ * in the closet, denim or wool trousers never included at all, however cold
+ * it got.
  * Picking "warmest available" outright, with no threshold to clear, has no
  * such cliff: the search always gets to try the wardrobe's actual warmest
  * options, whether or not they alone would clear a region floor that may
  * need a Tights layer (chosen in a later slot) to fully close.
  *
  * At warmthFloor 0 there is nothing to stay warm against, so this is exactly
- * leanFirst.
+ * the warmthFloor<=0 branch below: a plain lightest-first slice, capped at
+ * slotSize.
  *
  * Reported bug: a bottom sitting between the leanest and warmest thirds —
  * often the actual best fit for today, closest to (or just clearing) the
  * floor without being wastefully over-warm — was silently invisible to the
  * search whenever the wardrobe had more than MAX_SLOT_CANDIDATES options
- * spread across that range: leanFirst's own N-lightest slice and the
- * warmest-N slice can both miss it entirely, in which case nothing else
- * here ever offered it. One extra slot fixes this, the same bounded-cost
+ * spread across that range: the lightest-N slice and the warmest-N slice
+ * can both miss it entirely, in which case nothing else here ever offered
+ * it. One extra slot fixes this, the same bounded-cost
  * pattern floorAwareOuterwearCandidates already uses for its own leanest
  * guarantee: the single item whose own warmth sits closest to warmthFloor,
  * added on top of the existing split rather than taken out of either half
