@@ -116,7 +116,10 @@ export function TodayScreen() {
       // below) -- it is not mirroring a prop, so an effect is the right
       // tool here, not a render-time state adjustment. The early-return and
       // rAF-scheduled setState calls below are the same synchronization,
-      // just on different paths through this effect.
+      // just on different paths through this effect. Removing this
+      // deferral/cancellation machinery to satisfy the linter would
+      // reintroduce the reported "app slow, phone gets hot, sometimes
+      // freezing" issue this pattern was built to fix -- do not rewrite it.
       // eslint-disable-next-line react-hooks/set-state-in-effect -- see comment above
       setOutfitsState({ outfits: { shown: [], hasAnyOutfit: false }, computing: false });
       return;
