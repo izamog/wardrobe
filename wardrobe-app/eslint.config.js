@@ -29,20 +29,4 @@ module.exports = defineConfig([
       ],
     },
   },
-  // eslint-config-expo's SDK 57 bump pulled in a stricter React Compiler-era
-  // Hooks ruleset that surfaced real, pre-existing violations across ~10
-  // files (refs read during render, setState called synchronously inside
-  // effects, local variables mutated post-render, a non-literal useCallback
-  // deps array). Downgraded to warnings rather than fixed inline in the
-  // SDK-upgrade PR that surfaced them -- each is a genuine finding worth its
-  // own careful fix, not a rushed batch change bundled into an infra bump.
-  // Re-promote to 'error' once the tracked follow-up lands.
-  {
-    rules: {
-      'react-hooks/refs': 'warn',
-      'react-hooks/set-state-in-effect': 'warn',
-      'react-hooks/immutability': 'warn',
-      'react-hooks/use-memo': 'warn',
-    },
-  },
 ]);
