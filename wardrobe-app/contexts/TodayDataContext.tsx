@@ -258,6 +258,26 @@ async function refreshCandidates(
   return { ...current, todayCandidates, initialOutfits, wornToday };
 }
 
+/**
+ * Shared by reload() and TodayDataProvider's mount effect: kicks off
+ * loadToday() and routes its result to setState once it resolves, without
+ * itself touching state synchronously. `requestIdRef` is TodayDataProvider's
+ * own latestRequestId -- bumped here so a call that's already in flight when
+ * a newer one starts can tell it's stale once it resolves and skip applying
+ * its (now superseded) result.
+ */
+function runLoad(setState: (next: TodayLoadState) => void, requestIdRef: React.MutableRefObject<number>): void {
+  const requestId = ++requestIdRef.current;
+  void loadToday()
+    .then((result) => {
+      if (requestIdRef.current === requestId) setState(result);
+    })
+    .catch((e: unknown) => {
+      console.error('Failed to load today:', e);
+      if (requestIdRef.current === requestId) setState({ step: 'error' });
+    });
+}
+
 interface TodayDataContextValue {
   state: TodayLoadState;
   reload: () => void;
@@ -318,22 +338,19 @@ export function TodayDataProvider({ children }: { children: React.ReactNode }) {
   // second, newer one.
   const latestRequestId = useRef(0);
 
+  // reload()'s callers (a retry button, a later manual refresh) need the
+  // visible flip back to 'loading' that setState below gives them; the mount
+  // effect doesn't need it too -- useState above already initializes to
+  // { step: 'loading' }, so setting it again in the same tick the effect
+  // runs would just be a redundant, avoidable extra render. Both paths still
+  // share runLoad (above) for the actual fetch-and-route-to-setState work.
   const reload = useCallback(() => {
-    const requestId = ++latestRequestId.current;
     setState({ step: 'loading' });
-    void loadToday()
-      .then((result) => {
-        if (latestRequestId.current === requestId) setState(result);
-      })
-      .catch((e: unknown) => {
-        console.error('Failed to load today:', e);
-        if (latestRequestId.current === requestId) setState({ step: 'error' });
-      });
+    runLoad(setState, latestRequestId);
   }, []);
 
   useEffect(() => {
-    reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    runLoad(setState, latestRequestId);
   }, []);
 
   // A plain ref, not state: setting it must never itself trigger a
