@@ -37,7 +37,9 @@
           "locationWhenInUsePermission": "Wardrobe uses your location to fetch today's weather forecast, so outfit suggestions match the actual temperature and wind outside."
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-sharing",
+      "expo-status-bar"
     ]
   }
 }
