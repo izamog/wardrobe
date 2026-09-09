@@ -5,17 +5,22 @@ import type { Category, ClothingItem, HardwareColor } from '../../types/wardrobe
 const item = (
   id: string,
   category: Category,
-  overrides: Partial<Pick<ClothingItem, 'hasBeltLoops' | 'hardwareColor'>> = {},
+  overrides: Partial<Pick<ClothingItem, 'hasBeltLoops' | 'hardwareColor' | 'backless'>> = {},
 ): ClothingItem => ({
   id,
   imagePath: '',
   originalImagePath: '',
+    imageMarginBaked: false,
+    thickness: 'Regular',
+    denier: 0,
+    backless: false,
   primaryColor: '',
   secondaryColor: '',
   category,
   brand: id,
   costMinorUnits: 0,
   isSecondHand: false,
+  purchasedAt: '',
   materials: [],
   hardwareColor: 'None',
   hasBeltLoops: false,
@@ -25,6 +30,8 @@ const item = (
   inferredWind: 0,
   wearCount: 0,
   createdAt: 'now',
+  archivedAt: '',
+  isWorkAppropriate: false,
   ...overrides,
 });
 
@@ -109,6 +116,12 @@ describe('isCompatibleCandidate', () => {
     expect(isCompatibleCandidate(bottom(false), item('shoes', 'Shoes'))).toBe(true);
   });
 
+  it('applies the belt-loop rule to a Skirt just like Pants', () => {
+    const skirt = (hasBeltLoops: boolean) => item('skirt', 'Skirt', { hasBeltLoops });
+    expect(isCompatibleCandidate(skirt(false), belt('None'))).toBe(false);
+    expect(isCompatibleCandidate(skirt(true), belt('None'))).toBe(true);
+  });
+
   it('rejects a belt and bag with clashing hardware finishes', () => {
     expect(isCompatibleCandidate(belt('Gold'), bag('Silver'))).toBe(false);
   });
@@ -126,6 +139,62 @@ describe('isCompatibleCandidate', () => {
     // hardwareColor is only meaningful on Belt and Bag; a Top's default 'None'
     // must never be read as a clash against a belt's actual finish.
     expect(isCompatibleCandidate(belt('Gold'), item('top', 'Top'))).toBe(true);
+  });
+
+  describe('backless', () => {
+    const backlessTop = item('backless-top', 'Top', { backless: true });
+    const backlessDress = item('backless-dress', 'Dress', { backless: true });
+
+    it('rejects a backless item paired with a T-Shirt, Shirt, Top, Sweater or Cardigan', () => {
+      for (const category of ['T-Shirt', 'Shirt', 'Top', 'Sweater', 'Cardigan'] as const) {
+        expect(isCompatibleCandidate(backlessTop, item('other', category))).toBe(false);
+        expect(isCompatibleCandidate(item('other', category), backlessTop)).toBe(false);
+      }
+    });
+
+    it('allows a backless item under a Jacket or Coat', () => {
+      expect(isCompatibleCandidate(backlessTop, item('jacket', 'Jacket'))).toBe(true);
+      expect(isCompatibleCandidate(backlessDress, item('coat', 'Coat'))).toBe(true);
+    });
+
+    it('does not reject a non-backless item against the same categories', () => {
+      const ordinaryTop = item('ordinary-top', 'Top', { backless: false });
+      expect(isCompatibleCandidate(ordinaryTop, item('sweater', 'Sweater'))).toBe(true);
+    });
+
+    it('checks both sides of the pair', () => {
+      expect(isCompatibleCandidate(item('cardigan', 'Cardigan'), backlessDress)).toBe(false);
+    });
+  });
+
+  describe('Dress layering', () => {
+    const dress = item('dress', 'Dress');
+
+    it('rejects a Dress paired with a plain Top -- never a legal layer, per layering.ts', () => {
+      expect(isCompatibleCandidate(dress, item('top', 'Top'))).toBe(false);
+      expect(isCompatibleCandidate(item('top', 'Top'), dress)).toBe(false);
+    });
+
+    it('allows a Dress paired with a T-Shirt or Shirt (worn under it)', () => {
+      expect(isCompatibleCandidate(dress, item('tshirt', 'T-Shirt'))).toBe(true);
+      expect(isCompatibleCandidate(dress, item('shirt', 'Shirt'))).toBe(true);
+    });
+
+    it('allows a Dress paired with a Cardigan or Sweater (worn over it)', () => {
+      expect(isCompatibleCandidate(dress, item('cardigan', 'Cardigan'))).toBe(true);
+      expect(isCompatibleCandidate(dress, item('sweater', 'Sweater'))).toBe(true);
+    });
+
+    it('does not touch a Dress paired with Outerwear -- Outerwear has no Top-group conflict with Dress at all', () => {
+      expect(isCompatibleCandidate(dress, item('jacket', 'Jacket'))).toBe(true);
+      expect(isCompatibleCandidate(dress, item('coat', 'Coat'))).toBe(true);
+    });
+
+    it('does not apply the Dress layering rule outside Dress pairs', () => {
+      // A plain Top next to a Shirt is a real, independently-legal layering
+      // pair (Shirt goes over Top) -- this rule must not fire for it.
+      expect(isCompatibleCandidate(item('top', 'Top'), item('shirt', 'Shirt'))).toBe(true);
+    });
   });
 });
 

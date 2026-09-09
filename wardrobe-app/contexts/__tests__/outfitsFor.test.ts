@@ -1,0 +1,358 @@
+/** @jest-environment node */
+import { outfitsFor } from '../TodayDataContext';
+import { emptyCandidates, item, resetSeq } from '../../utils/outfitGeneratorTestHelpers';
+import type { TodayCandidates } from '../../services/outfitGenerator';
+
+beforeEach(() => {
+  resetSeq();
+});
+
+describe('outfitsFor', () => {
+  it('falls back to the closest-available outfits once none meet target, rather than showing none', () => {
+    // Reported bug: extreme weather (nothing lean enough for a heatwave,
+    // nothing warm enough for a cold snap) showed "Nothing meets today's
+    // target" and stopped there, even though the search found real,
+    // complete outfits -- see TodayOutfits' own doc comment. A floor of 100
+    // (deliberately unreachable by this thin fixture) simulates that: real
+    // outfits exist, none of them meet it.
+    const bottom = item('Pants', { inferredWarmth: 3, inferredWind: 2 });
+    const top = item('T-Shirt', { inferredWarmth: 2, inferredWind: 1 });
+    const shoes = item('Shoes', { inferredWarmth: 1, inferredWind: 1 });
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    // outfitsFor derives its own floor/ceiling/windFloor from feltTempC and
+    // windSpeedKph via utils/thermal.ts -- an extreme cold felt temperature
+    // is what actually drives the floor past what this thin wardrobe can
+    // reach, the same way a real heatwave or cold snap would.
+    const result = outfitsFor(candidates, -15, 0);
+
+    expect(result.hasAnyOutfit).toBe(true);
+    expect(result.shown.length).toBeGreaterThan(0);
+    expect(result.shown.every((outfit) => !outfit.meetsTarget)).toBe(true);
+  });
+
+  it('shows meets-target outfits as such when every outfit in a thin wardrobe happens to clear target', () => {
+    const bottom = item('Pants', { inferredWarmth: 3, inferredWind: 2 });
+    const top = item('T-Shirt', { inferredWarmth: 2, inferredWind: 1 });
+    const shoes = item('Shoes', { inferredWarmth: 1, inferredWind: 1 });
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    // A mild, easily-clearable target for this same thin wardrobe.
+    const result = outfitsFor(candidates, 20, 0);
+
+    expect(result.hasAnyOutfit).toBe(true);
+    expect(result.shown.length).toBeGreaterThan(0);
+    expect(result.shown.every((outfit) => outfit.meetsTarget)).toBe(true);
+  });
+
+  it('does not drop a band member that misses target just because other outfits meet it', () => {
+    // Regression test: outfitsFor used to filter the whole flat list down
+    // to meets-target-only outfits whenever *any* outfit met target,
+    // silently dropping band members that didn't -- typically the warmer
+    // band's own picks, since they sit closest to the ceiling. With bands,
+    // that's expected, not a bug: a "warmer" pick legitimately missing
+    // target is still a real, honestly-labeled option worth showing.
+    //
+    // Deterministic (not dependent on the random fair-tiebreak shuffle,
+    // unlike an earlier version of this test that relied on ceiling-driven
+    // scarcity and could flip between shown.length 2-6 run to run): 2 Pants
+    // deterministically clear the leg-region floor at this warmthFloor, 2
+    // Skirts (warmth 0) deterministically never can. Only 2 x 2 uses = 4
+    // valid Pants-based outfit-instances exist, below the 6 slots needed,
+    // so at least one band is forced to fall back to an invalid Skirt
+    // outfit regardless of how ties elsewhere in the search shuffle.
+    const floor = 20; // legTarget = 20 * LEG_WARMTH_FLOOR_FRACTION(1/4) = 5.
+    const validPants = [
+      item('Pants', { id: 'pants-0', inferredWarmth: 6 }),
+      item('Pants', { id: 'pants-1', inferredWarmth: 7 }),
+    ];
+    const invalidSkirts = [
+      item('Skirt', { id: 'skirt-0', inferredWarmth: 0 }),
+      item('Skirt', { id: 'skirt-1', inferredWarmth: 0 }),
+    ];
+    // Shoes/Bags given distinct (if scoring-irrelevant) warmth values too --
+    // not identical apart from id -- so the accessory slots resolve
+    // deterministically rather than through the random fair-tiebreak
+    // shuffle used for genuine ties (see rankWithFairTiebreak in
+    // outfitCandidatePools.ts). The someMeetTarget/someDoNot assertion
+    // below only ever depends on which Bottom (Pants vs Skirt) is chosen,
+    // so this doesn't change what's being tested -- it just removes an
+    // unrelated source of nondeterminism from the test run.
+    const tops = Array.from({ length: 6 }, (_, i) => item('Sweater', { id: `top-${i}`, inferredWarmth: 15 + i }));
+    const shoes = Array.from({ length: 6 }, (_, i) => item('Shoes', { id: `shoes-${i}`, inferredWarmth: i }));
+    const bags = Array.from({ length: 6 }, (_, i) => item('Bag', { id: `bag-${i}`, inferredWarmth: i }));
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [...validPants, ...invalidSkirts], tops, shoes, bags }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    // feltTempC chosen so warmthFloor(feltTempC) === 20 (see thermal.ts).
+    const result = outfitsFor(candidates, 20 - 20 / 1.2, 0);
+
+    const someMeetTarget = result.shown.some((outfit) => outfit.meetsTarget);
+    const someDoNot = result.shown.some((outfit) => !outfit.meetsTarget);
+    expect(someMeetTarget && someDoNot).toBe(true);
+  });
+
+  it('reports no outfit at all when nothing complete exists in the candidate pools', () => {
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates(),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const result = outfitsFor(candidates, 20, 0);
+
+    expect(result.hasAnyOutfit).toBe(false);
+    expect(result.shown).toHaveLength(0);
+  });
+
+  it('returns a cached result for the same quantized bounds without recomputing', () => {
+    // Two raw feltTempC values that round to the SAME warmthFloor/
+    // warmthCeiling/windFloor (thermal.ts's clamp() already rounds to
+    // integers -- see the design spec's own confirmation of this) should
+    // hit the same cache entry. Asserts referential identity of the
+    // returned TodayOutfits object across both calls, which is only
+    // possible if the second call was served from cache rather than
+    // recomputed (a fresh call always builds a new result object).
+    const bottom = item('Pants', { inferredWarmth: 3, inferredWind: 2 });
+    const top = item('T-Shirt', { inferredWarmth: 2, inferredWind: 1 });
+    const shoes = item('Shoes', { inferredWarmth: 1, inferredWind: 1 });
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const first = outfitsFor(candidates, 5.0, 21, false);
+    // 5.15, not the brief's original 5.2: windFloor scales continuously with
+    // feltTempC (via windColdnessFactor in thermal.ts) before rounding, so
+    // 5.2 shares warmthFloor/warmthCeiling with 5.0 (18/25) but rounds its
+    // windFloor down to 5 instead of 6 -- a real cache miss, not a caching
+    // bug. 5.15 shares all three quantized bounds with 5.0.
+    const second = outfitsFor(candidates, 5.15, 21, false); // rounds to the same floor/ceiling/windFloor as 5.0
+    expect(second).toBe(first);
+  });
+
+  it('does not return a cached result when workAppropriateOnly differs', () => {
+    const bottom = item('Pants', { inferredWarmth: 3, inferredWind: 2 });
+    const top = item('T-Shirt', { inferredWarmth: 2, inferredWind: 1 });
+    const shoes = item('Shoes', { inferredWarmth: 1, inferredWind: 1 });
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const withFilter = outfitsFor(candidates, 5.0, 21, true);
+    const withoutFilter = outfitsFor(candidates, 5.0, 21, false);
+    expect(withFilter).not.toBe(withoutFilter);
+  });
+
+  it('does not return a stale cached result once todayCandidates itself is a new object (a real refresh)', () => {
+    const bottom = item('Pants', { inferredWarmth: 3, inferredWind: 2 });
+    const top = item('T-Shirt', { inferredWarmth: 2, inferredWind: 1 });
+    const shoes = item('Shoes', { inferredWarmth: 1, inferredWind: 1 });
+    const candidatesA: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+    // A structurally-identical but distinct object, simulating a fresh
+    // fetchTodayCandidates() call after a wardrobe/log write -- the cache
+    // must not treat this as the same candidate pool just because its
+    // contents happen to match.
+    const candidatesB: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const first = outfitsFor(candidatesA, 5.0, 21, false);
+    const second = outfitsFor(candidatesB, 5.0, 21, false);
+    expect(second).not.toBe(first);
+  });
+
+  it('never serves a cached result when previous is given, even across identical bounds/filter', () => {
+    // The cache is only consulted/populated when previous === null (see
+    // outfitsFor's own doc comment) -- previous's own content, not just
+    // whether one was passed, affects the result (it drives alreadyClaimed),
+    // so a cache keyed only on bounds/filter could otherwise silently serve
+    // a result computed against the WRONG previous.
+    const bottom = item('Pants', { id: 'work-bottom', isWorkAppropriate: true });
+    const top = item('T-Shirt', { id: 'work-top', isWorkAppropriate: true });
+    const shoes = item('Shoes', { id: 'work-shoes', isWorkAppropriate: true });
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const base = outfitsFor(candidates, 5.0, 21, false);
+    const withPreviousA = outfitsFor(candidates, 5.0, 21, true, base);
+    const withPreviousB = outfitsFor(candidates, 5.0, 21, true, base);
+    expect(withPreviousB).not.toBe(withPreviousA);
+  });
+});
+
+describe('outfitsFor workAppropriateOnly', () => {
+  it('excludes items not marked work appropriate when the filter is on', () => {
+    const bottom = item('Pants', { inferredWarmth: 3, inferredWind: 2, isWorkAppropriate: true });
+    const casualTop = item('T-Shirt', { inferredWarmth: 2, inferredWind: 1 });
+    const workTop = item('Shirt', { id: 'work-top', inferredWarmth: 2, inferredWind: 1, isWorkAppropriate: true });
+    const shoes = item('Shoes', { inferredWarmth: 1, inferredWind: 1, isWorkAppropriate: true });
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [casualTop, workTop], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const result = outfitsFor(candidates, 20, 0, true);
+
+    expect(result.hasAnyOutfit).toBe(true);
+    expect(result.shown.every((outfit) => outfit.items.every((i) => i.isWorkAppropriate))).toBe(true);
+    expect(result.shown.some((outfit) => outfit.items.some((i) => i.id === 'work-top'))).toBe(true);
+  });
+
+  it('reports no outfit when nothing in the wardrobe is marked work appropriate', () => {
+    const bottom = item('Pants', { inferredWarmth: 3, inferredWind: 2 });
+    const top = item('T-Shirt', { inferredWarmth: 2, inferredWind: 1 });
+    const shoes = item('Shoes', { inferredWarmth: 1, inferredWind: 1 });
+    const candidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    expect(outfitsFor(candidates, 20, 0, true).hasAnyOutfit).toBe(false);
+    // Confirms the filter is what's excluding them, not some other change --
+    // the same wardrobe builds a real outfit with the filter off.
+    expect(outfitsFor(candidates, 20, 0, false).hasAnyOutfit).toBe(true);
+  });
+});
+
+describe('outfitsFor threads wornDaysAgo into selectBandedOutfits', () => {
+  it('passes todayCandidates.wornDaysAgo through', () => {
+    const wornBag = item('Bag', { id: 'worn-bag' });
+    const freshBag = item('Bag', { id: 'fresh-bag' });
+    const todayCandidates: TodayCandidates = {
+      candidates: emptyCandidates({
+        bottoms: [item('Pants')],
+        tops: [item('T-Shirt')],
+        shoes: [item('Shoes')],
+        bags: [wornBag, freshBag],
+      }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map([['worn-bag', 1]]),
+    };
+
+    const result = outfitsFor(todayCandidates, 20, 0);
+
+    // A single Pants/T-Shirt/Shoes combination -- only the Bag choice can
+    // vary, so this deterministically shows recency is what picked
+    // fresh-bag over worn-bag, not just that fresh-bag happens to appear
+    // somewhere among several outfits.
+    const bagIds = result.shown.flatMap((outfit) => outfit.items.filter((i) => i.category === 'Bag').map((i) => i.id));
+    expect(bagIds).toContain('fresh-bag');
+    expect(bagIds).not.toContain('worn-bag');
+  });
+});
+
+describe('outfitsFor banded recommendations', () => {
+  it('returns up to 6 outfits spanning cooler/median/warmer, not ranked against one single target', () => {
+    const bottoms = Array.from({ length: 6 }, (_, i) => item('Pants', { id: `bottom-${i}`, inferredWarmth: i * 2 }));
+    const tops = Array.from({ length: 6 }, (_, i) => item('T-Shirt', { id: `top-${i}`, inferredWarmth: i }));
+    const shoes = Array.from({ length: 6 }, (_, i) => item('Shoes', { id: `shoes-${i}` }));
+    const todayCandidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms, tops, shoes }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const result = outfitsFor(todayCandidates, 10, 0);
+
+    expect(result.shown.length).toBeGreaterThan(0);
+    expect(result.shown.length).toBeLessThanOrEqual(6);
+  });
+});
+
+describe('outfitsFor preserves already-valid outfits across a work-appropriate toggle', () => {
+  it('keeps the exact same outfit object for a band that was already fully work-appropriate', () => {
+    const workBottom = item('Pants', { id: 'work-bottom', isWorkAppropriate: true });
+    const workTop = item('T-Shirt', { id: 'work-top', isWorkAppropriate: true });
+    const workShoes = item('Shoes', { id: 'work-shoes', isWorkAppropriate: true });
+    const todayCandidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [workBottom], tops: [workTop], shoes: [workShoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const first = outfitsFor(todayCandidates, 20, 0, false);
+    const withFilter = outfitsFor(todayCandidates, 20, 0, true, first);
+
+    // Object identity, not just equal content: proves the preserved outfit
+    // is the exact same reference from `first`, not a recomputed
+    // equivalent that merely happens to match.
+    const firstOutfits = new Set(first.shown);
+    expect(withFilter.shown.some((outfit) => firstOutfits.has(outfit))).toBe(true);
+  });
+
+  it('does not preserve anything when previous is omitted', () => {
+    const bottom = item('Pants', { isWorkAppropriate: true });
+    const top = item('T-Shirt', { isWorkAppropriate: true });
+    const shoes = item('Shoes', { isWorkAppropriate: true });
+    const todayCandidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const result = outfitsFor(todayCandidates, 20, 0, true);
+
+    expect(result.hasAnyOutfit).toBe(true);
+  });
+
+  it('ignores previous when workAppropriateOnly is false', () => {
+    const bottom = item('Pants', { id: 'a', isWorkAppropriate: true });
+    const top = item('T-Shirt', { id: 'b', isWorkAppropriate: true });
+    const shoes = item('Shoes', { id: 'c', isWorkAppropriate: true });
+    const todayCandidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [bottom], tops: [top], shoes: [shoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const first = outfitsFor(todayCandidates, 20, 0, false);
+    const second = outfitsFor(todayCandidates, 20, 0, false, first);
+
+    expect(second.shown.map((o) => o.items.map((i) => i.id))).toEqual(first.shown.map((o) => o.items.map((i) => i.id)));
+  });
+
+  it('only preserves outfits whose every item is work appropriate, not partially-appropriate ones', () => {
+    const workBottom = item('Pants', { id: 'work-bottom', isWorkAppropriate: true });
+    const casualTop = item('T-Shirt', { id: 'casual-top', isWorkAppropriate: false });
+    const workShoes = item('Shoes', { id: 'work-shoes', isWorkAppropriate: true });
+    const todayCandidates: TodayCandidates = {
+      candidates: emptyCandidates({ bottoms: [workBottom], tops: [casualTop], shoes: [workShoes] }),
+      dismatchedKeys: new Set(),
+      wornDaysAgo: new Map(),
+    };
+
+    const first = outfitsFor(todayCandidates, 20, 0, false);
+    // Every outfit in `first` uses the casual Top, so none should survive
+    // the filter -- confirms the isWorkAppropriate check is per-item, not
+    // skipped.
+    const withFilter = outfitsFor(todayCandidates, 20, 0, true, first);
+
+    expect(withFilter.shown.some((outfit) => outfit.items.some((i) => i.id === 'casual-top'))).toBe(false);
+  });
+});

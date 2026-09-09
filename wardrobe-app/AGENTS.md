@@ -44,6 +44,16 @@ Adding a directory that contains `className` means adding it to the `content`
 globs in `tailwind.config.js`. Miss it and the styles are silently absent — no
 error, just an unstyled screen.
 
+## Bottom bars
+
+Any fixed-position bottom action bar (a Save button, a bulk-delete bar, a
+day's outfit sheet on Calendar) must use `components/BottomBar.tsx`, never a
+screen-local `absolute bottom-0 ... p-4`. Flat padding puts the button flush
+against the device edge, under or on top of the home indicator — reported
+against LogOutfitScreen's "Save outfit" button. BottomBar pads for
+`useSafeAreaInsets().bottom` instead, and that is the fundamental rule for
+every future bottom-fixed action, not a per-screen judgement call.
+
 ## Photos
 
 The database stores paths **relative** to the document directory. Never store
@@ -74,6 +84,14 @@ Recordings are deleted in a `finally` and never written to permanent storage.
 The OpenAI key comes from `EXPO_PUBLIC_OPENAI_API_KEY`, which is inlined into
 the bundle in plain text. Fine for a personal build; move it behind a server
 before any distribution. When it is unset the app skips the voice step.
+
+Any other `EXPO_PUBLIC_*` secret follows the same rule: it is a bundle-time
+constant readable by anyone with the build, acceptable only because this app
+is currently built and run by nobody but its own developer.
+`EXPO_PUBLIC_BACKGROUND_REMOVAL_TOKEN` (services/backgroundRemoval.ts) is the
+other instance — it gates a personal LAN/Tailscale-only service, not a
+public one. Before any distribution, every `EXPO_PUBLIC_*` secret has to move
+behind a server that issues short-lived, per-device credentials instead.
 
 ## Categories
 

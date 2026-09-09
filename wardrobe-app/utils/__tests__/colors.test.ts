@@ -3,6 +3,10 @@
 import { ALL_COLORS, canCombineColors, toColorPair, toItemColor } from '../colors';
 
 describe('ALL_COLORS', () => {
+  it('is in alphabetical order, which is how the picker presents it', () => {
+    expect([...ALL_COLORS]).toEqual([...ALL_COLORS].sort());
+  });
+
   it('has no duplicates', () => {
     expect(new Set(ALL_COLORS).size).toBe(ALL_COLORS.length);
   });

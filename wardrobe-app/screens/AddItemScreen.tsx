@@ -13,6 +13,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { PhotoSourceChooser } from '../components/PhotoPicker';
 import type { PreparedImage } from '../services/images';
 import { FramedImage } from '../components/FramedImage';
+import { ItemPhotoBackdrop } from '../components/ItemPhotoBackdrop';
 import { AttributeList, type AttributeField, type AttributeValues } from '../components/AttributeList';
 import { VoiceBar } from '../components/VoiceCapture';
 import { BouncingDots } from '../components/BouncingDots';
@@ -20,9 +21,12 @@ import { createItem } from '../services/itemActions';
 import { withDb } from '../services/database';
 import { isVoiceConfigured, openAIVoicePipeline } from '../services/voice';
 import { estimateWarmth, estimateWind } from '../utils/warmth';
+import { materialPercentsFrom } from '../utils/materials';
+import { parsePurchasedAtMonth } from '../utils/format';
 import type { ItemProposal } from '../utils/proposals';
 import type { RootStackParamList } from '../navigation/types';
 import { useProposalApplier, useImageRefiner, type Stage } from './addItemHooks';
+import { useTodayData } from '../contexts/TodayDataContext';
 
 /** Stable empty set, so the list is not handed a new object on every render when nothing's loading. */
 const EMPTY_FIELDS: ReadonlySet<AttributeField> = new Set();
@@ -67,23 +71,44 @@ function withDefaults(
   return {
     ...values,
     brand: values.brand.trim() || 'Unknown',
+    // The MonthYearField picker only ever writes "" or a well-formed
+    // "YYYY-MM" itself, so parsePurchasedAtMonth returning null here would
+    // mean voice proposed something malformed (see FIELD_SOURCES.purchasedAt
+    // in addItemHooks.ts) — '' (not recorded) is the safe fallback rather
+    // than failing the whole save over one field.
+    purchasedAt: parsePurchasedAtMonth(values.purchasedAt) ?? '',
     hardwareColor: silent.hardwareColor ?? 'None',
     hasBeltLoops: silent.hasBeltLoops ?? false,
     inferredWarmth:
       silent.inferredWarmth ??
-      estimateWarmth(values.category, values.materials, values.sleeveLength, values.length),
+      estimateWarmth(
+        values.category,
+        values.materials.map((m) => m.material),
+        values.sleeveLength,
+        values.length,
+        values.thickness,
+        values.denier,
+        materialPercentsFrom(values.materials),
+        values.backless,
+      ),
     inferredWind:
       silent.inferredWind ??
-      estimateWind(values.category, values.materials, values.sleeveLength, values.length),
+      estimateWind(
+        values.category,
+        values.materials.map((m) => m.material),
+        values.sleeveLength,
+        values.length,
+        values.backless,
+      ),
   };
 }
 
 /** The capture step: a prompt and the photo-source chooser, nothing else yet exists to show. */
 function CapturePrompt({ onPicked }: { onPicked: (image: PreparedImage) => void }) {
   return (
-    <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4">
-      <Text className="text-base font-semibold text-slate-900 mb-1">Add a photo</Text>
-      <Text className="text-sm text-slate-500 mb-5">
+    <ScrollView className="flex-1 bg-paper" contentContainerClassName="p-4">
+      <Text className="text-lg font-sans-medium text-ink mb-1">Add a photo</Text>
+      <Text className="text-sm font-sans text-ink-muted mb-5">
         Every item needs a picture. Photos are stored on this phone only.
       </Text>
       <PhotoSourceChooser onPicked={onPicked} />
@@ -98,19 +123,31 @@ function ComposeHeader({
   refining,
   transcript,
   onReplaceImage,
+  onKeepPlainPhoto,
 }: {
   imageUri: string;
   isFramed: boolean;
   refining: boolean;
   transcript: string | null;
   onReplaceImage: () => void;
+  /**
+   * Discards the background-removal cutout and falls back to the plain crop
+   * -- undefined once there is no cutout to discard (still refining, or
+   * refinement found no removable background). The model sometimes eats part
+   * of a light-coloured garment along with the background it actually meant
+   * to remove; there is no in-app fix for a bad cutout (see backends.py --
+   * segmentation happens on an external service, not here), only a way back
+   * to the version that was never wrong in the first place.
+   */
+  onKeepPlainPhoto?: () => void;
 }) {
   return (
     <View className="flex-row mb-4">
       {/* A third of the width, matching a closet tile. Full width here was
           most of a screen given to a photo the user has just looked at,
           pushing the attributes they came to check below the fold. */}
-      <View className="w-1/3 aspect-[3/4] rounded-xl overflow-hidden bg-white border border-slate-200">
+      <View className="w-1/3 aspect-[3/4] overflow-hidden">
+        <ItemPhotoBackdrop />
         {/* isFramed: a cutout already has background-framer's margin baked
             in server-side; adding FramedImage's own margin on top of that
             would double it. The plain crop shown before refinement finishes
@@ -119,8 +156,8 @@ function ComposeHeader({
         {/* Quiet, and in the corner: the picture is already usable, so this
             says "still improving", not "still loading". */}
         {refining ? (
-          <View className="absolute bottom-1 right-1 bg-white/90 rounded-full px-2 py-1">
-            <BouncingDots color="#64748b" />
+          <View className="absolute bottom-1 right-1 bg-paper/90 rounded-full px-2 py-1">
+            <BouncingDots color="#6B6259" />
           </View>
         ) : null}
       </View>
@@ -129,12 +166,21 @@ function ComposeHeader({
         <Pressable
           onPress={onReplaceImage}
           accessibilityRole="button"
-          className="self-start rounded-lg border border-slate-300 bg-white px-3 py-2"
+          className="self-start rounded-sm border border-rule bg-paper px-3 py-2"
         >
-          <Text className="text-sm font-medium text-slate-700">Replace image</Text>
+          <Text className="text-sm font-sans-medium text-ink-muted">Replace image</Text>
         </Pressable>
+        {isFramed && onKeepPlainPhoto ? (
+          <Pressable
+            onPress={onKeepPlainPhoto}
+            accessibilityRole="button"
+            className="self-start rounded-sm border border-rule bg-paper px-3 py-2 mt-2"
+          >
+            <Text className="text-sm font-sans-medium text-ink-muted">Use plain photo</Text>
+          </Pressable>
+        ) : null}
         {transcript ? (
-          <Text className="text-xs text-slate-500 italic mt-3" numberOfLines={4}>
+          <Text className="text-xs font-sans text-ink-muted italic mt-3" numberOfLines={4}>
             “{transcript}”
           </Text>
         ) : null}
@@ -149,6 +195,7 @@ interface PhotoProps {
   refining: boolean;
   transcript: string | null;
   onReplaceImage: () => void;
+  onKeepPlainPhoto?: () => void;
 }
 
 interface AttributesProps {
@@ -182,7 +229,7 @@ function ComposeView({
 }) {
   return (
     <KeyboardAvoidingView
-      className="flex-1 bg-slate-50"
+      className="flex-1 bg-paper"
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView contentContainerClassName="p-4" keyboardShouldPersistTaps="handled">
@@ -192,6 +239,7 @@ function ComposeView({
           refining={photo.refining}
           transcript={photo.transcript}
           onReplaceImage={photo.onReplaceImage}
+          onKeepPlainPhoto={photo.onKeepPlainPhoto}
         />
         <AttributeList
           values={attributes.values}
@@ -215,6 +263,7 @@ function ComposeView({
 
 export function AddItemScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const { invalidate: invalidateToday } = useTodayData();
   const route = useRoute<RouteProp<RootStackParamList, 'AddItem'>>();
 
   const [stage, setStage] = useState<Stage>({ step: 'capture' });
@@ -245,8 +294,13 @@ export function AddItemScreen() {
     category: route.params?.category ?? 'T-Shirt',
     sleeveLength: 'Short',
     length: '',
+    thickness: 'Regular',
+    denier: 0,
+    backless: false,
     isSecondHand: false,
+    isWorkAppropriate: false,
     materials: [],
+    purchasedAt: '',
   });
   // Warmth, wind, hardware and belt loops are estimates or category-specific
   // details, not questions worth confirming. Applied as heard, editable
@@ -308,13 +362,30 @@ export function AddItemScreen() {
         withDefaults(values, silent),
         { original, processed: cutoutUriRef.current },
       );
+      // A newly added item is a candidate for Today immediately -- see
+      // TodayDataContext's own doc comment for why nothing refreshes its
+      // cached candidate pool on its own.
+      invalidateToday();
       navigation.goBack();
     } catch (e) {
       console.error('Failed to save item:', e);
       Alert.alert('Could not save', 'The item was not added. Please try again.');
       setSaving(false);
     }
-  }, [navigation, silent, values, refinement]);
+  }, [navigation, silent, values, refinement, invalidateToday]);
+
+  // Discards a bad cutout and falls back to the plain crop -- see
+  // ComposeHeader's onKeepPlainPhoto doc comment for why this exists instead
+  // of a fix to the cutout itself. Only meaningful once refinement has
+  // actually produced a cutout (stage.isFramed is the reactive proxy for
+  // that -- see useImageRefiner), so the button that calls this is hidden
+  // until then.
+  const keepPlainPhoto = useCallback(() => {
+    const original = originalUriRef.current;
+    if (!original) return;
+    cutoutUriRef.current = null;
+    setStage({ step: 'compose', imageUri: original, isFramed: false });
+  }, []);
 
   // Save lives in the header rather than the bottom bar, which belongs to the
   // microphone. Two large targets side by side at the bottom edge left neither
@@ -333,7 +404,7 @@ export function AddItemScreen() {
               className="px-2 py-1"
             >
               <Text
-                className={`text-base font-semibold ${saving ? 'text-slate-300' : 'text-slate-900'}`}
+                className={`text-base font-sans-medium ${saving ? 'text-ink-muted/40' : 'text-ink'}`}
               >
                 {saving ? 'Saving…' : 'Save'}
               </Text>
@@ -369,6 +440,7 @@ export function AddItemScreen() {
         refining,
         transcript,
         onReplaceImage: () => setStage({ step: 'capture' }),
+        onKeepPlainPhoto: keepPlainPhoto,
       }}
       attributes={{
         values,

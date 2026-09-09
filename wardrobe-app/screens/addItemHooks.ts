@@ -46,6 +46,13 @@ const FIELD_SOURCES: Record<AttributeField, (p: ItemProposal) => Partial<Attribu
   category: (p) => (p.category === undefined ? null : { category: p.category }),
   sleeveLength: (p) => (p.sleeveLength === undefined ? null : { sleeveLength: p.sleeveLength }),
   length: (p) => (p.length === undefined ? null : { length: p.length }),
+  // Not yet requested by services/voice.ts's extraction schema — see
+  // ItemProposal's own doc comment in utils/proposals.ts — so p.thickness/
+  // denier/backless are always undefined today; these rows just never show
+  // as "heard" until that schema changes, same as any other unasked field.
+  thickness: (p) => (p.thickness === undefined ? null : { thickness: p.thickness }),
+  denier: (p) => (p.denier === undefined ? null : { denier: p.denier }),
+  backless: (p) => (p.backless === undefined ? null : { backless: p.backless }),
   brand: (p) => (p.brand === undefined ? null : { brand: p.brand }),
   cost: (p) => (p.costMinorUnits === undefined ? null : { costMinorUnits: p.costMinorUnits }),
   colors: (p) =>
@@ -53,7 +60,19 @@ const FIELD_SOURCES: Record<AttributeField, (p: ItemProposal) => Partial<Attribu
       ? null
       : { primaryColor: p.primaryColor, secondaryColor: p.secondaryColor ?? '' },
   isSecondHand: (p) => (p.isSecondHand === undefined ? null : { isSecondHand: p.isSecondHand }),
-  materials: (p) => (p.materials === undefined ? null : { materials: p.materials }),
+  // Never voice-proposed -- see isWorkAppropriate's own doc comment in
+  // types/wardrobe.ts. Always null so the row never shows as "heard".
+  isWorkAppropriate: () => null,
+  // Voice identifies which materials, never a percentage of each — see
+  // ItemProposal's own doc comment in utils/proposals.ts, the same gap
+  // thickness/denier/backless have. percent: 0, "not recorded", same as a
+  // manually-picked material with no percentage typed in yet.
+  materials: (p) =>
+    p.materials === undefined ? null : { materials: p.materials.map((material) => ({ material, percent: 0 })) },
+  // See extractionInstructions in services/voice.ts -- the model computes a
+  // "YYYY-MM" relative to today's date from a stated or implied timeframe
+  // ("a couple of years ago"), which utils/proposals.ts has already validated.
+  purchasedAt: (p) => (p.purchasedAt === undefined ? null : { purchasedAt: p.purchasedAt }),
 };
 
 /**

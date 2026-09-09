@@ -5,7 +5,7 @@
  * without a running server and a device — see services/backgroundRemoval.ts.
  */
 /* global describe, it, expect */
-import { readBackgroundRemovalUrl } from '../backgroundRemoval';
+import { readBackgroundRemovalToken, readBackgroundRemovalUrl } from '../backgroundRemoval';
 
 describe('readBackgroundRemovalUrl', () => {
   it('reads a URL that is set', () => {
@@ -30,5 +30,17 @@ describe('readBackgroundRemovalUrl', () => {
     expect(readBackgroundRemovalUrl({})).toBeNull();
     expect(readBackgroundRemovalUrl({ EXPO_PUBLIC_BACKGROUND_REMOVAL_URL: '' })).toBeNull();
     expect(readBackgroundRemovalUrl({ EXPO_PUBLIC_BACKGROUND_REMOVAL_URL: '   ' })).toBeNull();
+  });
+});
+
+describe('readBackgroundRemovalToken', () => {
+  it('reads a token that is set and trims whitespace', () => {
+    expect(readBackgroundRemovalToken({ EXPO_PUBLIC_BACKGROUND_REMOVAL_TOKEN: '  abc123  ' })).toBe('abc123');
+  });
+
+  it('treats unset and empty as not configured, so no header is sent', () => {
+    expect(readBackgroundRemovalToken({})).toBeNull();
+    expect(readBackgroundRemovalToken({ EXPO_PUBLIC_BACKGROUND_REMOVAL_TOKEN: '' })).toBeNull();
+    expect(readBackgroundRemovalToken({ EXPO_PUBLIC_BACKGROUND_REMOVAL_TOKEN: '   ' })).toBeNull();
   });
 });

@@ -145,6 +145,17 @@ describe('estimateWarmth / estimateWind', () => {
       expect(Number.isInteger(estimateWind(category, ['Wool', 'Silk']))).toBe(true);
     }
   });
+
+  it('rates Faux Leather as wind-blocking as real Leather but with none of its warmth', () => {
+    expect(estimateWind('Jacket', ['Faux Leather'])).toBe(estimateWind('Jacket', ['Leather']));
+    expect(estimateWarmth('Jacket', ['Faux Leather'])).toBeLessThan(estimateWarmth('Jacket', ['Leather']));
+    expect(estimateWarmth('Jacket', ['Faux Leather'])).toBe(estimateWarmth('Jacket', []));
+  });
+
+  it('rates Polyamide identically to Nylon — the same fibre under a different name', () => {
+    expect(estimateWind('Pants', ['Polyamide'])).toBe(estimateWind('Pants', ['Nylon']));
+    expect(estimateWarmth('Pants', ['Polyamide'])).toBe(estimateWarmth('Pants', ['Nylon']));
+  });
 });
 
 describe('regression: a sleeveless polyester Top must not score as warm', () => {
@@ -238,6 +249,105 @@ describe('garment length', () => {
     const base = estimateWarmth('Pants', ['Silk'], 'Short', 'Cropped');
     expect(estimateWarmth('Pants', ['Silk'], 'Short', 'Long')).toBeGreaterThan(base);
     expect(estimateWarmth('Pants', ['Silk'], 'Short', 'Short')).toBeLessThan(base);
+  });
+
+  it("Leggings reuses Pants' and Skirt's own length values rather than scoring differently", () => {
+    // See LeggingsLength's own doc comment in types/wardrobe.ts for why the
+    // shared values (not four new table entries) are deliberate.
+    expect(estimateWarmth('Leggings', [], 'Short', 'Short')).toBeLessThan(
+      estimateWarmth('Leggings', [], 'Short', 'Long'),
+    );
+  });
+});
+
+describe('thickness', () => {
+  it('rates a heavier thickness warmer than a lighter one, all else equal', () => {
+    const mesh = estimateWarmth('Sweater', [], 'Short', '', 'Mesh');
+    const regular = estimateWarmth('Sweater', [], 'Short', '', 'Regular');
+    const heavy = estimateWarmth('Sweater', [], 'Short', '', 'Heavy');
+    expect(mesh).toBeLessThan(regular);
+    expect(heavy).toBeGreaterThan(regular);
+  });
+
+  it("'Regular' is neutral — omitting thickness behaves exactly like 'Regular'", () => {
+    expect(estimateWarmth('Sweater', ['Wool'])).toBe(estimateWarmth('Sweater', ['Wool'], 'Short', '', 'Regular'));
+  });
+
+  // estimateWind has no thickness parameter at all -- see
+  // THICKNESS_WARMTH_ADJUSTMENT's own doc comment for why this is
+  // warmth-only -- so there is no call shape to test wind against.
+
+  it('adds on top of the dominant material rather than competing with it', () => {
+    // Jacket, not Sweater: Sweater's own baseline+Wool already sits at its
+    // category ceiling, leaving no headroom to show Heavy adding anything on
+    // top of it.
+    const base = estimateWarmth('Jacket', ['Wool'], 'Short', '', 'Regular');
+    expect(estimateWarmth('Jacket', ['Wool'], 'Short', '', 'Heavy')).toBeGreaterThan(base);
+    expect(estimateWarmth('Jacket', ['Wool'], 'Short', '', 'Mesh')).toBeLessThan(base);
+  });
+
+  it('still clamps to the category ceiling even at Heavy', () => {
+    expect(estimateWarmth('Top', ['Down'], 'Long', '', 'Heavy')).toBeLessThanOrEqual(
+      estimateWarmth('Top', [...ALL_MATERIALS]),
+    );
+  });
+});
+
+describe('denier', () => {
+  it('rates a higher denier warmer than a lower one', () => {
+    const sheer = estimateWarmth('Tights', [], 'Short', '', 'Regular', 20);
+    const opaque = estimateWarmth('Tights', [], 'Short', '', 'Regular', 100);
+    const fleeceLined = estimateWarmth('Tights', [], 'Short', '', 'Regular', 270);
+    expect(opaque).toBeGreaterThan(sheer);
+    expect(fleeceLined).toBeGreaterThan(opaque);
+  });
+
+  it('0 (not recorded) is neutral — omitting denier behaves exactly like 0', () => {
+    expect(estimateWarmth('Tights', [])).toBe(estimateWarmth('Tights', [], 'Short', '', 'Regular', 0));
+  });
+
+  it('clamps below 5 and above 270 rather than extrapolating past the real range', () => {
+    expect(estimateWarmth('Tights', [], 'Short', '', 'Regular', 1)).toBe(
+      estimateWarmth('Tights', [], 'Short', '', 'Regular', 5),
+    );
+    expect(estimateWarmth('Tights', [], 'Short', '', 'Regular', 500)).toBe(
+      estimateWarmth('Tights', [], 'Short', '', 'Regular', 270),
+    );
+  });
+
+  // estimateWind has no denier parameter at all -- see
+  // denierWarmthAdjustment's own doc comment for why this is warmth-only --
+  // so there is no call shape to test wind against.
+
+  it('a wool-blend tight is warmer than a pure-synthetic one at the same denier', () => {
+    // The reported gap this whole feature exists to close: a 270D synthetic
+    // pair and a 270D wool-blend pair are not equally warm -- denier's own
+    // contribution caps below the category ceiling specifically so Wool's
+    // material adjustment (see MATERIAL_WARMTH_ADJUSTMENT) still has real
+    // room to add on top, not so it's already clamped away.
+    const pureSynthetic = estimateWarmth('Tights', [], 'Short', '', 'Regular', 270);
+    const woolBlend = estimateWarmth('Tights', ['Wool'], 'Short', '', 'Regular', 270);
+    expect(woolBlend).toBeGreaterThan(pureSynthetic);
+  });
+});
+
+describe('backless', () => {
+  it('rates a backless Top or Dress cooler than the same garment with a back', () => {
+    const covered = estimateWarmth('Top', ['Cotton'], 'Long', '', 'Heavy');
+    const backless = estimateWarmth('Top', ['Cotton'], 'Long', '', 'Heavy', 0, {}, true);
+    expect(backless).toBeLessThan(covered);
+  });
+
+  it('false (default) is neutral — omitting backless behaves exactly like false', () => {
+    expect(estimateWarmth('Dress', ['Wool'])).toBe(
+      estimateWarmth('Dress', ['Wool'], 'Short', '', 'Regular', 0, {}, false),
+    );
+  });
+
+  it('reduces wind resistance too', () => {
+    const covered = estimateWind('Top', ['Nylon'], 'Long');
+    const backless = estimateWind('Top', ['Nylon'], 'Long', '', true);
+    expect(backless).toBeLessThan(covered);
   });
 });
 

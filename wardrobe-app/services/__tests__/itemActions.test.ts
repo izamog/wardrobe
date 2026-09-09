@@ -8,9 +8,11 @@
  */
 import { DatabaseSync } from 'node:sqlite';
 import { runMigrations, type MigratableDatabase } from '../migrations';
-import { getItem, insertItem, type ItemsDatabase } from '../items';
+import { archiveItems, getItem, insertItem, listArchivedItems, type ItemsDatabase } from '../items';
 import {
   createItem,
+  editItemImage,
+  purgeExpiredArchivedItems,
   removeItem,
   replaceItemImage,
   type ImageStore,
@@ -123,11 +125,16 @@ const draft: ItemDraft = {
   brand: 'Unknown',
   costMinorUnits: 0,
   isSecondHand: false,
+  isWorkAppropriate: false,
+  purchasedAt: '',
   materials: [],
   hardwareColor: 'None',
   hasBeltLoops: false,
   sleeveLength: 'Short',
   length: '',
+  thickness: 'Regular',
+  denier: 0,
+  backless: false,
   inferredWarmth: 0,
   inferredWind: 0,
 };
@@ -136,9 +143,11 @@ const storedItem = (overrides: Partial<ClothingItem> = {}): ClothingItem => ({
   id: 'item-1',
   imagePath: 'items/item-1-0.jpg',
   originalImagePath: 'items/item-1-0.jpg',
+  imageMarginBaked: false,
   ...draft,
   wearCount: 0,
   createdAt: 'then',
+  archivedAt: '',
   ...overrides,
 });
 
@@ -286,7 +295,7 @@ describe('removeItem', () => {
   it('deletes the row before the files', async () => {
     const { runQuery, db } = await freshRunQuery();
     const images = fakeImages();
-    await insertItem(db, { ...draft, imagePath: 'items/a.jpg', originalImagePath: 'items/a.jpg' }, 'item-1', 'then');
+    await insertItem(db, { ...draft, imagePath: 'items/a.jpg', originalImagePath: 'items/a.jpg', imageMarginBaked: false }, 'item-1', 'then');
 
     await removeItem({ runQuery, images: images.store }, storedItem({ imagePath: 'items/a.jpg', originalImagePath: 'items/a.jpg' }));
 
@@ -342,7 +351,7 @@ describe('replaceItemImage', () => {
   it('repoints the row at a new path and removes the old file', async () => {
     const { runQuery, db } = await freshRunQuery();
     const images = fakeImages();
-    await insertItem(db, { ...draft, imagePath: 'items/old.jpg', originalImagePath: 'items/old.jpg' }, 'item-1', 'then');
+    await insertItem(db, { ...draft, imagePath: 'items/old.jpg', originalImagePath: 'items/old.jpg', imageMarginBaked: false }, 'item-1', 'then');
 
     await replaceItemImage(
       { runQuery, images: images.store, removeBackground: fakeRemoveBackground(null) },
@@ -372,7 +381,7 @@ describe('replaceItemImage', () => {
   it('stores a successful cutout as imagePath, keeping the plain photo as originalImagePath', async () => {
     const { runQuery, db } = await freshRunQuery();
     const images = fakeImages();
-    await insertItem(db, { ...draft, imagePath: 'items/old.jpg', originalImagePath: 'items/old.jpg' }, 'item-1', 'then');
+    await insertItem(db, { ...draft, imagePath: 'items/old.jpg', originalImagePath: 'items/old.jpg', imageMarginBaked: false }, 'item-1', 'then');
 
     await replaceItemImage(
       {
@@ -402,5 +411,116 @@ describe('replaceItemImage', () => {
 
     expect(images.removed).toEqual(['items/item-1-0.jpg']);
     expect(images.removed).not.toContain('items/old.jpg');
+  });
+});
+
+describe('editItemImage', () => {
+  it('repoints imagePath at the new file and removes the old one, leaving originalImagePath untouched', async () => {
+    const { runQuery, db } = await freshRunQuery();
+    const images = fakeImages();
+    await insertItem(
+      db,
+      { ...draft, imagePath: 'items/old.jpg', originalImagePath: 'items/original.jpg', imageMarginBaked: false },
+      'item-1',
+      'then',
+    );
+
+    await editItemImage(
+      { runQuery, images: images.store },
+      storedItem({ imagePath: 'items/old.jpg', originalImagePath: 'items/original.jpg' }),
+      'file:///tmp/flipped.jpg',
+    );
+
+    const stored = await getItem(db, 'item-1');
+    expect(stored?.imagePath).toBe('items/item-1-0.jpg');
+    expect(stored?.originalImagePath).toBe('items/original.jpg');
+    expect(images.removed).toEqual(['items/old.jpg']);
+  });
+
+  it('persists with a .png extension when the current imagePath is a cutout', async () => {
+    const { runQuery } = await freshRunQuery();
+    const images = fakeImages();
+
+    await editItemImage(
+      { runQuery, images: images.store },
+      storedItem({ imagePath: 'items/old.png', originalImagePath: 'items/original.jpg' }),
+      'file:///tmp/cropped.png',
+    );
+
+    expect(images.persisted).toEqual(['items/item-1-0.png']);
+  });
+
+  it('discards the new file and keeps the old one when the update fails', async () => {
+    const images = fakeImages();
+
+    await expect(
+      editItemImage(
+        { runQuery: failingRunQuery, images: images.store },
+        storedItem({ imagePath: 'items/old.jpg', originalImagePath: 'items/original.jpg' }),
+        'file:///tmp/flipped.jpg',
+      ),
+    ).rejects.toThrow('database is locked');
+
+    expect(images.removed).toEqual(['items/item-1-0.jpg']);
+    expect(images.removed).not.toContain('items/old.jpg');
+  });
+});
+
+describe('purgeExpiredArchivedItems', () => {
+  const NOW = new Date('2026-08-20T00:00:00.000Z');
+
+  it('permanently deletes an item archived over 30 days ago, row and files both', async () => {
+    const { runQuery, db } = await freshRunQuery();
+    const images = fakeImages();
+    await insertItem(
+      db,
+      { ...draft, imagePath: 'items/old-0.jpg', originalImagePath: 'items/old-0.jpg', imageMarginBaked: false },
+      'item-1',
+      'then',
+    );
+    await archiveItems(db, ['item-1'], '2026-07-01T00:00:00.000Z');
+
+    const purged = await purgeExpiredArchivedItems({ runQuery, images: images.store }, NOW);
+
+    expect(purged).toBe(1);
+    expect(await getItem(db, 'item-1')).toBeNull();
+    expect(images.removed).toEqual(['items/old-0.jpg']);
+  });
+
+  it('leaves an item archived less than 30 days ago untouched', async () => {
+    const { runQuery, db } = await freshRunQuery();
+    const images = fakeImages();
+    await insertItem(db, { ...draft, imagePath: '', originalImagePath: '', imageMarginBaked: false }, 'item-1', 'then');
+    await archiveItems(db, ['item-1'], '2026-08-10T00:00:00.000Z');
+
+    const purged = await purgeExpiredArchivedItems({ runQuery, images: images.store }, NOW);
+
+    expect(purged).toBe(0);
+    expect(await getItem(db, 'item-1')).not.toBeNull();
+    expect(images.removed).toEqual([]);
+  });
+
+  it('leaves an ordinary, unarchived item untouched', async () => {
+    const { runQuery, db } = await freshRunQuery();
+    const images = fakeImages();
+    await insertItem(db, { ...draft, imagePath: '', originalImagePath: '', imageMarginBaked: false }, 'item-1', 'then');
+
+    const purged = await purgeExpiredArchivedItems({ runQuery, images: images.store }, NOW);
+
+    expect(purged).toBe(0);
+    expect(await getItem(db, 'item-1')).not.toBeNull();
+  });
+
+  it('purges every expired item, not just the first', async () => {
+    const { runQuery, db } = await freshRunQuery();
+    const images = fakeImages();
+    await insertItem(db, { ...draft, imagePath: '', originalImagePath: '', imageMarginBaked: false }, 'item-1', 'then');
+    await insertItem(db, { ...draft, imagePath: '', originalImagePath: '', imageMarginBaked: false }, 'item-2', 'then');
+    await archiveItems(db, ['item-1', 'item-2'], '2026-01-01T00:00:00.000Z');
+
+    const purged = await purgeExpiredArchivedItems({ runQuery, images: images.store }, NOW);
+
+    expect(purged).toBe(2);
+    expect(await listArchivedItems(db)).toEqual([]);
   });
 });

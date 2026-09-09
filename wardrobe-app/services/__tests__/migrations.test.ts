@@ -112,12 +112,14 @@ describe('v1 -> v2: widening the category constraint', () => {
       id: 'x',
       imagePath: 'items/a.png',
       originalImagePath: 'items/a.png',
+      imageMarginBaked: 0,
       primaryColor: '',
       secondaryColor: '',
       category: 'Pants',
       brand: 'Levis',
       costMinorUnits: 4599,
       isSecondHand: 1,
+      purchasedAt: '',
       materials: '["cotton"]',
       hardwareColor: 'Silver',
       hasBeltLoops: 1,
@@ -127,6 +129,11 @@ describe('v1 -> v2: widening the category constraint', () => {
       createdAt: 'then',
       sleeveLength: 'Short',
       length: '',
+      thickness: 'Regular',
+      denier: 0,
+      backless: 0,
+      archivedAt: '',
+      isWorkAppropriate: 0,
     });
   });
 

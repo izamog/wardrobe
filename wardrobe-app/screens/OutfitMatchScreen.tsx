@@ -29,9 +29,9 @@ type Stage =
 
 function CaptureStep({ onPicked }: { onPicked: (image: PickedImage) => void }) {
   return (
-    <ScrollView className="flex-1 bg-slate-50" contentContainerClassName="p-4">
-      <Text className="text-base font-semibold text-slate-900 mb-1">Match from a photo</Text>
-      <Text className="text-sm text-slate-500 mb-5">
+    <ScrollView className="flex-1 bg-paper" contentContainerClassName="p-4">
+      <Text className="text-lg font-sans-medium text-ink mb-1">Match from a photo</Text>
+      <Text className="text-sm font-sans text-ink-muted mb-5">
         Take a mirror photo of an outfit. Closet items it recognises are offered as matches —
         nothing is saved until you confirm.
       </Text>
@@ -42,16 +42,16 @@ function CaptureStep({ onPicked }: { onPicked: (image: PickedImage) => void }) {
 
 function AnalyzingStep() {
   return (
-    <View className="flex-1 items-center justify-center bg-slate-50">
+    <View className="flex-1 items-center justify-center bg-paper">
       <ActivityIndicator />
-      <Text className="text-slate-500 mt-3">Identifying items…</Text>
+      <Text className="text-ink-muted font-sans mt-3">Identifying items…</Text>
     </View>
   );
 }
 
 function EmptyStep({ onRetry }: { onRetry: () => void }) {
   return (
-    <View className="flex-1 bg-slate-50">
+    <View className="flex-1 bg-paper">
       <EmptyState
         title="Nothing recognised"
         detail="No closet items were identified in that photo. Try a clearer shot, or rate pairs by hand instead."
@@ -60,23 +60,23 @@ function EmptyStep({ onRetry }: { onRetry: () => void }) {
         <Pressable
           onPress={onRetry}
           accessibilityRole="button"
-          className="rounded-xl py-3.5 items-center bg-slate-900"
+          className="rounded-sm py-3.5 items-center bg-ink"
         >
-          <Text className="text-white font-semibold">Try another photo</Text>
+          <Text className="text-paper font-sans-medium">Try another photo</Text>
         </Pressable>
       </View>
     </View>
   );
 }
 
-/** A read-only thumbnail — unlike ItemTile, nothing here is tappable. */
+/** A read-only thumbnail — unlike an ItemGrid cell, nothing here is tappable. */
 function IdentifiedThumbnail({ item }: { item: ClothingItem }) {
   return (
     <View className="w-1/4 p-1">
-      <View className="aspect-[3/4] rounded-lg overflow-hidden bg-white border border-slate-200">
-        <StoredImage path={item.imagePath} placeholder="No photo" />
+      <View className="aspect-[3/4] overflow-hidden bg-paper">
+        <StoredImage path={item.imagePath} hasBakedMargin={item.imageMarginBaked} placeholder="No photo" />
       </View>
-      <Text className="text-xs text-slate-500 mt-1" numberOfLines={1}>
+      <Text className="text-xs font-brand tracking-wide text-ink-muted mt-1" numberOfLines={1}>
         {item.brand}
       </Text>
     </View>
@@ -97,27 +97,27 @@ function PairRow({
       onPress={onToggle}
       accessibilityRole="checkbox"
       accessibilityState={{ checked: selected }}
-      className={`flex-row items-center rounded-xl border p-2 mb-2 ${
-        selected ? 'bg-emerald-50 border-emerald-300' : 'bg-white border-slate-200'
+      className={`flex-row items-center rounded-sm border p-2 mb-2 ${
+        selected ? 'bg-paper-2 border-accent-muted' : 'bg-paper border-rule'
       }`}
     >
-      <View className="w-10 h-14 rounded-lg overflow-hidden bg-slate-100 mr-2">
-        <StoredImage path={pair.a.imagePath} placeholder="" />
+      <View className="w-10 h-14 rounded-lg overflow-hidden bg-paper-2 mr-2">
+        <StoredImage path={pair.a.imagePath} hasBakedMargin={pair.a.imageMarginBaked} placeholder="" />
       </View>
-      <View className="w-10 h-14 rounded-lg overflow-hidden bg-slate-100 mr-3">
-        <StoredImage path={pair.b.imagePath} placeholder="" />
+      <View className="w-10 h-14 rounded-lg overflow-hidden bg-paper-2 mr-3">
+        <StoredImage path={pair.b.imagePath} hasBakedMargin={pair.b.imageMarginBaked} placeholder="" />
       </View>
       <View className="flex-1">
-        <Text className="text-sm font-semibold text-slate-900" numberOfLines={1}>
+        <Text className="text-sm font-brand tracking-wide text-ink" numberOfLines={1}>
           {pair.a.brand} + {pair.b.brand}
         </Text>
-        <Text className="text-xs text-slate-500">
+        <Text className="text-xs font-sans text-ink-muted">
           {pair.a.category} · {pair.b.category}
         </Text>
       </View>
       <View
         className={`w-6 h-6 rounded-full items-center justify-center ${
-          selected ? 'bg-emerald-600' : 'bg-slate-200'
+          selected ? 'bg-accent' : 'bg-rule'
         }`}
       >
         {selected ? <Ionicons name="checkmark" size={14} color="#ffffff" /> : null}
@@ -129,7 +129,7 @@ function PairRow({
 function IdentifiedSection({ identified }: { identified: ClothingItem[] }) {
   return (
     <>
-      <Text className="text-sm font-semibold text-slate-900 mb-2">
+      <Text className="text-sm font-sans-medium text-ink mb-2">
         Identified {identified.length} {identified.length === 1 ? 'item' : 'items'}
       </Text>
       <View className="flex-row flex-wrap -mx-1 mb-4">
@@ -152,7 +152,7 @@ function ProposedMatchesSection({
 }) {
   if (pairs.length === 0) {
     return (
-      <Text className="text-sm text-slate-500">
+      <Text className="text-sm font-sans text-ink-muted">
         No new pairs to propose — every combination here is already rated.
       </Text>
     );
@@ -160,7 +160,7 @@ function ProposedMatchesSection({
 
   return (
     <>
-      <Text className="text-sm font-semibold text-slate-900 mb-2">
+      <Text className="text-sm font-sans-medium text-ink mb-2">
         Proposed matches — tap one to leave it out
       </Text>
       {pairs.map((pair) => (
@@ -198,23 +198,23 @@ function ConfirmStep({
   const insets = useSafeAreaInsets();
 
   return (
-    <View className="flex-1 bg-slate-50">
+    <View className="flex-1 bg-paper">
       <ScrollView contentContainerClassName="p-4">
         <IdentifiedSection identified={identified} />
         <ProposedMatchesSection pairs={pairs} selectedKeys={selectedKeys} onToggle={onToggle} />
       </ScrollView>
 
       <View
-        className="p-4 bg-white border-t border-slate-200"
+        className="p-4 bg-paper"
         style={{ paddingBottom: Math.max(16, insets.bottom + 12) }}
       >
         <Pressable
           onPress={onConfirm}
           disabled={confirmDisabled}
           accessibilityRole="button"
-          className={`rounded-xl py-3.5 items-center ${confirmDisabled ? 'bg-slate-300' : 'bg-emerald-600'}`}
+          className={`rounded-sm py-3.5 items-center ${confirmDisabled ? 'bg-rule' : 'bg-accent'}`}
         >
-          <Text className="text-white font-semibold">
+          <Text className="text-paper font-sans-medium">
             {saving
               ? 'Saving…'
               : `Confirm ${selectedKeys.size} ${selectedKeys.size === 1 ? 'match' : 'matches'}`}

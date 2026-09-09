@@ -6,12 +6,17 @@ const item = (id: string, category: Category = 'Top'): ClothingItem => ({
   id,
   imagePath: '',
   originalImagePath: '',
+    imageMarginBaked: false,
+    thickness: 'Regular',
+    denier: 0,
+    backless: false,
   primaryColor: '',
   secondaryColor: '',
   category,
   brand: id,
   costMinorUnits: 0,
   isSecondHand: false,
+  purchasedAt: '',
   materials: [],
   hardwareColor: 'None',
   hasBeltLoops: false,
@@ -21,6 +26,8 @@ const item = (id: string, category: Category = 'Top'): ClothingItem => ({
   inferredWind: 0,
   wearCount: 0,
   createdAt: 'now',
+  archivedAt: '',
+  isWorkAppropriate: false,
 });
 
 describe('selectOutfitCandidates', () => {

@@ -1,0 +1,82 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "CMD=$(cat | jq -r '.tool_input.command // empty' 2>/dev/null); printf '%s' \"$CMD\" | tr ';&|' '\\n\\n\\n' | grep -qE '^[[:space:]]*git[[:space:]]+commit\\b' || exit 0; BASE=$(git merge-base main HEAD 2>/dev/null || git rev-parse HEAD); git diff --quiet \"$BASE\" -- wardrobe-app background-framer ':!*.md' 2>/dev/null && exit 0; HASH=$(git diff \"$BASE\" -- wardrobe-app background-framer ':!*.md' 2>/dev/null | shasum -a 256 | cut -d' ' -f1); STORED=$(cat .claude/.last-verified-hash 2>/dev/null || echo ''); if [ \"$HASH\" = \"$STORED\" ]; then exit 0; fi; echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"wardrobe-app/ or background-framer/ source changed since the last passing verifier run. Dispatch the verifier agent before committing.\"}}'",
+            "timeout": 10,
+            "statusMessage": "Checking verifier sentinel before commit"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh pr create*)",
+            "command": "CMD=$(cat | jq -r '.tool_input.command // empty' 2>/dev/null); printf '%s' \"$CMD\" | tr ';&|' '\\n\\n\\n' | grep -qE '^[[:space:]]*gh[[:space:]]+pr[[:space:]]+create\\b' || exit 0; BASE=$(git merge-base main HEAD 2>/dev/null || git rev-parse HEAD); git diff --quiet \"$BASE\" -- wardrobe-app background-framer ':!*.md' 2>/dev/null && exit 0; HASH=$(git diff \"$BASE\" -- wardrobe-app background-framer ':!*.md' 2>/dev/null | shasum -a 256 | cut -d' ' -f1); STORED=$(cat .claude/.last-verified-hash 2>/dev/null || echo ''); if [ \"$HASH\" = \"$STORED\" ]; then exit 0; fi; echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"wardrobe-app/ or background-framer/ source changed since the last passing verifier run. Dispatch verifier (and repo-reviewer, since this opens a PR) before opening it.\"}}'",
+            "timeout": 10,
+            "statusMessage": "Checking verifier sentinel before PR"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "verity analyze",
+            "timeout": 120,
+            "statusMessage": "Running Verity analysis"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "verity intent capture"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "verity baseline capture"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "verity compact"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "verity session end"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -164,3 +164,75 @@ export function cropRectFor(
     height: Math.round(height),
   };
 }
+
+/**
+ * How much to trim off each edge of a photo, as a fraction (0-1) of the
+ * image's width (left/right) or height (top/bottom) — what the manual crop
+ * screen's sliders speak, so a bad background-removal edge can be trimmed
+ * away by hand when the automatic crop above wasn't clean.
+ */
+export interface EdgeInsets {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+/** No trim on any edge — the manual crop screen's starting point. */
+export const NO_INSETS: EdgeInsets = { top: 0, bottom: 0, left: 0, right: 0 };
+
+/**
+ * Highest a single inset slider goes.
+ *
+ * Below 0.5: two opposite insets (top+bottom, or left+right) each capped here
+ * can sum to at most 2 * MAX_INSET, and MAX_INSET itself is kept comfortably
+ * under 0.5 so that sum can never reach 1 and leave nothing to crop to.
+ */
+export const MAX_INSET = 0.4;
+
+/**
+ * Converts edge insets into a crop rectangle, clamping each one to
+ * [0, MAX_INSET] first — untrusted input from a slider a user could in
+ * principle drag past its own bounds (or a stale value from before an image
+ * was replaced) must never be allowed to produce a zero or negative-size
+ * rectangle.
+ *
+ * Unlike cropRectFor, there is no "null means the whole photo" case: insets
+ * of all zero already mean that, so NO_INSETS is the caller's equivalent.
+ */
+export function cropRectFromInsets(
+  insets: EdgeInsets,
+  imageWidth: number,
+  imageHeight: number,
+): CropRect {
+  if (
+    !Number.isFinite(imageWidth) ||
+    !Number.isFinite(imageHeight) ||
+    imageWidth <= 0 ||
+    imageHeight <= 0
+  ) {
+    return { originX: 0, originY: 0, width: 0, height: 0 };
+  }
+
+  // Number.isFinite guards NaN specifically: Math.max/Math.min both propagate
+  // NaN rather than clamping it (Math.max(0, NaN) is NaN, not 0), so without
+  // this a non-finite slider value would flow straight through into the
+  // rectangle instead of being treated as "no inset".
+  const clamp = (value: number) => (Number.isFinite(value) ? Math.min(MAX_INSET, Math.max(0, value)) : 0);
+  const top = clamp(insets.top);
+  const bottom = clamp(insets.bottom);
+  const left = clamp(insets.left);
+  const right = clamp(insets.right);
+
+  const originX = left * imageWidth;
+  const originY = top * imageHeight;
+  const width = imageWidth * (1 - left - right);
+  const height = imageHeight * (1 - top - bottom);
+
+  return {
+    originX: Math.round(originX),
+    originY: Math.round(originY),
+    width: Math.round(width),
+    height: Math.round(height),
+  };
+}

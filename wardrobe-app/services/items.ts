@@ -6,8 +6,12 @@ import {
   GarmentLength,
   HardwareColor,
   ItemColor,
+  MaterialEntry,
   SleeveLength,
+  Thickness,
 } from '../types/wardrobe';
+import { MAX_MATERIALS } from '../utils/proposals';
+import { daysBetween, isValidDateString } from '../utils/date';
 
 /**
  * The slice of a database connection this module needs.
@@ -38,10 +42,12 @@ interface ClothingItemRow {
   id: string;
   imagePath: string;
   originalImagePath: string;
+  imageMarginBaked: number;
   category: string;
   brand: string;
   costMinorUnits: number;
   isSecondHand: number;
+  purchasedAt: string;
   materials: string;
   primaryColor: string;
   secondaryColor: string;
@@ -49,10 +55,15 @@ interface ClothingItemRow {
   hasBeltLoops: number;
   sleeveLength: string;
   length: string;
+  thickness: string;
+  denier: number;
+  backless: number;
   inferredWarmth: number;
   inferredWind: number;
   wearCount: number;
   createdAt: string;
+  archivedAt: string;
+  isWorkAppropriate: number;
 }
 
 /**
@@ -73,18 +84,96 @@ function parseStringArrayColumn(raw: string): string[] {
   }
 }
 
+/**
+ * Decodes the materials column, tolerating both the current
+ * `{material, percent}[]` shape and a plain `string[]` — every row written
+ * before material percentages existed is the latter, and there is no
+ * migration rewriting them (see MaterialEntry's own doc comment in
+ * types/wardrobe.ts): a legacy plain-string entry decodes as
+ * `{material: entry, percent: 0}`, "not recorded", the same as any other
+ * item whose percentage was simply never filled in. Also tolerates anything
+ * that isn't actually a well-formed array of either shape, the same
+ * resilience parseStringArrayColumn gives itemIds — a bad write (or a
+ * future migration) leaving something else in a TEXT column is not a
+ * reason to fail the whole closet screen.
+ */
+function decodeMaterials(raw: string): MaterialEntry[] {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const entries: MaterialEntry[] = [];
+    for (const entry of parsed) {
+      if (typeof entry === 'string') {
+        entries.push({ material: entry, percent: 0 });
+      } else if (
+        typeof entry === 'object' &&
+        entry !== null &&
+        typeof (entry as { material?: unknown }).material === 'string'
+      ) {
+        const rawPercent = (entry as { percent?: unknown }).percent;
+        // Clamped and rounded rather than rejected outright, same tolerance
+        // the rest of this function gives a malformed row: a corrupted or
+        // out-of-range percent (NaN, negative, >100, a stray float) must not
+        // reach materialAdjustment's weighted average in utils/warmth.ts,
+        // but the material itself is still real data worth keeping.
+        const percent =
+          typeof rawPercent === 'number' && Number.isFinite(rawPercent)
+            ? Math.round(Math.min(100, Math.max(0, rawPercent)))
+            : 0;
+        entries.push({ material: (entry as { material: string }).material, percent });
+      }
+    }
+    return entries;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Encodes materials for storage, enforcing the at-most-MAX_MATERIALS rule at
+ * the one place every write path — insertItem, updateItem, and anything
+ * added later — actually goes through.
+ *
+ * MultiSelectField's maxSelected (components/Form.tsx) already stops the
+ * picker from selecting a third material, and utils/proposals.ts already
+ * caps what a spoken description can propose, but neither of those is a
+ * guarantee: a bypassed or future caller — a bulk import, a bug in a form —
+ * could still hand insertItem/updateItem a longer array. materials has no
+ * CHECK constraint the way category or colour do (see ALL_MATERIALS' own doc
+ * comment: it's a JSON TEXT column, not one a CHECK can reasonably police),
+ * so this is the schema-equivalent enforcement point.
+ *
+ * Also normalizes each entry's percent the same way decodeMaterials clamps
+ * one coming back out — a bypassed or future caller could hand this a
+ * percent outside [0, 100] (or not a finite number at all) as easily as it
+ * could hand it a fourth material, and an unclamped write would round-trip
+ * straight back out through decodeMaterials' own clamp on the next read
+ * regardless, just after having sat in the database in an invalid shape in
+ * the meantime.
+ */
+function encodeMaterials(materials: readonly MaterialEntry[]): string {
+  return JSON.stringify(
+    materials.slice(0, MAX_MATERIALS).map(({ material, percent }) => ({
+      material,
+      percent: Number.isFinite(percent) ? Math.round(Math.min(100, Math.max(0, percent))) : 0,
+    })),
+  );
+}
+
 export function rowToItem(row: ClothingItemRow): ClothingItem {
   return {
     id: row.id,
     imagePath: row.imagePath,
     originalImagePath: row.originalImagePath,
+    imageMarginBaked: row.imageMarginBaked === 1,
     // The CHECK constraints in migrations.ts are what make these casts safe:
     // no other value can reach the column.
     category: row.category as Category,
     brand: row.brand,
     costMinorUnits: row.costMinorUnits,
     isSecondHand: row.isSecondHand === 1,
-    materials: parseStringArrayColumn(row.materials),
+    purchasedAt: row.purchasedAt,
+    materials: decodeMaterials(row.materials),
     // Safe casts for the same reason as category: the CHECK constraints mean
     // no other value can reach these columns.
     primaryColor: row.primaryColor as ItemColor | '',
@@ -93,22 +182,37 @@ export function rowToItem(row: ClothingItemRow): ClothingItem {
     hasBeltLoops: row.hasBeltLoops === 1,
     sleeveLength: row.sleeveLength as SleeveLength,
     length: row.length as GarmentLength | '',
+    thickness: row.thickness as Thickness,
+    denier: row.denier,
+    backless: row.backless === 1,
     inferredWarmth: row.inferredWarmth,
     inferredWind: row.inferredWind,
     wearCount: row.wearCount,
     createdAt: row.createdAt,
+    archivedAt: row.archivedAt,
+    isWorkAppropriate: row.isWorkAppropriate === 1,
   };
 }
 
-/** The caller-supplied half of a new item; the rest is defaulted or generated. */
-export type NewClothingItem = Omit<ClothingItem, 'id' | 'wearCount' | 'createdAt'>;
+/**
+ * The caller-supplied half of a new item; the rest is defaulted or generated.
+ *
+ * archivedAt is excluded the same way id/wearCount/createdAt are: a new item
+ * is never created pre-archived, and archiving afterwards goes through
+ * archiveItems below, not a normal update.
+ */
+export type NewClothingItem = Omit<ClothingItem, 'id' | 'wearCount' | 'createdAt' | 'archivedAt'>;
 
-/** The fields an edit form may change. Identity, wear history and creation time are not editable. */
-export type ItemUpdate = Partial<Omit<ClothingItem, 'id' | 'wearCount' | 'createdAt'>>;
+/**
+ * The fields an edit form may change. Identity, wear history, creation time
+ * and archive state are not editable this way — see archiveItems/restoreItem
+ * for the dedicated functions that change archivedAt.
+ */
+export type ItemUpdate = Partial<Omit<ClothingItem, 'id' | 'wearCount' | 'createdAt' | 'archivedAt'>>;
 
-const ITEM_COLUMNS = `id, imagePath, originalImagePath, category, brand, costMinorUnits, isSecondHand,
-  materials, primaryColor, secondaryColor, hardwareColor, hasBeltLoops, sleeveLength, length,
-  inferredWarmth, inferredWind, wearCount, createdAt`;
+const ITEM_COLUMNS = `id, imagePath, originalImagePath, imageMarginBaked, category, brand, costMinorUnits, isSecondHand,
+  purchasedAt, materials, primaryColor, secondaryColor, hardwareColor, hasBeltLoops, sleeveLength, length,
+  thickness, denier, backless, inferredWarmth, inferredWind, wearCount, createdAt, archivedAt, isWorkAppropriate`;
 
 /**
  * Inserts an item and returns it as stored.
@@ -125,29 +229,46 @@ export async function insertItem(
 ): Promise<ClothingItem> {
   await db.runAsync(
     `INSERT INTO ClothingItems (${ITEM_COLUMNS})
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       item.imagePath,
       item.originalImagePath,
+      item.imageMarginBaked ? 1 : 0,
       item.category,
       item.brand,
       item.costMinorUnits,
       item.isSecondHand ? 1 : 0,
-      JSON.stringify(item.materials),
+      item.purchasedAt,
+      encodeMaterials(item.materials),
       item.primaryColor,
       item.secondaryColor,
       item.hardwareColor,
       item.hasBeltLoops ? 1 : 0,
       item.sleeveLength,
       item.length,
+      item.thickness,
+      item.denier,
+      item.backless ? 1 : 0,
       item.inferredWarmth,
       item.inferredWind,
       0,
       createdAt,
+      '',
+      item.isWorkAppropriate ? 1 : 0,
     ],
   );
-  return { ...item, id, wearCount: 0, createdAt };
+  return {
+    ...item,
+    id,
+    wearCount: 0,
+    createdAt,
+    archivedAt: '',
+    // Matches what encodeMaterials actually wrote above -- returning the
+    // caller's untruncated array here would make the in-memory item lie
+    // about what a re-fetch of the same row would report.
+    materials: item.materials.slice(0, MAX_MATERIALS),
+  };
 }
 
 /**
@@ -155,6 +276,11 @@ export async function insertItem(
  *
  * `null` means "All" rather than "no category" — the Closet filter chips have
  * an All option and it would otherwise need a second function.
+ *
+ * Archived items are always excluded — a bulk-deleted item held in the
+ * 30-day grace period (see archiveItems) has no business showing up in the
+ * closet, an outfit, or a match deck. listArchivedItems is the one place
+ * that sees them.
  */
 export async function listItems(
   db: ItemsDatabase,
@@ -162,11 +288,11 @@ export async function listItems(
 ): Promise<ClothingItem[]> {
   const rows = category
     ? await db.getAllAsync<ClothingItemRow>(
-        `SELECT ${ITEM_COLUMNS} FROM ClothingItems WHERE category = ? ORDER BY createdAt DESC`,
+        `SELECT ${ITEM_COLUMNS} FROM ClothingItems WHERE category = ? AND archivedAt = '' ORDER BY createdAt DESC`,
         [category],
       )
     : await db.getAllAsync<ClothingItemRow>(
-        `SELECT ${ITEM_COLUMNS} FROM ClothingItems ORDER BY createdAt DESC`,
+        `SELECT ${ITEM_COLUMNS} FROM ClothingItems WHERE archivedAt = '' ORDER BY createdAt DESC`,
         [],
       );
   return rows.map(rowToItem);
@@ -176,7 +302,9 @@ export async function listItems(
  * Lists items in any of `categories`, newest first.
  *
  * An empty list returns nothing rather than everything — `IN ()` is not valid
- * SQLite, and "no categories" plainly means no candidates.
+ * SQLite, and "no categories" plainly means no candidates. Archived items are
+ * excluded, same as listItems — the outfit generator and the match deck both
+ * call through here, and neither should offer a bulk-deleted item.
  */
 export async function listItemsInCategories(
   db: ItemsDatabase,
@@ -186,12 +314,13 @@ export async function listItemsInCategories(
   const placeholders = categories.map(() => '?').join(', ');
   const rows = await db.getAllAsync<ClothingItemRow>(
     `SELECT ${ITEM_COLUMNS} FROM ClothingItems
-     WHERE category IN (${placeholders}) ORDER BY createdAt DESC`,
+     WHERE category IN (${placeholders}) AND archivedAt = '' ORDER BY createdAt DESC`,
     [...categories],
   );
   return rows.map(rowToItem);
 }
 
+/** Fetches one item regardless of archive state — a direct id lookup, not a listing. */
 export async function getItem(db: ItemsDatabase, id: string): Promise<ClothingItem | null> {
   const row = await db.getFirstAsync<ClothingItemRow>(
     `SELECT ${ITEM_COLUMNS} FROM ClothingItems WHERE id = ?`,
@@ -200,25 +329,115 @@ export async function getItem(db: ItemsDatabase, id: string): Promise<ClothingIt
   return row ? rowToItem(row) : null;
 }
 
+/**
+ * Every archived item, most recently archived first — the Archive screen's
+ * only data source. Unlike listItems/listItemsInCategories, this is the one
+ * place archived rows are meant to surface.
+ */
+export async function listArchivedItems(db: ItemsDatabase): Promise<ClothingItem[]> {
+  const rows = await db.getAllAsync<ClothingItemRow>(
+    `SELECT ${ITEM_COLUMNS} FROM ClothingItems WHERE archivedAt <> '' ORDER BY archivedAt DESC`,
+    [],
+  );
+  return rows.map(rowToItem);
+}
+
+/**
+ * Archived items whose archivedAt is at or before `cutoffIso` — candidates
+ * for the permanent-deletion sweep. Oldest first, so a sweep that stops
+ * partway (see purgeExpiredArchivedItems in services/itemActions.ts) clears
+ * the longest-waiting items first.
+ */
+export async function listExpiredArchivedItems(
+  db: ItemsDatabase,
+  cutoffIso: string,
+): Promise<ClothingItem[]> {
+  const rows = await db.getAllAsync<ClothingItemRow>(
+    `SELECT ${ITEM_COLUMNS} FROM ClothingItems WHERE archivedAt <> '' AND archivedAt <= ? ORDER BY archivedAt ASC`,
+    [cutoffIso],
+  );
+  return rows.map(rowToItem);
+}
+
+/**
+ * Archives a batch of items in one statement — the Closet's bulk-delete
+ * action. Sets archivedAt rather than removing the row: see the ClothingItem
+ * doc comment for why, and purgeExpiredArchivedItems for what eventually
+ * removes it for real.
+ */
+export async function archiveItems(
+  db: ItemsDatabase,
+  ids: readonly string[],
+  archivedAt: string = new Date().toISOString(),
+): Promise<void> {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => '?').join(', ');
+  await db.runAsync(`UPDATE ClothingItems SET archivedAt = ? WHERE id IN (${placeholders})`, [
+    archivedAt,
+    ...ids,
+  ]);
+}
+
+/**
+ * Sets one or both boolean flags for a whole batch of items in one call —
+ * Closet's bulk-select "Mark as second-hand" / "Mark as work appropriate".
+ * A flag left out of `flags` is untouched, not reset to false.
+ */
+export async function setItemFlags(
+  db: ItemsDatabase,
+  ids: readonly string[],
+  flags: { isSecondHand?: boolean; isWorkAppropriate?: boolean },
+): Promise<void> {
+  if (ids.length === 0) return;
+  const assignments: string[] = [];
+  const params: BindValue[] = [];
+  if (flags.isSecondHand !== undefined) {
+    assignments.push('isSecondHand = ?');
+    params.push(flags.isSecondHand ? 1 : 0);
+  }
+  if (flags.isWorkAppropriate !== undefined) {
+    assignments.push('isWorkAppropriate = ?');
+    params.push(flags.isWorkAppropriate ? 1 : 0);
+  }
+  if (assignments.length === 0) return;
+
+  const placeholders = ids.map(() => '?').join(', ');
+  await db.runAsync(`UPDATE ClothingItems SET ${assignments.join(', ')} WHERE id IN (${placeholders})`, [
+    ...params,
+    ...ids,
+  ]);
+}
+
+/** Pulls one item back out of the archive — the Archive screen's Restore action. */
+export async function restoreItem(db: ItemsDatabase, id: string): Promise<void> {
+  await db.runAsync(`UPDATE ClothingItems SET archivedAt = '' WHERE id = ?`, [id]);
+}
+
 /** Maps an editable field to its column and its SQLite representation. */
 const UPDATE_ENCODERS: {
   [K in keyof ItemUpdate]-?: (value: NonNullable<ItemUpdate[K]>) => BindValue;
 } = {
   imagePath: (v) => v,
   originalImagePath: (v) => v,
+  imageMarginBaked: (v) => (v ? 1 : 0),
   category: (v) => v,
   brand: (v) => v,
   costMinorUnits: (v) => v,
   isSecondHand: (v) => (v ? 1 : 0),
-  materials: (v) => JSON.stringify(v),
+  purchasedAt: (v) => v,
+  materials: (v) => encodeMaterials(v),
   primaryColor: (v) => v,
   secondaryColor: (v) => v,
   hardwareColor: (v) => v,
   hasBeltLoops: (v) => (v ? 1 : 0),
   sleeveLength: (v) => v,
   length: (v) => v,
+  thickness: (v) => v,
+  denier: (v) => v,
+  backless: (v) => (v ? 1 : 0),
   inferredWarmth: (v) => v,
   inferredWind: (v) => v,
+  isWorkAppropriate: (v) => (v ? 1 : 0),
 };
 
 export async function updateItem(
@@ -375,6 +594,34 @@ export async function listItemsWornOn(db: ItemsDatabase, date: string): Promise<
   return worn;
 }
 
+/** Inserts one Outfit_Logs row and credits each item's wearCount — the shared body of logOutfitWorn and replaceOutfitLog. Caller must already be inside a transaction. */
+async function insertOutfitLog(
+  db: ItemsDatabase,
+  itemIds: readonly string[],
+  date: string,
+  id: string,
+  createdAt: string,
+): Promise<void> {
+  await db.runAsync(
+    'INSERT INTO Outfit_Logs (id, date, itemIds, collageImageUri, createdAt) VALUES (?, ?, ?, ?, ?)',
+    [id, date, JSON.stringify(itemIds), '', createdAt],
+  );
+  for (const itemId of itemIds) {
+    await db.runAsync('UPDATE ClothingItems SET wearCount = wearCount + 1 WHERE id = ?', [itemId]);
+  }
+}
+
+/** Deletes every Outfit_Logs row for `date` and un-credits each item's wearCount by one per occurrence — the shared body of removeOutfitLogs and replaceOutfitLog. Caller must already be inside a transaction. clamped at 0 (max(...,0)) rather than assuming the invariant always holds, per this codebase's defensive-programming convention. */
+async function clearOutfitLogsForDate(db: ItemsDatabase, date: string): Promise<void> {
+  const rows = await db.getAllAsync<{ itemIds: string }>('SELECT itemIds FROM Outfit_Logs WHERE date = ?', [date]);
+  for (const row of rows) {
+    for (const itemId of parseStringArrayColumn(row.itemIds)) {
+      await db.runAsync('UPDATE ClothingItems SET wearCount = MAX(wearCount - 1, 0) WHERE id = ?', [itemId]);
+    }
+  }
+  await db.runAsync('DELETE FROM Outfit_Logs WHERE date = ?', [date]);
+}
+
 /**
  * Records an outfit as worn on `date`, and credits each of its items with one
  * more wear.
@@ -384,6 +631,13 @@ export async function listItemsWornOn(db: ItemsDatabase, date: string): Promise<
  * exact shape sketched (but never wired up) in services/database.ts's
  * pre-Phase-5 TODO comment. wearCount is intentionally not a SQL trigger; see
  * that comment for why.
+ *
+ * Adds a new log row alongside any already logged for `date` rather than
+ * replacing them — see listItemsWornOn's "unions items across multiple
+ * outfits logged the same day" test for why that's intentional (e.g. a
+ * morning outfit and a separate evening change). A UI that means "replace
+ * what's shown for this single day" (Calendar's "Edit outfit") wants
+ * replaceOutfitLog instead, not this function.
  */
 export async function logOutfitWorn(
   db: ItemsDatabase,
@@ -393,13 +647,47 @@ export async function logOutfitWorn(
   createdAt: string = new Date().toISOString(),
 ): Promise<void> {
   await db.withTransactionAsync(async () => {
-    await db.runAsync(
-      'INSERT INTO Outfit_Logs (id, date, itemIds, collageImageUri, createdAt) VALUES (?, ?, ?, ?, ?)',
-      [id, date, JSON.stringify(itemIds), '', createdAt],
-    );
-    for (const itemId of itemIds) {
-      await db.runAsync('UPDATE ClothingItems SET wearCount = wearCount + 1 WHERE id = ?', [itemId]);
-    }
+    await insertOutfitLog(db, itemIds, date, id, createdAt);
+  });
+}
+
+/**
+ * Removes every outfit logged for `date` and un-credits each item's
+ * wearCount to match — the counterpart to logOutfitWorn, for Calendar's
+ * "Remove outfit". A no-op (not an error) when nothing was logged that day.
+ *
+ * @throws if `date` isn't a well-formed YYYY-MM-DD date — a malformed value
+ *   would otherwise just match zero Outfit_Logs rows and silently no-op,
+ *   masking a caller bug rather than surfacing it.
+ */
+export async function removeOutfitLogs(db: ItemsDatabase, date: string): Promise<void> {
+  if (!isValidDateString(date)) throw new Error('Invalid outfit-log date');
+  await db.withTransactionAsync(async () => {
+    await clearOutfitLogsForDate(db, date);
+  });
+}
+
+/**
+ * Replaces whatever was logged for `date` with this single outfit, in one
+ * transaction — the clear and the insert either both land or neither does.
+ * What Calendar's "Edit outfit" should call: unlike logOutfitWorn, a
+ * previously-logged outfit for the same day is scrubbed (and its items'
+ * wearCount un-credited) rather than left stacked underneath the new one.
+ *
+ * @throws if `date` isn't a well-formed YYYY-MM-DD date — same reasoning as
+ *   removeOutfitLogs.
+ */
+export async function replaceOutfitLog(
+  db: ItemsDatabase,
+  itemIds: readonly string[],
+  date: string,
+  id: string = Crypto.randomUUID(),
+  createdAt: string = new Date().toISOString(),
+): Promise<void> {
+  if (!isValidDateString(date)) throw new Error('Invalid outfit-log date');
+  await db.withTransactionAsync(async () => {
+    await clearOutfitLogsForDate(db, date);
+    await insertOutfitLog(db, itemIds, date, id, createdAt);
   });
 }
 
@@ -425,6 +713,43 @@ export async function listItemsByIds(
 }
 
 /**
+ * Every day in [startDate, endDate] (inclusive, YYYY-MM-DD) that has at least
+ * one logged outfit, mapped to that day's most recently logged items — the
+ * Calendar screen's one query for a whole grid, rather than one
+ * getLatestLoggedOutfit call per cell.
+ *
+ * Rows are read oldest-created first, so when more than one outfit was logged
+ * the same day, a later row's itemIds simply overwrites the earlier one in
+ * idsByDate — the same "most recent wins" rule getLatestLoggedOutfit applies
+ * per day, computed here for a whole range in one pass instead of N.
+ */
+export async function listLoggedOutfitsInRange(
+  db: ItemsDatabase,
+  startDate: string,
+  endDate: string,
+): Promise<Map<string, ClothingItem[]>> {
+  const rows = await db.getAllAsync<{ date: string; itemIds: string }>(
+    'SELECT date, itemIds FROM Outfit_Logs WHERE date BETWEEN ? AND ? ORDER BY createdAt ASC',
+    [startDate, endDate],
+  );
+
+  const idsByDate = new Map<string, string[]>();
+  for (const row of rows) idsByDate.set(row.date, parseStringArrayColumn(row.itemIds));
+
+  const allIds = [...new Set([...idsByDate.values()].flat())];
+  const itemById = new Map((await listItemsByIds(db, allIds)).map((item) => [item.id, item]));
+
+  const result = new Map<string, ClothingItem[]>();
+  for (const [date, ids] of idsByDate) {
+    result.set(
+      date,
+      ids.map((id) => itemById.get(id)).filter((item): item is ClothingItem => item !== undefined),
+    );
+  }
+  return result;
+}
+
+/**
  * The most recently logged outfit for `date`, resolved to items — or an
  * empty list if nothing has been logged that day yet.
  *
@@ -443,4 +768,51 @@ export async function getLatestLoggedOutfit(
   );
   if (!row) return [];
   return listItemsByIds(db, parseStringArrayColumn(row.itemIds));
+}
+
+/** The widest recentWearDays window this app has any use for -- a year of history, generously. Rejects anything past it rather than scanning Outfit_Logs against an unbounded or absurd cutoff. */
+const MAX_RECENT_WEAR_WINDOW_DAYS = 366;
+
+/**
+ * itemId -> days since it was last worn, for every item logged within the
+ * last `windowDays` of `today` (both YYYY-MM-DD) -- feeds the recency
+ * penalty in utils/outfitCandidatePools.ts. Absent from the map means "not
+ * worn in this window", not "never worn" -- callers treat that as no
+ * penalty either way (see recencyPenalty's own doc comment).
+ *
+ * Validates inputs and log rows upfront, rejecting malformed dates and
+ * skipping future-dated logs (which would produce negative daysAgo).
+ */
+export async function recentWearDays(
+  db: ItemsDatabase,
+  today: string,
+  windowDays: number = 30,
+): Promise<Map<string, number>> {
+  if (
+    !isValidDateString(today) ||
+    !Number.isInteger(windowDays) ||
+    windowDays < 0 ||
+    windowDays > MAX_RECENT_WEAR_WINDOW_DAYS
+  ) {
+    throw new Error('Invalid recent-wear query');
+  }
+
+  const cutoff = daysBetween('1970-01-01', today) - windowDays; // days-since-epoch cutoff, compared the same way below
+  const rows = await db.getAllAsync<{ date: string; itemIds: string }>(
+    'SELECT date, itemIds FROM Outfit_Logs ORDER BY date ASC',
+    [],
+  );
+
+  const result = new Map<string, number>();
+  for (const row of rows) {
+    if (!isValidDateString(row.date) || row.date > today) continue;
+    const rowDay = daysBetween('1970-01-01', row.date);
+    if (rowDay < cutoff) continue;
+    const daysAgo = daysBetween(row.date, today);
+    for (const itemId of parseStringArrayColumn(row.itemIds)) {
+      const existing = result.get(itemId);
+      if (existing === undefined || daysAgo < existing) result.set(itemId, daysAgo);
+    }
+  }
+  return result;
 }

@@ -1,5 +1,13 @@
 /** @jest-environment node */
-import { cropRectFor, parseDetectedBox, TARGET_ASPECT, type NormalizedBox } from '../cropGeometry';
+import {
+  cropRectFor,
+  cropRectFromInsets,
+  MAX_INSET,
+  NO_INSETS,
+  parseDetectedBox,
+  TARGET_ASPECT,
+  type NormalizedBox,
+} from '../cropGeometry';
 
 /** How far a rectangle's shape may drift from 3:4 after integer rounding. */
 const ASPECT_TOLERANCE = 0.02;
@@ -184,5 +192,50 @@ describe('cropRectFor: degenerate input', () => {
     ]) {
       expect(cropRectFor(null, w, h)).toEqual({ originX: 0, originY: 0, width: 0, height: 0 });
     }
+  });
+});
+
+describe('cropRectFromInsets', () => {
+  it('returns the whole image for NO_INSETS', () => {
+    expect(cropRectFromInsets(NO_INSETS, 1000, 800)).toEqual({
+      originX: 0,
+      originY: 0,
+      width: 1000,
+      height: 800,
+    });
+  });
+
+  it('trims each edge by its own fraction of width or height', () => {
+    expect(cropRectFromInsets({ top: 0.1, bottom: 0.2, left: 0.25, right: 0 }, 1000, 800)).toEqual({
+      originX: 250,
+      originY: 80,
+      width: 750,
+      height: 560,
+    });
+  });
+
+  it('clamps a slider value above MAX_INSET rather than producing a negative size', () => {
+    const overshoot = cropRectFromInsets({ top: 0, bottom: 0, left: 0.9, right: 0.9 }, 1000, 800);
+    expect(overshoot.width).toBeGreaterThan(0);
+    expect(overshoot).toEqual(cropRectFromInsets({ top: 0, bottom: 0, left: MAX_INSET, right: MAX_INSET }, 1000, 800));
+  });
+
+  it('clamps a negative slider value to 0', () => {
+    expect(cropRectFromInsets({ top: -0.5, bottom: 0, left: 0, right: 0 }, 1000, 800)).toEqual(
+      cropRectFromInsets(NO_INSETS, 1000, 800),
+    );
+  });
+
+  it('treats a non-finite inset as 0 rather than propagating NaN into the rectangle', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const rect = cropRectFromInsets({ top: bad, bottom: 0, left: 0, right: 0 }, 1000, 800);
+      expect(rect).toEqual(cropRectFromInsets(NO_INSETS, 1000, 800));
+      expect(Number.isFinite(rect.originY)).toBe(true);
+      expect(Number.isFinite(rect.height)).toBe(true);
+    }
+  });
+
+  it('returns an empty rect for an image with no size', () => {
+    expect(cropRectFromInsets(NO_INSETS, 0, 800)).toEqual({ originX: 0, originY: 0, width: 0, height: 0 });
   });
 });
