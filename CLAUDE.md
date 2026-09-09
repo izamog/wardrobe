@@ -58,6 +58,6 @@ Then, depending on how the session is running:
   `verity reflect --user-input "<final reflection>" --kind <kind>`. If they say
   "skip", do not record.
 
-- **Autonomous** (headless / CI / cron, or `VERITY_AUTONOMOUS=1`): record your
-  draft directly, never blocking —
+- **Autonomous** (headless / CI / cron, or `VERITY_AUTONOMOUS=1`): there is no
+  person present to answer a check-in, so record your draft directly instead —
   `verity reflect --user-input "<your draft>" --kind <kind> --autonomous`.
