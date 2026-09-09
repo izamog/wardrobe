@@ -302,6 +302,33 @@ export function AddItemScreen() {
     materials: [],
     purchasedAt: '',
   });
+
+  // Mirrors categoryTouched/sleeveLengthTouched/lengthTouched for the render
+  // below -- those stay refs (not state) because useImageRefiner also reads
+  // them, from inside an async callback that resumes after an await, where a
+  // plain state value closed over at call time would be stale (same reason
+  // originalUriRef/cutoutUriRef above are refs, not state). Synced by the
+  // effect below rather than read directly in the JSX prop, because reading
+  // ref.current during render doesn't register with React: a touched-flag
+  // flip alone wouldn't schedule a re-render, so the "still detecting"
+  // indicator could get stuck. `values` already changes on every touch (both
+  // onValuesChange and useProposalApplier's voice-applied fields call
+  // setValues in the same tick they flip a touched ref), so re-deriving off
+  // it here catches every write site without this file needing to know about
+  // useProposalApplier's internals.
+  const [touchedFields, setTouchedFields] = useState({
+    category: false,
+    sleeveLength: false,
+    length: false,
+  });
+  useEffect(() => {
+    setTouchedFields({
+      category: categoryTouched.current,
+      sleeveLength: sleeveLengthTouched.current,
+      length: lengthTouched.current,
+    });
+  }, [values]);
+
   // Warmth, wind, hardware and belt loops are estimates or category-specific
   // details, not questions worth confirming. Applied as heard, editable
   // later. sleeveLength and length used to be here too, but both are visible
@@ -447,11 +474,7 @@ export function AddItemScreen() {
         pending,
         // Detection is still deciding what this is, so the row says so
         // rather than showing a default the user might take for an answer.
-        loadingFields: detectionLoadingFields(refining, {
-          category: categoryTouched.current,
-          sleeveLength: sleeveLengthTouched.current,
-          length: lengthTouched.current,
-        }),
+        loadingFields: detectionLoadingFields(refining, touchedFields),
         onValuesChange: (patch) => {
           if (patch.category !== undefined) categoryTouched.current = true;
           if (patch.sleeveLength !== undefined) sleeveLengthTouched.current = true;
