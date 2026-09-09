@@ -111,6 +111,13 @@ export function TodayScreen() {
 
   useEffect(() => {
     if (!isReady) {
+      // This effect synchronizes outfitsState with a deferred, cancelable
+      // rAF computation guarded by outfitsGenerationRef (see the comments
+      // below) -- it is not mirroring a prop, so an effect is the right
+      // tool here, not a render-time state adjustment. The early-return and
+      // rAF-scheduled setState calls below are the same synchronization,
+      // just on different paths through this effect.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- see comment above
       setOutfitsState({ outfits: { shown: [], hasAnyOutfit: false }, computing: false });
       return;
     }
