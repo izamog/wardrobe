@@ -1,19 +1,23 @@
 # Expo HAS CHANGED
 
-Read the exact versioned docs at https://docs.expo.dev/versions/v54.0.0/ before
+Read the exact versioned docs at https://docs.expo.dev/versions/v57.0.0/ before
 writing any code. Expo's APIs move between SDKs and the unversioned docs will
 describe a newer one than this project uses.
 
 ## Do not raise the Expo SDK
 
-This project is pinned to **SDK 54** deliberately. The App Store build of Expo
-Go is 54.0.2 and refuses to open a project built against a newer SDK — an
-SDK 57 scaffold failed exactly this way and had to be walked back.
+This project is pinned to **SDK 57** deliberately, to match the App Store
+build of Expo Go, which auto-updates and refuses to open a project built
+against an older SDK than it expects — this pin was previously 54 and was
+raised here for exactly that reason (Expo Go moved to 57 and could no longer
+open the SDK-54 project).
 
-Raising the SDK means abandoning Expo Go for a custom development build, which
-needs Xcode or a paid Apple Developer account. Don't run `expo upgrade`, and
-don't "fix" the pinned versions in `package.json`, without that being the
-explicit goal.
+Raising the SDK again means abandoning Expo Go for a custom development
+build, which needs Xcode or a paid Apple Developer account, UNLESS Expo Go
+itself has since moved past 57 the same way it moved past 54 — check what
+version of Expo Go is currently live before assuming a bump is unwanted.
+Don't run `expo upgrade`, and don't "fix" the pinned versions in
+`package.json`, without that being the explicit goal.
 
 Install native dependencies with `npx expo install <pkg>`, never plain
 `npm install` — the latter resolves versions the SDK doesn't expect.
