@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Text } from 'react-native';
 import { imageUriFor } from '../services/images';
 import { FramedImage } from './FramedImage';
@@ -37,14 +37,18 @@ export function StoredImage({
   const [failed, setFailed] = useState(false);
 
   // Tiles are recycled as the grid scrolls, so a failure recorded for one item
-  // must not stick to the next one shown in the same slot.
-  //
-  // Braced so the effect returns nothing: React reads an effect's return value
-  // as a cleanup function, so an expression body here is one refactor away
-  // from silently registering a cleanup that was never meant to exist.
-  useEffect(() => {
+  // must not stick to the next one shown in the same slot. Adjusted during
+  // render -- following TodayScreenComponents' TroubleshootPanel and
+  // ItemDetailsScreen's prevItem -- rather than in an effect: this only
+  // resets `failed` in step with `uri` actually changing, never on a
+  // re-render triggered by `failed` itself (the onError handler below), so
+  // comparing against a tracked `prevUri` on every render is exactly as
+  // safe as the effect's dependency array was, without an extra render pass.
+  const [prevUri, setPrevUri] = useState(uri);
+  if (uri !== prevUri) {
+    setPrevUri(uri);
     setFailed(false);
-  }, [uri]);
+  }
 
   if (!uri || failed) return <Text className={placeholderClassName}>{placeholder}</Text>;
 
