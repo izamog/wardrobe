@@ -1,9 +1,7 @@
 /** @jest-environment node */
-import { bandOrderFor, coreOutfitsForBands, selectBandedOutfits, toppedUpForBand, freshnessPenalty, rankNow } from '../bandedOutfits';
+import { selectBandedOutfits } from '../bandedOutfits';
 import { splitIntoWarmthBands } from '../warmthBands';
-import type { WarmthBand } from '../warmthBands';
 import { emptyCandidates, item, resetSeq, noDismatches, NO_CEILING } from '../outfitGeneratorTestHelpers';
-import { warmthFloor } from '../thermal';
 
 beforeEach(() => resetSeq());
 

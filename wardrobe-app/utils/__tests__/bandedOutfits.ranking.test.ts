@@ -1,5 +1,5 @@
 /** @jest-environment node */
-import { bandOrderFor, coreOutfitsForBands, selectBandedOutfits, toppedUpForBand, freshnessPenalty, rankNow } from '../bandedOutfits';
+import { bandOrderFor, selectBandedOutfits, toppedUpForBand, freshnessPenalty, rankNow } from '../bandedOutfits';
 import { splitIntoWarmthBands } from '../warmthBands';
 import type { WarmthBand } from '../warmthBands';
 import { emptyCandidates, item, resetSeq, noDismatches, NO_CEILING } from '../outfitGeneratorTestHelpers';
