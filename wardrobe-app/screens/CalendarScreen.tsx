@@ -374,10 +374,23 @@ export function CalendarScreen() {
     ]);
   };
 
-  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
-    const visible = viewableItems[0];
-    if (typeof visible?.item === 'string') setVisibleMonthKey(visible.item);
-  }).current;
+  // Same shape as BouncingDots' fix (Task 1): FlatList requires
+  // onViewableItemsChanged to keep the same identity across renders (like
+  // VIEWABILITY_CONFIG above), so this used to be built once via
+  // useRef(fn).current. That reads a ref's .current during render, which
+  // react-hooks/refs flags for the same reason as the outfits cache above --
+  // a lazy useState initializer is React's own mechanism for "create once,
+  // read during render," so it participates in React's render-consistency
+  // guarantees instead of reaching around them. setVisibleMonthKey is a
+  // state setter, which React guarantees is stable for the component's
+  // lifetime, so capturing it once here is safe.
+  const [onViewableItemsChanged] = useState(
+    () =>
+      ({ viewableItems }: { viewableItems: ViewToken[] }) => {
+        const visible = viewableItems[0];
+        if (typeof visible?.item === 'string') setVisibleMonthKey(visible.item);
+      },
+  );
 
   // useWindowDimensions can report a stale/zero width for a frame or two on
   // the very first render — this app no longer waits behind an app-launch
