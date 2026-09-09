@@ -18,7 +18,10 @@ export interface DbQueryResult<T> {
  * verdict), and a mount-only fetch would leave those screens showing stale
  * rows for as long as they stayed in the navigation stack.
  *
- * `deps` behaves like a useCallback dependency array for `query`.
+ * `deps` must contain only primitives or referentially-stable references. Under the
+ * old useCallback-based implementation, non-primitives just caused wasteful recomputation;
+ * this render-phase rewrite crashes with "Too many re-renders" if a fresh object/array/Set
+ * is passed each render.
  */
 export function useDbQuery<T>(
   query: (db: ItemsDatabase) => Promise<T>,
