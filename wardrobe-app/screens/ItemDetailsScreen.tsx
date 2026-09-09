@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
@@ -35,12 +35,21 @@ export function ItemDetailsScreen() {
   // and a screen of live text fields invites edits nobody meant to make.
   const [editing, setEditing] = useState(false);
 
-  // Seeding on every load rather than only when draft is null keeps the form in
-  // step with the row after a save; the screen reloads on focus, so a stale
-  // draft would otherwise survive edits made elsewhere.
-  useEffect(() => {
+  // Seeds draft whenever `item`'s identity changes, rather than only when
+  // draft is null, so the form stays in step with the row after a save; the
+  // screen reloads on focus, so a stale draft would otherwise survive edits
+  // made elsewhere. Adjusted during render -- following TodayScreenComponents'
+  // TroubleshootPanel -- rather than in an effect: useDbQuery only ever gives
+  // `item` a new identity after a completed read (the initial load, a focus
+  // refetch, or reload() below), never on a re-render triggered by unrelated
+  // state here (editing, draft edits), so comparing against a tracked
+  // `prevItem` on every render is exactly as safe as the effect's dependency
+  // array was, without an extra render pass.
+  const [prevItem, setPrevItem] = useState(item);
+  if (item !== prevItem) {
+    setPrevItem(item);
     if (item) setDraft(toDraft(item));
-  }, [item]);
+  }
 
   // Declared before the early returns below, because hooks cannot be called
   // conditionally. It no-ops until the item has loaded.
