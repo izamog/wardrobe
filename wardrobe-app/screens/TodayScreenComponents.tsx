@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Linking, Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import Slider from '@react-native-community/slider';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -440,10 +440,18 @@ export function TroubleshootPanel({
 }) {
   const [open, setOpen] = useState(false);
   const [liveFeltTempC, setLiveFeltTempC] = useState(feltTempC);
+  const [prevFeltTempC, setPrevFeltTempC] = useState(feltTempC);
   const [liveWindSpeedKph, setLiveWindSpeedKph] = useState(windSpeedKph);
+  const [prevWindSpeedKph, setPrevWindSpeedKph] = useState(windSpeedKph);
 
-  useEffect(() => setLiveFeltTempC(feltTempC), [feltTempC]);
-  useEffect(() => setLiveWindSpeedKph(windSpeedKph), [windSpeedKph]);
+  if (feltTempC !== prevFeltTempC) {
+    setPrevFeltTempC(feltTempC);
+    setLiveFeltTempC(feltTempC);
+  }
+  if (windSpeedKph !== prevWindSpeedKph) {
+    setPrevWindSpeedKph(windSpeedKph);
+    setLiveWindSpeedKph(windSpeedKph);
+  }
 
   return (
     <View className="border-t border-rule pt-4 mt-4">
