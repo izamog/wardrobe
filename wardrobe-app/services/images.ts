@@ -226,7 +226,12 @@ export async function prepareCapturedImage(picked: PickedImage): Promise<Prepare
  * neither the round trip to a vision model nor the one to the background-
  * removal server sits between picking a photo and being able to do anything.
  * Both run concurrently against the same original photo, since neither
- * depends on the other's result.
+ * depends on the other's result — and, just as importantly, each is caught
+ * independently below: a failure specific to one (the crop render, or the
+ * cutout's own post-processing) must not discard the other's already-
+ * successful result. An earlier version shared one try/catch across both,
+ * which meant a single bad cutout silently took the correctly-detected crop
+ * down with it, and vice versa.
  *
  * The cutout is used as the background-removal server returns it, not
  * re-cropped against the vision model's box the way the plain photo is: the
@@ -243,35 +248,42 @@ export async function prepareCapturedImage(picked: PickedImage): Promise<Prepare
  * that can fail the flow. A null uri means the fast crop should stand.
  */
 export async function refineCapturedImage(picked: PickedImage): Promise<RefinedImage> {
-  try {
-    const [detection, cutoutSourceUri] = await Promise.all([
-      detectGarment(picked.uri),
-      removeBackground(picked.uri),
-    ]);
+  const [crop, cutoutUri] = await Promise.all([
+    (async () => {
+      try {
+        const detection = await detectGarment(picked.uri);
+        const rect = cropRectFor(detection.box, picked.width, picked.height);
+        const uri = await renderCrop(picked.uri, rect);
+        return {
+          uri,
+          detectedCategory: detection.category,
+          detectedSleeveLength: detection.sleeveLength,
+          detectedLength: detection.length,
+          detectedHasBeltLoops: detection.hasBeltLoops,
+        };
+      } catch (e) {
+        console.warn('Could not refine the crop; keeping the centred one', e);
+        return {
+          uri: null,
+          detectedCategory: null,
+          detectedSleeveLength: null,
+          detectedLength: null,
+          detectedHasBeltLoops: null,
+        };
+      }
+    })(),
+    (async () => {
+      try {
+        const cutoutSourceUri = await removeBackground(picked.uri);
+        return cutoutSourceUri ? await capImageSize(cutoutSourceUri) : null;
+      } catch (e) {
+        console.warn('Could not process the background-removal cutout', e);
+        return null;
+      }
+    })(),
+  ]);
 
-    const rect = cropRectFor(detection.box, picked.width, picked.height);
-    const uri = await renderCrop(picked.uri, rect);
-    const cutoutUri = cutoutSourceUri ? await capImageSize(cutoutSourceUri) : null;
-
-    return {
-      uri,
-      cutoutUri,
-      detectedCategory: detection.category,
-      detectedSleeveLength: detection.sleeveLength,
-      detectedLength: detection.length,
-      detectedHasBeltLoops: detection.hasBeltLoops,
-    };
-  } catch (e) {
-    console.warn('Could not refine the crop; keeping the centred one', e);
-    return {
-      uri: null,
-      cutoutUri: null,
-      detectedCategory: null,
-      detectedSleeveLength: null,
-      detectedLength: null,
-      detectedHasBeltLoops: null,
-    };
-  }
+  return { ...crop, cutoutUri };
 }
 
 /**
