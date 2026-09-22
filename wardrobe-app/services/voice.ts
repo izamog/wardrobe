@@ -1,3 +1,4 @@
+import { File } from 'expo-file-system';
 import { parseExtraction, type ItemProposal } from '../utils/proposals';
 import { ALL_CATEGORIES } from '../utils/categories';
 import { ALL_COLORS } from '../utils/colors';
@@ -46,13 +47,14 @@ export async function transcribeAudio(audioUri: string): Promise<string> {
   const body = await withModelFallback('transcribe', TRANSCRIPTION_MODELS, (model) => {
     // Rebuilt per attempt: a FormData body cannot be replayed once consumed.
     const form = new FormData();
-    // React Native's FormData takes this shape for a file part; it is not the
-    // web Blob API.
-    form.append('file', {
-      uri: audioUri,
-      name: 'description.m4a',
-      type: 'audio/m4a',
-    } as unknown as Blob);
+    // Expo SDK 57's global fetch (expo/winter's polyfill) serializes
+    // FormData itself and only accepts a part that is a string, a real
+    // Blob, or an object exposing bytes() -- the classic RN upload shape of
+    // {uri, name, type} throws "Unsupported FormDataPart implementation"
+    // under it (same failure services/backgroundRemoval.ts had). An
+    // expo-file-system File both implements Blob and has bytes(), and is
+    // still streamed from disk rather than read into JS memory here.
+    form.append('file', new File(audioUri));
     form.append('model', model);
 
     return callOpenAI('/audio/transcriptions', { method: 'POST', body: form });
