@@ -104,20 +104,19 @@ export async function removeBackground(sourceUri: string): Promise<string | null
   try {
     const uploadUri = await capForUpload(sourceUri);
 
-    // A plain fetch body has to be a real Blob/ArrayBuffer that React
-    // Native's native networking layer knows how to serialize -- an
-    // expo-file-system File only *implements* the Blob interface in
-    // TypeScript, so passing one directly as `body` sends its stringified
-    // form instead of the file's bytes, and the server rejects it as an
-    // unreadable image. FormData with a {uri, name, type} descriptor is the
-    // native-file-upload path RN actually supports: the file is streamed
-    // from disk on the native side, never read into JS memory here.
+    // Expo SDK 57's global `fetch` (expo/winter's fetch polyfill, not RN's
+    // built-in networking layer) serializes FormData itself, and its
+    // converter (expo/src/winter/fetch/convertFormData.ts) only accepts a
+    // part that is a string, a real Blob, or an object exposing `bytes()` --
+    // the classic RN upload idiom of appending a plain {uri, name, type}
+    // descriptor throws "Unsupported FormDataPart implementation" under it,
+    // which is exactly what silently turned every on-device background
+    // removal into a failure logged only as a console.warn (see this
+    // function's catch below). An expo-file-system File both implements
+    // Blob and has a real `bytes()`, so it satisfies that converter and is
+    // still streamed from disk rather than read into JS memory here.
     const formData = new FormData();
-    formData.append('image', {
-      uri: uploadUri,
-      name: 'photo.jpg',
-      type: 'image/jpeg',
-    } as unknown as Blob);
+    formData.append('image', new File(uploadUri));
 
     const token = authToken();
     const response = await fetch(`${url}/v1/remove-background?output=cutout`, {
