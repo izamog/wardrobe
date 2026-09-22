@@ -18,7 +18,10 @@ export interface DbQueryResult<T> {
  * verdict), and a mount-only fetch would leave those screens showing stale
  * rows for as long as they stayed in the navigation stack.
  *
- * `deps` behaves like a useCallback dependency array for `query`.
+ * `deps` must contain only primitives or referentially-stable references. Under the
+ * old useCallback-based implementation, non-primitives just caused wasteful recomputation;
+ * this render-phase rewrite crashes with "Too many re-renders" if a fresh object/array/Set
+ * is passed each render.
  */
 export function useDbQuery<T>(
   query: (db: ItemsDatabase) => Promise<T>,
@@ -31,8 +34,28 @@ export function useDbQuery<T>(
   // React warns about and which would overwrite whatever the next focus loads.
   const cancelled = useRef(false);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const stableQuery = useCallback(query, deps);
+  // useCallback requires a literal deps array at the call site, which isn't
+  // possible here since `deps` is forwarded from this hook's own caller (its
+  // length and contents are only known per call site, not here). This
+  // achieves the same "stable identity until deps actually changes" contract
+  // by hand: compare deps by shallow equality against the last-seen deps, and
+  // only adopt the new `query` reference when they differ.
+  //
+  // State rather than refs: react-hooks/refs forbids reading/writing a ref's
+  // `.current` during render, full stop -- it doesn't special-case "this was
+  // just computed earlier in this same render." State is the shape React
+  // itself documents for "adjust during render" (see
+  // https://react.dev/reference/react/useState#storing-information-from-previous-renders):
+  // calling a setter mid-render is safe and bails out into an immediate
+  // re-render before anything commits, so this never shows a stale value.
+  const [prevDeps, setPrevDeps] = useState(deps);
+  const [stableQuery, setStableQuery] = useState<(db: ItemsDatabase) => Promise<T>>(() => query);
+  const depsChanged =
+    deps.length !== prevDeps.length || deps.some((dep, i) => !Object.is(dep, prevDeps[i]));
+  if (depsChanged) {
+    setPrevDeps(deps);
+    setStableQuery(() => query);
+  }
 
   const reload = useCallback(async () => {
     setLoading(true);

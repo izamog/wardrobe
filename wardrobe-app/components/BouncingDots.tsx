@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Animated, Easing, View } from 'react-native';
 
 const DOT_COUNT = 3;
@@ -19,11 +19,14 @@ const TRAVEL = 5;
  * JavaScript is busy handling the response.
  */
 export function BouncingDots({ color = '#1A1714' }: { color?: string }) {
-  // Created once: re-creating the values each render would restart every loop
-  // and the dots would never fall out of step with each other.
-  const values = useRef(
+  // Created once via a lazy initializer: re-creating the values each render
+  // would restart every loop and the dots would never fall out of step with
+  // each other. useState (not useRef) because this array is read during
+  // render below -- state participates in React's render-consistency
+  // guarantees the way a ref's .current does not.
+  const [values] = useState(() =>
     Array.from({ length: DOT_COUNT }, () => new Animated.Value(0)),
-  ).current;
+  );
 
   useEffect(() => {
     const animations = values.map((value, index) =>

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -38,6 +38,55 @@ const MONTHS_AFTER = 60;
 // Hoisted rather than created inline in the component: FlatList requires
 // viewabilityConfig to keep the same identity across renders, or it throws.
 const VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 50 };
+
+/** Stable "no outfit logged" result -- a fresh `[]` on every read would break useSyncExternalStore's snapshot-equality check below. */
+const EMPTY_ITEMS: readonly ClothingItem[] = [];
+
+/**
+ * A tiny external store for the outfits-by-date cache CalendarScreen builds
+ * up as MonthPages mount/refetch (see CalendarScreen's own comment on
+ * `outfitsCache` for why this exists at all). Reading mutable data like this
+ * during render is exactly what `useSyncExternalStore` is for -- it's React's
+ * own mechanism for doing so safely under concurrent rendering, where a
+ * plain `ref.current` read in a render path can, in principle, observe a
+ * value that's about to change before React commits (this file previously
+ * used a `useRef` Map plus a `cacheVersion` state counter as a hand-rolled
+ * "wait for changes to be visible" signal; `useSyncExternalStore` replaces
+ * both with the React-blessed version of the same idea).
+ */
+type OutfitsCache = {
+  get(date: string): readonly ClothingItem[];
+  setMany(entries: ReadonlyMap<string, ClothingItem[]>): void;
+  setOne(date: string, items: ClothingItem[]): void;
+  subscribe(listener: () => void): () => void;
+  getVersion(): number;
+};
+
+function createOutfitsCache(): OutfitsCache {
+  const byDate = new Map<string, ClothingItem[]>();
+  const listeners = new Set<() => void>();
+  let version = 0;
+  const notify = () => {
+    version += 1;
+    for (const listener of listeners) listener();
+  };
+  return {
+    get: (date) => byDate.get(date) ?? EMPTY_ITEMS,
+    setMany: (entries) => {
+      for (const [date, items] of entries) byDate.set(date, items);
+      notify();
+    },
+    setOne: (date, items) => {
+      byDate.set(date, items);
+      notify();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    getVersion: () => version,
+  };
+}
 
 /** The first and last calendar date (inclusive) of a "YYYY-MM" month key. */
 function monthDateRange(monthKey: string): [string, string] {
@@ -142,7 +191,7 @@ function MonthPage({
   selectedDate,
   onDayPress,
   onOutfitsLoaded,
-  getItems,
+  outfitsCache,
 }: {
   monthKey: string;
   today: string;
@@ -151,18 +200,22 @@ function MonthPage({
   /** Reports this page's own fetch up to CalendarScreen, so tapping a visible day never re-queries a range this page already has. */
   onOutfitsLoaded: (outfitsByDate: ReadonlyMap<string, ClothingItem[]>) => void;
   /**
-   * What each day cell actually renders — CalendarScreen's own cache, not
-   * this page's local `outfitsByDate` state directly. The cache starts
-   * populated from that same state (via onOutfitsLoaded below), but unlike
-   * it, CalendarScreen can patch a single date in place after a write (a
-   * removed outfit) without waiting for this useDbQuery to refetch on its
-   * next focus — see CalendarScreen's confirmRemoveOutfit.
+   * What each day cell actually renders reads through here — CalendarScreen's
+   * own cache, not this page's local `outfitsByDate` state directly. The
+   * cache starts populated from that same state (via onOutfitsLoaded below),
+   * but unlike it, CalendarScreen can patch a single date in place after a
+   * write (a removed outfit) without waiting for this useDbQuery to refetch
+   * on its next focus — see CalendarScreen's confirmRemoveOutfit. Subscribing
+   * here (rather than reading a value computed higher up) means this page
+   * re-renders precisely when the cache itself changes, not only when
+   * CalendarScreen happens to re-render for some other reason.
    */
-  getItems: (date: string) => readonly ClothingItem[];
+  outfitsCache: OutfitsCache;
 }) {
   const [start, end] = useMemo(() => monthDateRange(monthKey), [monthKey]);
   const { data: outfitsByDate } = useDbQuery((db) => listLoggedOutfitsInRange(db, start, end), [start, end]);
   const grid = useMemo(() => monthGrid(monthKey), [monthKey]);
+  useSyncExternalStore(outfitsCache.subscribe, outfitsCache.getVersion);
 
   useEffect(() => {
     if (outfitsByDate) onOutfitsLoaded(outfitsByDate);
@@ -176,7 +229,7 @@ function MonthPage({
             <CalendarCell
               key={day.date}
               day={day}
-              items={getItems(day.date)}
+              items={outfitsCache.get(day.date)}
               isToday={day.date === today}
               isSelected={day.date === selectedDate}
               onPress={() => onDayPress(day.date)}
@@ -266,28 +319,20 @@ export function CalendarScreen() {
   // Populated by whichever MonthPage's own query actually covers a given
   // date — the page for the visible month already fetches every day in it,
   // so a day tap reads from here instead of re-querying a range that's
-  // already loaded. A plain ref (not state) because writes happen on every
-  // MonthPage mount/refetch and only the read after a tap needs to see
-  // current data; cacheVersion is the one state bump that makes that read
-  // re-render.
-  const outfitsCacheRef = useRef(new Map<string, ClothingItem[]>());
-  const [cacheVersion, setCacheVersion] = useState(0);
+  // already loaded. Backed by a plain mutable object (not React state)
+  // because writes happen on every MonthPage mount/refetch and reads only
+  // need to see current data when something actually taps in -- see
+  // createOutfitsCache's own comment above for why that read goes through
+  // useSyncExternalStore rather than a ref.
+  const [outfitsCache] = useState(createOutfitsCache);
 
-  const onOutfitsLoaded = useCallback((outfitsByDate: ReadonlyMap<string, ClothingItem[]>) => {
-    for (const [date, items] of outfitsByDate) outfitsCacheRef.current.set(date, items);
-    setCacheVersion((v) => v + 1);
-  }, []);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- cacheVersion is a read trigger, not a real dependency of the lookup itself
-  const selectedDateItems = useMemo(
-    () => (selectedDate ? (outfitsCacheRef.current.get(selectedDate) ?? []) : []),
-    [selectedDate, cacheVersion],
+  const onOutfitsLoaded = useCallback(
+    (outfitsByDate: ReadonlyMap<string, ClothingItem[]>) => outfitsCache.setMany(outfitsByDate),
+    [outfitsCache],
   );
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- cacheVersion is a read trigger, not a real dependency of the lookup itself
-  const getItems = useCallback(
-    (date: string) => outfitsCacheRef.current.get(date) ?? [],
-    [cacheVersion],
+  const selectedDateItems = useSyncExternalStore(outfitsCache.subscribe, () =>
+    selectedDate ? outfitsCache.get(selectedDate) : EMPTY_ITEMS,
   );
 
   const onDayPress = (date: string) => setSelectedDate((current) => (current === date ? null : date));
@@ -313,8 +358,7 @@ export function CalendarScreen() {
               // onOutfitsLoaded above: the write only changes this one
               // date's entry, so there's nothing a full requery would find
               // that setting it to empty here doesn't already reflect.
-              outfitsCacheRef.current.set(date, []);
-              setCacheVersion((v) => v + 1);
+              outfitsCache.setOne(date, []);
               setSelectedDate(null);
               // wearCount feeds Today's recency ranking -- see
               // TodayDataContext's own doc comment for why nothing
@@ -330,10 +374,23 @@ export function CalendarScreen() {
     ]);
   };
 
-  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
-    const visible = viewableItems[0];
-    if (typeof visible?.item === 'string') setVisibleMonthKey(visible.item);
-  }).current;
+  // Same shape as BouncingDots' fix (Task 1): FlatList requires
+  // onViewableItemsChanged to keep the same identity across renders (like
+  // VIEWABILITY_CONFIG above), so this used to be built once via
+  // useRef(fn).current. That reads a ref's .current during render, which
+  // react-hooks/refs flags for the same reason as the outfits cache above --
+  // a lazy useState initializer is React's own mechanism for "create once,
+  // read during render," so it participates in React's render-consistency
+  // guarantees instead of reaching around them. setVisibleMonthKey is a
+  // state setter, which React guarantees is stable for the component's
+  // lifetime, so capturing it once here is safe.
+  const [onViewableItemsChanged] = useState(
+    () =>
+      ({ viewableItems }: { viewableItems: ViewToken[] }) => {
+        const visible = viewableItems[0];
+        if (typeof visible?.item === 'string') setVisibleMonthKey(visible.item);
+      },
+  );
 
   // useWindowDimensions can report a stale/zero width for a frame or two on
   // the very first render — this app no longer waits behind an app-launch
@@ -404,7 +461,7 @@ export function CalendarScreen() {
                 selectedDate={selectedDate}
                 onDayPress={onDayPress}
                 onOutfitsLoaded={onOutfitsLoaded}
-                getItems={getItems}
+                outfitsCache={outfitsCache}
               />
             </View>
           )}

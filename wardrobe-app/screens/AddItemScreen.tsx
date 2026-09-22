@@ -302,6 +302,46 @@ export function AddItemScreen() {
     materials: [],
     purchasedAt: '',
   });
+
+  // Mirrors categoryTouched/sleeveLengthTouched/lengthTouched for the render
+  // below -- those stay refs (not state) because useImageRefiner also reads
+  // them, from inside an async callback that resumes after an await, where a
+  // plain state value closed over at call time would be stale (same reason
+  // originalUriRef/cutoutUriRef above are refs, not state). Reading
+  // ref.current directly in the JSX prop wouldn't register with React: a
+  // touched-flag flip alone wouldn't schedule a re-render, so the "still
+  // detecting" indicator could get stuck.
+  //
+  // Synced by setValuesAndSyncTouched below (an event-handler-style callback,
+  // not read during render, so no react-hooks/refs finding) rather than a
+  // useEffect: every write site that flips one of these three refs already
+  // calls setValues in the same synchronous tick (both onValuesChange below
+  // and useProposalApplier's voice-applied fields, via the wrapped setValues
+  // passed to it), so reading the refs right there and batching
+  // setTouchedFields with that same setValues call lands the corrected value
+  // in the *same* render/commit -- no second render scheduled after paint,
+  // unlike a useEffect-based sync. If a future write path ever flips one of
+  // these refs without going through setValuesAndSyncTouched (or otherwise
+  // without calling a state setter owned by this component in the same
+  // tick), this won't notice and the indicator will silently get stuck --
+  // same latent risk the original ref-reading code had.
+  const [touchedFields, setTouchedFields] = useState({
+    category: false,
+    sleeveLength: false,
+    length: false,
+  });
+  const setValuesAndSyncTouched: React.Dispatch<React.SetStateAction<AttributeValues>> = useCallback(
+    (update) => {
+      setValues(update);
+      setTouchedFields({
+        category: categoryTouched.current,
+        sleeveLength: sleeveLengthTouched.current,
+        length: lengthTouched.current,
+      });
+    },
+    [],
+  );
+
   // Warmth, wind, hardware and belt loops are estimates or category-specific
   // details, not questions worth confirming. Applied as heard, editable
   // later. sleeveLength and length used to be here too, but both are visible
@@ -323,7 +363,7 @@ export function AddItemScreen() {
   const cutoutUriRef = useRef<string | null | undefined>(undefined);
 
   const applyProposal = useProposalApplier({
-    setValues,
+    setValues: setValuesAndSyncTouched,
     setPending,
     setSilent,
     categoryTouched,
@@ -338,7 +378,7 @@ export function AddItemScreen() {
     lengthTouched,
     beltLoopsTouched,
     setStage,
-    setValues,
+    setValues: setValuesAndSyncTouched,
     setSilent,
     setRefining,
     onRefinedPhoto: ({ original, cutout }) => {
@@ -447,16 +487,12 @@ export function AddItemScreen() {
         pending,
         // Detection is still deciding what this is, so the row says so
         // rather than showing a default the user might take for an answer.
-        loadingFields: detectionLoadingFields(refining, {
-          category: categoryTouched.current,
-          sleeveLength: sleeveLengthTouched.current,
-          length: lengthTouched.current,
-        }),
+        loadingFields: detectionLoadingFields(refining, touchedFields),
         onValuesChange: (patch) => {
           if (patch.category !== undefined) categoryTouched.current = true;
           if (patch.sleeveLength !== undefined) sleeveLengthTouched.current = true;
           if (patch.length !== undefined) lengthTouched.current = true;
-          setValues((current) => ({ ...current, ...patch }));
+          setValuesAndSyncTouched((current) => ({ ...current, ...patch }));
         },
         onResolve: (field) =>
           setPending((current) => {

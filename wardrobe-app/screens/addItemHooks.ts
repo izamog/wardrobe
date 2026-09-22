@@ -88,7 +88,7 @@ export function useProposalApplier({
   categoryTouched,
   sleeveLengthTouched,
   lengthTouched,
-  beltLoopsTouched,
+  beltLoopsTouched: beltLoopsTouchedRef,
 }: {
   setValues: Dispatch<SetStateAction<AttributeValues>>;
   setPending: Dispatch<SetStateAction<ReadonlySet<AttributeField>>>;
@@ -113,7 +113,7 @@ export function useProposalApplier({
       // A spoken answer about belt loops outranks whatever the background
       // vision call decides — same precedence as category, sleeveLength and
       // length, just without a visible row to show it happening.
-      if (next.hasBeltLoops !== undefined) beltLoopsTouched.current = true;
+      if (next.hasBeltLoops !== undefined) beltLoopsTouchedRef.current = true;
       setSilent({
         inferredWarmth: next.inferredWarmth,
         inferredWind: next.inferredWind,
@@ -148,7 +148,7 @@ export function useProposalApplier({
         if (index >= heard.length && timer.current) clearInterval(timer.current);
       }, APPLY_INTERVAL_MS);
     },
-    [setValues, setPending, setSilent, categoryTouched, sleeveLengthTouched, lengthTouched, beltLoopsTouched],
+    [setValues, setPending, setSilent, categoryTouched, sleeveLengthTouched, lengthTouched, beltLoopsTouchedRef],
   );
 }
 
@@ -163,7 +163,7 @@ export function useImageRefiner({
   categoryTouched,
   sleeveLengthTouched,
   lengthTouched,
-  beltLoopsTouched,
+  beltLoopsTouched: beltLoopsTouchedRef,
   setStage,
   setValues,
   setSilent,
@@ -220,7 +220,7 @@ export function useImageRefiner({
         // show it happening, so it lands straight in `silent` the same way a
         // voice-heard hasBeltLoops does (see useProposalApplier), and is only
         // skipped when voice already answered the same question.
-        if (refined.detectedHasBeltLoops !== null && !beltLoopsTouched.current) {
+        if (refined.detectedHasBeltLoops !== null && !beltLoopsTouchedRef.current) {
           setSilent((current) => ({ ...current, hasBeltLoops: refined.detectedHasBeltLoops! }));
         }
         setRefining(false);
@@ -231,7 +231,7 @@ export function useImageRefiner({
       categoryTouched,
       sleeveLengthTouched,
       lengthTouched,
-      beltLoopsTouched,
+      beltLoopsTouchedRef,
       setStage,
       setValues,
       setSilent,

@@ -166,12 +166,22 @@ function useLogOutfitState(date: string) {
   // record" rather than a blank picker the user has to rebuild from scratch.
   // Only runs once existingIds first arrives — later refetches (e.g. the
   // screen regaining focus) must not stomp on a selection in progress.
-  useEffect(() => {
+  // Adjusted during render -- same "compare against a tracked previous value"
+  // shape as ItemDetailsScreen's draft-seeding and TodayScreenComponents'
+  // TroubleshootPanel -- rather than in an effect: existingIds arrives
+  // asynchronously via useDbQuery, so it can't be a lazy useState initializer,
+  // but useDbQuery only ever gives it a new identity after a completed read,
+  // so comparing it against `prevExistingIds` on every render still only
+  // fires the seed once (`initialized` then keeps any later refetch from
+  // stomping the in-progress selection), without waiting on an effect.
+  const [prevExistingIds, setPrevExistingIds] = useState(existingIds);
+  if (existingIds !== prevExistingIds) {
+    setPrevExistingIds(existingIds);
     if (existingIds && !initialized) {
       setSelectedIds(new Set(existingIds));
       setInitialized(true);
     }
-  }, [existingIds, initialized]);
+  }
 
   // At most one selected item per exact category — picking a second Top (or
   // Belt, or anything else) swaps out whichever one of that category was
