@@ -15,8 +15,31 @@ const TRAVEL = 5;
  * no reason to care about; a steady animation says "still going" without
  * asking to be read.
  *
- * Uses the built-in Animated with the native driver, so it keeps moving while
- * JavaScript is busy handling the response.
+ * Each dot loops a single Animated.timing, never Animated.sequence -- RN's
+ * Animated.sequence unconditionally reports _isUsingNativeDriver() as false
+ * regardless of what's inside it (see AnimatedImplementation.js), so
+ * Animated.loop(Animated.sequence([...])) always restarts every cycle via a
+ * JS-thread callback, even when every individual timing inside it has
+ * useNativeDriver: true. That restart callback queues up and stalls under
+ * JS-thread congestion, which is what made these dots freeze in practice
+ * (observed: advancing only once per unrelated keystroke). Looping a bare
+ * Animated.timing instead takes Animated.loop's native-loop path
+ * (_startNativeLoop), so the entire repeat cycle -- not just each frame --
+ * runs on the native thread, immune to whatever the JS thread is doing.
+ *
+ * The up-down bounce shape comes from interpolating that single 0->1 ramp
+ * through a midpoint, not from two separate timings -- and the softness the
+ * original's separate ease-out/ease-in phases gave comes from applying
+ * Easing.inOut(Easing.quad) to the ramp itself (shaping the value's own
+ * progress through time), which composes with the interpolation's midpoint
+ * breakpoint to decelerate into the peak and accelerate away from it, the
+ * same visual effect, still as one timing.
+ *
+ * The only remaining JS-thread dependency is the one-time per-dot stagger
+ * delay at mount, which is unavoidable (Animated.delay is itself JS-driven)
+ * but no longer part of the repeating cycle -- a busy JS thread at mount
+ * could start the dots less staggered than intended, but once started, each
+ * loop runs independently of it.
  */
 export function BouncingDots({ color = '#1A1714' }: { color?: string }) {
   // Created once: re-creating the values each render would restart every loop
@@ -26,36 +49,29 @@ export function BouncingDots({ color = '#1A1714' }: { color?: string }) {
   ).current;
 
   useEffect(() => {
-    const animations = values.map((value, index) =>
+    const loops = values.map((value) =>
       Animated.loop(
-        Animated.sequence([
-          Animated.delay(index * STAGGER_MS),
-          Animated.timing(value, {
-            toValue: 1,
-            duration: BOUNCE_MS / 2,
-            easing: Easing.out(Easing.quad),
-            useNativeDriver: true,
-          }),
-          Animated.timing(value, {
-            toValue: 0,
-            duration: BOUNCE_MS / 2,
-            easing: Easing.in(Easing.quad),
-            useNativeDriver: true,
-          }),
-          Animated.delay((DOT_COUNT - 1 - index) * STAGGER_MS),
-        ]),
+        Animated.timing(value, {
+          toValue: 1,
+          duration: BOUNCE_MS,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
       ),
     );
+    const delays = values.map((_, index) => Animated.delay(index * STAGGER_MS));
 
-    animations.forEach((animation) => {
-      animation.start();
+    delays.forEach((delay, index) => {
+      delay.start(({ finished }) => {
+        if (finished) loops[index].start();
+      });
     });
+
     // Braced for the same reason as the effect body: what a cleanup function
     // returns is not meant to be anything.
     return () => {
-      animations.forEach((animation) => {
-        animation.stop();
-      });
+      delays.forEach((delay) => delay.stop());
+      loops.forEach((loop) => loop.stop());
     };
   }, [values]);
 
@@ -71,7 +87,12 @@ export function BouncingDots({ color = '#1A1714' }: { color?: string }) {
             backgroundColor: color,
             marginHorizontal: 2,
             transform: [
-              { translateY: value.interpolate({ inputRange: [0, 1], outputRange: [0, -TRAVEL] }) },
+              {
+                translateY: value.interpolate({
+                  inputRange: [0, 0.5, 1],
+                  outputRange: [0, -TRAVEL, 0],
+                }),
+              },
             ],
           }}
         />
