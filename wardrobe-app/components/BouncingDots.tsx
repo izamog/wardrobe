@@ -35,11 +35,15 @@ const TRAVEL = 5;
  * breakpoint to decelerate into the peak and accelerate away from it, the
  * same visual effect, still as one timing.
  *
- * The only remaining JS-thread dependency is the one-time per-dot stagger
- * delay at mount, which is unavoidable (Animated.delay is itself JS-driven)
- * but no longer part of the repeating cycle -- a busy JS thread at mount
- * could start the dots less staggered than intended, but once started, each
- * loop runs independently of it.
+ * The stagger is a `delay` baked directly into each dot's own timing config
+ * -- the same native-supported field Animated.delay is itself built from --
+ * rather than a separate Animated.delay().start() gating the loop's first
+ * start behind its own JS-driven completion callback. That gate was tried
+ * first and made things strictly worse: a busy JS thread at mount meant the
+ * gating callback never fired, so the loop never started even once. Baking
+ * delay into the timing config means every dot's `.start()` call below is
+ * synchronous and unconditional, and the delay-then-loop is entirely native
+ * from that first call onward -- no JS-thread dependency at any point.
  */
 export function BouncingDots({ color = '#1A1714' }: { color?: string }) {
   // Created once: re-creating the values each render would restart every loop
@@ -49,28 +53,23 @@ export function BouncingDots({ color = '#1A1714' }: { color?: string }) {
   ).current;
 
   useEffect(() => {
-    const loops = values.map((value) =>
+    const loops = values.map((value, index) =>
       Animated.loop(
         Animated.timing(value, {
           toValue: 1,
           duration: BOUNCE_MS,
+          delay: index * STAGGER_MS,
           easing: Easing.inOut(Easing.quad),
           useNativeDriver: true,
         }),
       ),
     );
-    const delays = values.map((_, index) => Animated.delay(index * STAGGER_MS));
 
-    delays.forEach((delay, index) => {
-      delay.start(({ finished }) => {
-        if (finished) loops[index].start();
-      });
-    });
+    loops.forEach((loop) => loop.start());
 
     // Braced for the same reason as the effect body: what a cleanup function
     // returns is not meant to be anything.
     return () => {
-      delays.forEach((delay) => delay.stop());
       loops.forEach((loop) => loop.stop());
     };
   }, [values]);
